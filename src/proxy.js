@@ -1,7 +1,18 @@
+/**
+ * Route protection proxy — Next.js 16+ convention.
+ *
+ * Replaces the deprecated `src/middleware.js` convention (issue #114).
+ * Protects all /dashboard routes: unauthenticated requests are redirected
+ * to the homepage.
+ *
+ * Next.js 16 changed the file convention from `middleware.js` (with a
+ * `middleware` export) to `proxy.js` (with a `proxy` export). The route
+ * matcher and the auth logic are otherwise identical.
+ */
 import { NextResponse } from "next/server";
 import { isProtectedDashboardPath, verifyDashboardToken } from "@/lib/auth/session";
 
-export async function middleware(req) {
+export async function proxy(req) {
   const token = req.cookies.get("auth_token")?.value;
   const { pathname } = req.nextUrl;
 
