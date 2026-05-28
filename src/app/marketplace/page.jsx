@@ -8,27 +8,57 @@ import Link from "next/link";
 import { FaHeart, FaSearch, FaFilter, FaStar, FaFilePdf, FaFileWord, FaFilePowerpoint, FaRegClock, FaExchangeAlt, FaShoppingCart, FaGraduationCap, FaWallet, FaBook } from "react-icons/fa";
 import { motion } from "framer-motion";
 import Navbar from "@/components/Navbar";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { useMarketplaceMaterials } from "@/hooks/api/useMaterials";
+
+export const dynamic = "force-dynamic";
+
+const SUBJECTS = ["Math", "Science", "Law", "Technology", "Business", "Medicine", "Arts"];
 import { useCart } from "@/hooks/useCart";
 import { useComparison } from "@/hooks/useComparison";
 import { useProfile } from "@/hooks/api/useProfile";
 import { useState, useEffect } from 'react';
 
+function getPreviewImage(material) {
+	return material.coverImageUrl || material.thumbnailUrl || material.image || "/images/image1.jpg";
+}
+
+function getPreviewCounts(material) {
+	return {
+		outcomes: Array.isArray(material.learningOutcomes) ? material.learningOutcomes.length : 0,
+		sections: Array.isArray(material.tableOfContents) ? material.tableOfContents.length : 0,
+		notes: Array.isArray(material.sampleNotes) ? material.sampleNotes.length : 0,
+	};
+}
+
 export default function MarketPage() {
 	const { addToCart, cartItems } = useCart();
 	const { addToComparison, comparedItems } = useComparison();
 	const router = useRouter();
-	const searchParams = useSearchParams();
-	const [searchQuery, setSearchQuery] = useState(searchParams.get("search") || "");
-	const [activeSubject, setActiveSubject] = useState(searchParams.get("subject") || "All");
-	const [sortBy, setSortBy] = useState(searchParams.get("sortBy") || "Popular");
-	const [minPrice, setMinPrice] = useState(searchParams.get("minPrice") || "");
-	const [maxPrice, setMaxPrice] = useState(searchParams.get("maxPrice") || "");
-	const [creator, setCreator] = useState(searchParams.get("creator") || "");
-	const [usageRights, setUsageRights] = useState(searchParams.get("usageRights") || "");
-	const [currentPage, setCurrentPage] = useState(Number(searchParams.get("page") || 1));
+	const [searchQuery, setSearchQuery] = useState("");
+	const [activeSubject, setActiveSubject] = useState("All");
+	const [sortBy, setSortBy] = useState("Popular");
+	const [minPrice, setMinPrice] = useState("");
+	const [maxPrice, setMaxPrice] = useState("");
+	const [creator, setCreator] = useState("");
+	const [usageRights, setUsageRights] = useState("");
+	const [currentPage, setCurrentPage] = useState(1);
+	const [hydrated, setHydrated] = useState(false);
 	const itemsPerPage = 12;
+
+	// Hydrate initial filter state from the URL on the client.
+	useEffect(() => {
+		const params = new URLSearchParams(window.location.search);
+		setSearchQuery(params.get("search") || "");
+		setActiveSubject(params.get("subject") || "All");
+		setSortBy(params.get("sortBy") || "Popular");
+		setMinPrice(params.get("minPrice") || "");
+		setMaxPrice(params.get("maxPrice") || "");
+		setCreator(params.get("creator") || "");
+		setUsageRights(params.get("usageRights") || "");
+		setCurrentPage(Number(params.get("page") || 1));
+		setHydrated(true);
+	}, []);
 
 	// Subject categories
 	const [subjects, setSubjects] = useState(["All"]);
@@ -69,6 +99,7 @@ export default function MarketPage() {
 
 	// Sync state to URL
 	useEffect(() => {
+		if (!hydrated) return;
 		const params = new URLSearchParams();
 		if (searchQuery) params.set("search", searchQuery);
 		if (activeSubject && activeSubject !== "All") params.set("subject", activeSubject);
@@ -79,7 +110,7 @@ export default function MarketPage() {
 		if (usageRights) params.set("usageRights", usageRights);
 		if (currentPage > 1) params.set("page", currentPage);
 		router.replace(`/marketplace?${params.toString()}`);
-	}, [searchQuery, activeSubject, sortBy, minPrice, maxPrice, creator, usageRights, currentPage]);
+	}, [hydrated, searchQuery, activeSubject, sortBy, minPrice, maxPrice, creator, usageRights, currentPage, router]);
 
 	const { data, isLoading, isError, error } = useMarketplaceMaterials({
 		search: searchQuery,
@@ -270,6 +301,41 @@ export default function MarketPage() {
 								<span className="text-sm text-gray-500">{data?.total || 0} results</span>
 							</div>
 							<motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.4 }} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5 relative z-10">
+								{materials.map((material) => (
+									<Link href={`/marketplace/${material._id || material.id}`} key={material._id || material.id} className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm hover:shadow-md hover:border-blue-300 transition-all duration-300 flex flex-col group">
+										<div className="relative w-full h-28 bg-gray-100 overflow-hidden">
+											<Image src={getPreviewImage(material)} alt={material.title} fill className="object-cover group-hover:scale-105 transition-transform duration-500" />
+										</div>
+										<div className="p-4 flex-1 flex flex-col">
+											<h3 className="text-sm font-bold text-gray-900 mb-1 line-clamp-2 leading-tight group-hover:text-blue-600 transition-colors">{material.title}</h3>
+											<p className="text-xs text-gray-500 mb-1">by <span className="font-medium text-gray-700">{material.author}</span></p>
+											<p className="text-xs text-gray-500 mb-3 line-clamp-2">
+												{material.shortSummary || material.description || "Creator preview not shared yet."}
+											</p>
+											<div className="mb-3 grid grid-cols-3 gap-2">
+												<div className="rounded-lg border border-gray-100 bg-gray-50 px-2 py-2">
+													<p className="text-[10px] uppercase tracking-wide text-gray-400">Cover</p>
+													<p className="mt-1 text-[11px] font-semibold text-gray-700">
+														{material.coverImageUrl || material.thumbnailUrl || material.image ? "Available" : "Missing"}
+													</p>
+												</div>
+												<div className="rounded-lg border border-gray-100 bg-gray-50 px-2 py-2">
+													<p className="text-[10px] uppercase tracking-wide text-gray-400">Outcomes</p>
+													<p className="mt-1 text-[11px] font-semibold text-gray-700">
+														{getPreviewCounts(material).outcomes || "None"}
+													</p>
+												</div>
+												<div className="rounded-lg border border-gray-100 bg-gray-50 px-2 py-2">
+													<p className="text-[10px] uppercase tracking-wide text-gray-400">TOC</p>
+													<p className="mt-1 text-[11px] font-semibold text-gray-700">
+														{getPreviewCounts(material).sections || "None"}
+													</p>
+												</div>
+											</div>
+											<div className="mt-auto pt-3 border-t border-gray-100 flex justify-between items-center">
+												<div className="flex items-center text-xs text-gray-500 gap-3">
+													<span className="flex items-center gap-1">{/* File icon logic can be improved if fileType is available */}<FaFilePdf className="text-red-500" /> <span className="uppercase">PDF</span></span>
+													<div className="flex items-center gap-1"><FaHeart className="text-gray-400" /><span>{material.likes || 0}</span></div>
 								{materials.map((material) => {
 									const materialId = material._id || material.id;
 									const isAlreadyInCart = cartItems.some((item) => (item._id || item.id) === materialId);

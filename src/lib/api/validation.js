@@ -27,6 +27,21 @@ export function sanitizeObject(input, fieldLimits = {}) {
   );
 }
 
+export function normalizeStringList(value, { maxItems = 8, maxLength = 240 } = {}) {
+  if (value === undefined || value === null) return [];
+
+  const items = Array.isArray(value)
+    ? value
+    : typeof value === "string"
+      ? value.split(/\r?\n|,/g)
+      : [];
+
+  return items
+    .map((item) => sanitizeString(item, { maxLength }))
+    .filter(Boolean)
+    .slice(0, maxItems);
+}
+
 export function validateEmail(email) {
   const clean = sanitizeString(email, { maxLength: 254 }).toLowerCase();
   if (!EMAIL_PATTERN.test(clean)) {
@@ -87,11 +102,26 @@ export function validateMaterialPayload(body) {
   return {
     title,
     description: sanitizeString(body?.description, { maxLength: 5000 }),
+    shortSummary: sanitizeString(body?.shortSummary, { maxLength: 280 }),
     price,
     usageRights: sanitizeString(body?.usageRights, { maxLength: 1000 }),
     visibility,
+    coverImageUrl: sanitizeString(body?.coverImageUrl, { maxLength: 2048 }) || null,
     thumbnailUrl: sanitizeString(body?.thumbnailUrl, { maxLength: 2048 }) || null,
+    learningOutcomes: normalizeStringList(body?.learningOutcomes, {
+      maxItems: 8,
+      maxLength: 180,
+    }),
+    tableOfContents: normalizeStringList(body?.tableOfContents, {
+      maxItems: 16,
+      maxLength: 180,
+    }),
+    sampleNotes: normalizeStringList(body?.sampleNotes, {
+      maxItems: 6,
+      maxLength: 280,
+    }),
     storageKey,
+    fileUrl: storageKey,
   };
 }
 

@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { auditLog } from '@/lib/api/audit'
 import { withApiHardening } from '@/lib/api/hardening'
-import { sanitizeObject } from '@/lib/api/validation'
+import { normalizeStringList, sanitizeObject } from '@/lib/api/validation'
 import { pinata } from '@/lib/pinata'
 
 export const dynamic = 'force-dynamic'
@@ -143,16 +143,43 @@ export async function POST(request) {
             otherFields[key] = value
           }
         }
-        const sanitizedFields = sanitizeObject(otherFields, {
+        const previewInputs = {
+          learningOutcomes: otherFields.learningOutcomes,
+          tableOfContents: otherFields.tableOfContents,
+          sampleNotes: otherFields.sampleNotes,
+        }
+        const scalarFields = { ...otherFields }
+        delete scalarFields.learningOutcomes
+        delete scalarFields.tableOfContents
+        delete scalarFields.sampleNotes
+        const sanitizedScalarFields = sanitizeObject(scalarFields, {
           title: 160,
           description: 5000,
+          shortSummary: 280,
           usageRights: 1000,
+          coverImageUrl: 2048,
+          thumbnailUrl: 2048,
         })
 
         // Include storage reference inside the metadata
         const metadataJSON = {
-          ...sanitizedFields,
+          ...sanitizedScalarFields,
+          coverImageUrl: results.imgUrl || sanitizedScalarFields.coverImageUrl || null,
+          thumbnailUrl: results.imgUrl || sanitizedScalarFields.thumbnailUrl || null,
+          learningOutcomes: normalizeStringList(previewInputs.learningOutcomes, {
+            maxItems: 8,
+            maxLength: 180,
+          }),
+          tableOfContents: normalizeStringList(previewInputs.tableOfContents, {
+            maxItems: 16,
+            maxLength: 180,
+          }),
+          sampleNotes: normalizeStringList(previewInputs.sampleNotes, {
+            maxItems: 6,
+            maxLength: 280,
+          }),
           storageKey: uploadedFile.cid,
+          fileUrl: results.fileUrl,
           image: results.imgUrl || null,
           timestamp: new Date().toISOString(),
         }

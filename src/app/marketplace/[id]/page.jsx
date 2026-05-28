@@ -13,6 +13,50 @@ import { useEntitlement } from "@/hooks/api/useEntitlements";
 import { QueryStateProvider } from "@/components/common/QueryStateProvider";
 import Web3ErrorBoundary from "@/components/web3/Web3ErrorBoundary";
 
+function getPreviewImage(material) {
+	return material.coverImageUrl || material.thumbnailUrl || material.image || "/images/image2.jpg";
+}
+
+function getPreviewCounts(material) {
+	return {
+		outcomes: Array.isArray(material.learningOutcomes) ? material.learningOutcomes.length : 0,
+		sections: Array.isArray(material.tableOfContents) ? material.tableOfContents.length : 0,
+		notes: Array.isArray(material.sampleNotes) ? material.sampleNotes.length : 0,
+	};
+}
+
+function PreviewBlock({ title, emptyLabel, items }) {
+	const hasItems = Array.isArray(items) && items.length > 0;
+
+	return (
+		<section className="bg-white border border-gray-200 rounded-2xl p-6 shadow-sm">
+			<h2 className="text-lg font-semibold text-gray-900 mb-3">{title}</h2>
+			{hasItems ? (
+				<ul className="space-y-3">
+					{items.map((item) => (
+						<li key={item} className="rounded-xl border border-gray-100 bg-gray-50 px-4 py-3 text-sm text-gray-700">
+							{item}
+						</li>
+					))}
+				</ul>
+			) : (
+				<div className="rounded-xl border border-dashed border-gray-200 bg-gray-50 px-4 py-5 text-sm text-gray-500">
+					{emptyLabel}
+				</div>
+			)}
+		</section>
+	);
+}
+
+function PreviewStat({ label, value }) {
+	return (
+		<div className="rounded-xl border border-gray-100 bg-gray-50 px-3 py-3">
+			<p className="text-[10px] uppercase tracking-[0.2em] text-gray-400">{label}</p>
+			<p className="mt-1 text-sm font-semibold text-gray-800">{value}</p>
+		</div>
+	);
+}
+
 export default function MaterialDetailsPage() {
 	const params = useParams();
 	const id = String(params.id);
@@ -54,7 +98,7 @@ export default function MaterialDetailsPage() {
 								{/* Image Preview */}
 								<div className="flex-1 bg-white rounded-2xl overflow-hidden shadow-sm border border-gray-200">
 									<Image
-										src={material.image || material.thumbnail || "/images/image2.jpg"}
+										src={getPreviewImage(material)}
 										alt={material.title}
 										width={800}
 										height={600}
@@ -68,8 +112,27 @@ export default function MaterialDetailsPage() {
 										{material.title}
 									</h1>
 									<p className="text-gray-600 text-sm leading-relaxed">
-										{material.description}
+										{material.shortSummary || material.description || "Creator preview not shared yet."}
 									</p>
+
+									<div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+										<PreviewStat
+											label="Cover image"
+											value={
+												material.coverImageUrl || material.thumbnailUrl || material.image
+													? "Provided"
+													: "Missing"
+											}
+										/>
+										<PreviewStat
+											label="Learning outcomes"
+											value={`${getPreviewCounts(material).outcomes} shared`}
+										/>
+										<PreviewStat
+											label="Table of contents"
+											value={`${getPreviewCounts(material).sections} sections`}
+										/>
+									</div>
 
 									{/* Price & Rating */}
 									<div className="flex items-center gap-4 mt-4">
@@ -132,7 +195,7 @@ export default function MaterialDetailsPage() {
 										About
 									</h2>
 									<p className="text-sm text-gray-600 mb-4 leading-relaxed">
-										{material.description}
+										{material.shortSummary || material.description}
 									</p>
 									<div className="flex flex-wrap gap-2 mt-2">
 										{material.tags?.map((tag, i) => (
@@ -185,6 +248,50 @@ export default function MaterialDetailsPage() {
 											)}
 										</p>
 									</div>
+								</div>
+							</div>
+
+							<div className="grid md:grid-cols-2 gap-6 mt-10">
+								<PreviewBlock
+									title="Learning Outcomes"
+									emptyLabel="The creator has not added learning outcomes yet."
+									items={material.learningOutcomes}
+								/>
+								<PreviewBlock
+									title="Table of Contents"
+									emptyLabel="The creator has not shared a table of contents yet."
+									items={material.tableOfContents}
+								/>
+								<PreviewBlock
+									title="Sample Notes"
+									emptyLabel="No sample notes were shared for this listing."
+									items={material.sampleNotes}
+								/>
+								<div className="bg-white border border-gray-200 rounded-2xl p-6 shadow-sm">
+									<h2 className="text-lg font-semibold text-gray-900 mb-3">
+										Preview Fields
+									</h2>
+									<p className="text-sm text-gray-600 leading-relaxed mb-4">
+										Marketplace listings can expose creator-provided cover images, short
+										summaries, learning outcomes, table of contents entries, and sample
+										notes. Missing values should stay friendly and non-blocking.
+									</p>
+									<ul className="space-y-3 text-sm text-gray-700">
+										<li className="rounded-xl border border-gray-100 bg-gray-50 px-4 py-3">
+											<strong className="text-gray-900">coverImageUrl</strong> or
+											thumbnail fallback for the hero image.
+										</li>
+										<li className="rounded-xl border border-gray-100 bg-gray-50 px-4 py-3">
+											<strong className="text-gray-900">shortSummary</strong> for the
+											listing teaser.
+										</li>
+										<li className="rounded-xl border border-gray-100 bg-gray-50 px-4 py-3">
+											<strong className="text-gray-900">learningOutcomes</strong>,
+											<strong className="text-gray-900"> tableOfContents</strong>, and
+											<strong className="text-gray-900"> sampleNotes</strong> as arrays
+											or newline/comma-separated input from the upload form.
+										</li>
+									</ul>
 								</div>
 							</div>
 

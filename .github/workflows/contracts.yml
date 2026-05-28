@@ -22,44 +22,72 @@ on:
 jobs:
   soroban:
     name: Soroban Contract Checks
-    if: ${{ hashFiles('soroban/**/Cargo.toml') != '' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Detect Soroban project
+        id: detect_soroban
+        shell: bash
+        run: |
+          shopt -s nullglob globstar
+          files=(soroban/**/Cargo.toml)
+          if [ "${#files[@]}" -gt 0 ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Setup Rust
+        if: steps.detect_soroban.outputs.present == 'true'
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32v1-none
 
       - name: Cache Rust artifacts
+        if: steps.detect_soroban.outputs.present == 'true'
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: |
             soroban -> soroban/target
 
       - name: Run Soroban tests
+        if: steps.detect_soroban.outputs.present == 'true'
         working-directory: soroban
         run: cargo test --workspace --all-targets
 
       - name: Check Soroban formatting
+        if: steps.detect_soroban.outputs.present == 'true'
         working-directory: soroban
         run: cargo fmt --all -- --check
 
       - name: Build Soroban contract WASM
+        if: steps.detect_soroban.outputs.present == 'true'
         working-directory: soroban
         run: cargo build --target wasm32v1-none --release
 
   solidity:
     name: Archived Solidity Prototype Checks
-    if: ${{ hashFiles('archive/legacy-evm/contracts/**/*.sol') != '' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Detect Solidity sources
+        id: detect_solidity
+        shell: bash
+        run: |
+          shopt -s globstar nullglob
+          files=(archive/legacy-evm/contracts/**/*.sol)
+          if [ "${#files[@]}" -gt 0 ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Setup Node.js
+        if: steps.detect_solidity.outputs.present == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -67,15 +95,36 @@ jobs:
           cache-dependency-path: package-lock.json
 
       - name: Install dependencies
+        if: steps.detect_solidity.outputs.present == 'true'
         run: npm install
 
+      - name: Detect Solidity toolchains
+        id: detect_toolchains
+        if: steps.detect_solidity.outputs.present == 'true'
+        shell: bash
+        run: |
+          if [ -f foundry.toml ]; then
+            echo "foundry=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "foundry=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          if [ -f hardhat.config.js ] || [ -f hardhat.config.cjs ] || [ -f hardhat.config.ts ]; then
+            echo "hardhat=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "hardhat=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Check contract formatting
+        if: steps.detect_solidity.outputs.present == 'true'
         run: npx --yes prettier@3.6.2 --check "archive/legacy-evm/contracts/**/*.sol"
 
       - name: Run Solidity lint
+        if: steps.detect_solidity.outputs.present == 'true'
         run: npx --yes solhint@5.0.3 "archive/legacy-evm/contracts/**/*.sol"
 
       - name: Compile Solidity contracts
+        if: steps.detect_solidity.outputs.present == 'true'
         shell: bash
         run: |
           shopt -s globstar nullglob
@@ -92,18 +141,18 @@ jobs:
             "${files[@]}"
 
       - name: Setup Foundry
-        if: hashFiles('foundry.toml') != ''
+        if: steps.detect_solidity.outputs.present == 'true' && steps.detect_toolchains.outputs.foundry == 'true'
         uses: foundry-rs/foundry-toolchain@v1
 
       - name: Run Foundry tests
-        if: hashFiles('foundry.toml') != ''
+        if: steps.detect_solidity.outputs.present == 'true' && steps.detect_toolchains.outputs.foundry == 'true'
         run: forge test -vvv
 
       - name: Run Hardhat tests
-        if: hashFiles('hardhat.config.js', 'hardhat.config.cjs', 'hardhat.config.ts') != ''
+        if: steps.detect_solidity.outputs.present == 'true' && steps.detect_toolchains.outputs.hardhat == 'true'
         run: npx hardhat test
 
       - name: Note missing Solidity test runner
-        if: hashFiles('foundry.toml', 'hardhat.config.js', 'hardhat.config.cjs', 'hardhat.config.ts') == ''
+        if: steps.detect_solidity.outputs.present == 'true' && steps.detect_toolchains.outputs.foundry == 'false' && steps.detect_toolchains.outputs.hardhat == 'false'
         shell: bash
         run: echo "No Solidity test runner is configured in this repository yet. Compilation, formatting, and lint checks still ran."
