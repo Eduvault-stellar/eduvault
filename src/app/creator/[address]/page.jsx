@@ -21,12 +21,14 @@ import {
   FaUser,
   FaExchangeAlt,
   FaShoppingCart,
+  FaWallet,
 } from 'react-icons/fa';
 import { motion, AnimatePresence } from 'framer-motion';
 import Navbar from '@/components/Navbar';
 import { useMarketplaceMaterials } from '@/hooks/api/useMaterials';
 import { useCart } from '@/hooks/useCart';
 import { useComparison } from '@/hooks/useComparison';
+import { useUpdateProfile } from '@/hooks/api/useProfile';
 
 export default function CreatorProfilePage() {
   const params = useParams();
@@ -39,9 +41,13 @@ export default function CreatorProfilePage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedSubject, setSelectedSubject] = useState('All');
   const [sortBy, setSortBy] = useState('Popular');
+  const [isEditing, setIsEditing] = useState(false);
+  const [editProfile, setEditProfile] = useState({});
+  const [isUpdating, setIsUpdating] = useState(false);
 
   const { addToCart, cartItems } = useCart();
   const { addToComparison, comparedItems } = useComparison();
+  const { mutateAsync: updateProfile, isPending: isUpdatingProfile } = useUpdateProfile();
 
   // Load profile metadata
   useEffect(() => {
@@ -71,6 +77,84 @@ export default function CreatorProfilePage() {
     institution: 'Soroban Tech Academy',
     country: 'Stellar Ecosystem',
     walletAddress: address,
+  };
+
+  // Calculate profile completeness
+  const profileCompleteness = () => {
+    const requiredFields = [
+      creatorProfile.fullName && creatorProfile.fullName.trim().length > 0,
+      creatorProfile.bio && creatorProfile.bio.trim().length > 0,
+      creatorProfile.institution && creatorProfile.institution.trim().length > 0,
+      creatorProfile.country && creatorProfile.country.trim().length > 0,
+      creatorProfile.walletAddress && creatorProfile.walletAddress.trim().length > 0,
+    ];
+    return Math.round((requiredFields.filter(Boolean).length / requiredFields.length) * 100);
+  };
+
+  const completenessPercentage = profileCompleteness();
+
+  // Determine wallet status
+  const walletStatus = creatorProfile.walletAddress ? 'linked' : 'not linked';
+
+  // Get material count (from filteredMaterials)
+  const materialCount = filteredMaterials.length;
+
+  // Handle profile update
+  const handleUpdateProfile = async () => {
+    setIsUpdating(true);
+    try {
+      const updateData = {};
+      
+      if (editProfile.fullName && editProfile.fullName !== creatorProfile.fullName) {
+        updateData.displayName = editProfile.fullName;
+      }
+      
+      if (editProfile.bio && editProfile.bio !== creatorProfile.bio) {
+        updateData.bio = editProfile.bio;
+      }
+      
+      if (editProfile.institution && editProfile.institution !== creatorProfile.institution) {
+        updateData.institution = editProfile.institution;
+      }
+      
+      if (editProfile.country && editProfile.country !== creatorProfile.country) {
+        updateData.country = editProfile.country;
+      }
+      
+      if (editProfile.twitterUrl !== undefined && editProfile.twitterUrl !== creatorProfile.twitterUrl) {
+        updateData.twitterUrl = editProfile.twitterUrl;
+      }
+      
+      if (editProfile.githubUrl !== undefined && editProfile.githubUrl !== creatorProfile.githubUrl) {
+        updateData.githubUrl = editProfile.githubUrl;
+      }
+      
+      if (editProfile.websiteUrl !== undefined && editProfile.websiteUrl !== creatorProfile.websiteUrl) {
+        updateData.websiteUrl = editProfile.websiteUrl;
+      }
+      
+      if (Object.keys(updateData).length === 0) {
+        setIsEditing(false);
+        return;
+      }
+      
+      await updateProfile(updateData);
+      setIsEditing(false);
+      setEditProfile({});
+      // Refresh profile data
+      const res = await fetch(`/api/profile?address=${address}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.exists && data.user) {
+          setProfile(data.user);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to update profile:', error);
+      // Show error to user
+    } finally {
+      setIsUpdating(false);
+    }
   };
 
   // Fetch materials for materials catalog
@@ -105,7 +189,29 @@ export default function CreatorProfilePage() {
       return Number(b.likes || 0) - Number(a.likes || 0); // Popular
     });
 
-  const subjects = ['All', 'Math', 'Science', 'Law', 'Technology', 'Business', 'Medicine', 'Arts'];
+  const [subjects, setSubjects] = useState(['All']);
+  const [subjectsLoading, setSubjectsLoading] = useState(true);
+
+  // Load subject categories
+  useEffect(() => {
+    async function loadSubjects() {
+      try {
+        setSubjectsLoading(true);
+        const res = await fetch('/api/subjects');
+        if (res.ok) {
+          const data = await res.json();
+          setSubjects(data.subjects || ['All']);
+        }
+      } catch (err) {
+        console.error('Failed to load subjects:', err);
+        // Fallback to default subjects
+        setSubjects(['All', 'Math', 'Science', 'Law', 'Technology', 'Business', 'Medicine', 'Arts']);
+      } finally {
+        setSubjectsLoading(false);
+      }
+    }
+    loadSubjects();
+  }, []);
 
   const mockReviews = [
     {
@@ -177,6 +283,19 @@ export default function CreatorProfilePage() {
                     <FaStar className="w-2.5 h-2.5" />
                     Top Seller
                   </span>
+                  {/* Trust Indicators */}
+                  <span className="inline-flex items-center gap-1 text-[9px] font-bold uppercase tracking-wider bg-green-50 dark:bg-green-950/40 text-green-700 dark:text-green-400 border border-green-100 dark:border-green-900/60 px-2 py-0.5 rounded-full">
+                    <FaGraduationCap className="w-2.5 h-2.5" />
+                    {completenessPercentage}% Complete
+                  </span>
+                  <span className={`inline-flex items-center gap-1 text-[9px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full ${walletStatus === 'linked' ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400 border border-emerald-100 dark:border-emerald-900/60' : 'bg-red-50 dark:bg-red-950/40 text-red-700 dark:text-red-400 border border-red-100 dark:border-red-900/60'}`}>
+                    <FaWallet className="w-2.5 h-2.5" />
+                    {walletStatus === 'linked' ? 'Wallet Linked' : 'No Wallet'}
+                  </span>
+                  <span className="inline-flex items-center gap-1 text-[9px] font-bold uppercase tracking-wider bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-400 border border-indigo-100 dark:border-indigo-900/60 px-2 py-0.5 rounded-full">
+                    <FaBook className="w-2.5 h-2.5" />
+                    {materialCount} Materials
+                  </span>
                 </div>
               </div>
 
@@ -204,23 +323,32 @@ export default function CreatorProfilePage() {
             {/* Social Connect Links */}
             <div className="flex items-center gap-2.5">
               <a
-                href="#"
-                className="w-9 h-9 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700/60 hover:bg-slate-100 dark:hover:bg-slate-700 hover:text-blue-500 flex items-center justify-center text-slate-500 dark:text-slate-400 text-sm transition-all"
+                href={creatorProfile.twitterUrl || "#"}
+                target="_blank"
+                rel="noopener noreferrer"
+                className={`w-9 h-9 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700/60 hover:bg-slate-100 dark:hover:bg-slate-700 ${creatorProfile.twitterUrl ? 'hover:text-blue-500' : 'text-slate-300 dark:text-slate-600 cursor-not-allowed'} flex items-center justify-center text-slate-500 dark:text-slate-400 text-sm transition-all`}
                 title="Twitter Connect"
+                aria-label={creatorProfile.twitterUrl ? `Visit ${creatorProfile.fullName}'s Twitter profile` : "Twitter profile not available"}
               >
                 <FaTwitter />
               </a>
               <a
-                href="#"
-                className="w-9 h-9 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700/60 hover:bg-slate-100 dark:hover:bg-slate-700 hover:text-slate-900 dark:hover:text-white flex items-center justify-center text-slate-500 dark:text-slate-400 text-sm transition-all"
+                href={creatorProfile.githubUrl || "#"}
+                target="_blank"
+                rel="noopener noreferrer"
+                className={`w-9 h-9 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700/60 hover:bg-slate-100 dark:hover:bg-slate-700 ${creatorProfile.githubUrl ? 'hover:text-slate-900 dark:hover:text-white' : 'text-slate-300 dark:text-slate-600 cursor-not-allowed'} flex items-center justify-center text-slate-500 dark:text-slate-400 text-sm transition-all`}
                 title="GitHub Connect"
+                aria-label={creatorProfile.githubUrl ? `Visit ${creatorProfile.fullName}'s GitHub profile` : "GitHub profile not available"}
               >
                 <FaGithub />
               </a>
               <a
-                href="#"
-                className="w-9 h-9 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700/60 hover:bg-slate-100 dark:hover:bg-slate-700 hover:text-blue-600 flex items-center justify-center text-slate-500 dark:text-slate-400 text-sm transition-all"
+                href={creatorProfile.websiteUrl || "#"}
+                target="_blank"
+                rel="noopener noreferrer"
+                className={`w-9 h-9 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700/60 hover:bg-slate-100 dark:hover:bg-slate-700 ${creatorProfile.websiteUrl ? 'hover:text-blue-600' : 'text-slate-300 dark:text-slate-600 cursor-not-allowed'} flex items-center justify-center text-slate-500 dark:text-slate-400 text-sm transition-all`}
                 title="Personal website"
+                aria-label={creatorProfile.websiteUrl ? `Visit ${creatorProfile.fullName}'s personal website` : "Personal website not available"}
               >
                 <FaGlobe />
               </a>
@@ -292,14 +420,19 @@ export default function CreatorProfilePage() {
                       <select
                         value={selectedSubject}
                         onChange={(e) => setSelectedSubject(e.target.value)}
-                        className="bg-transparent text-xs font-semibold text-slate-650 dark:text-slate-350 focus:outline-none cursor-pointer"
+                        disabled={subjectsLoading}
+                        className={`bg-transparent text-xs font-semibold text-slate-650 dark:text-slate-350 focus:outline-none cursor-pointer ${subjectsLoading ? 'opacity-50' : ''}`}
                       >
                         <option value="All">All Subjects</option>
-                        {subjects.slice(1).map((sub) => (
-                          <option key={sub} value={sub}>
-                            {sub}
-                          </option>
-                        ))}
+                        {subjectsLoading ? (
+                          <option value="loading" disabled>Loading subjects...</option>
+                        ) : (
+                          subjects.slice(1).map((sub) => (
+                            <option key={sub} value={sub}>
+                              {sub}
+                            </option>
+                          ))
+                        )}
                       </select>
                     </div>
 
@@ -570,6 +703,122 @@ export default function CreatorProfilePage() {
                       </p>
                     </div>
                   </div>
+                </div>
+                
+                {/* Edit Profile Section */}
+                <div className="bg-white dark:bg-slate-900 rounded-2xl p-6 border border-slate-200 dark:border-slate-800 shadow-sm space-y-5">
+                  <div className="flex justify-between items-center">
+                    <h3 className="text-base font-bold text-slate-800 dark:text-slate-100">
+                      Edit Profile
+                    </h3>
+                    <button
+                      onClick={() => setIsEditing(!isEditing)}
+                      className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-semibold transition-colors"
+                    >
+                      {isEditing ? 'Cancel' : 'Edit Profile'}
+                    </button>
+                  </div>
+                  
+                  {isEditing && (
+                    <div className="space-y-4">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">
+                          Full Name
+                        </label>
+                        <input
+                          type="text"
+                          value={editProfile.fullName || creatorProfile.fullName}
+                          onChange={(e) => setEditProfile({...editProfile, fullName: e.target.value})}
+                          className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-850 border border-slate-200 dark:border-slate-800 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50 dark:focus:ring-blue-450"
+                        />
+                      </div>
+                      
+                      <div>
+                        <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">
+                          Biography
+                        </label>
+                        <textarea
+                          value={editProfile.bio || creatorProfile.bio}
+                          onChange={(e) => setEditProfile({...editProfile, bio: e.target.value})}
+                          rows="3"
+                          className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-850 border border-slate-200 dark:border-slate-800 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50 dark:focus:ring-blue-450"
+                        />
+                      </div>
+                      
+                      <div>
+                        <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">
+                          Institutional Affiliation
+                        </label>
+                        <input
+                          type="text"
+                          value={editProfile.institution || creatorProfile.institution}
+                          onChange={(e) => setEditProfile({...editProfile, institution: e.target.value})}
+                          className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-850 border border-slate-200 dark:border-slate-800 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50 dark:focus:ring-blue-450"
+                        />
+                      </div>
+                      
+                      <div>
+                        <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">
+                          Regional Base
+                        </label>
+                        <input
+                          type="text"
+                          value={editProfile.country || creatorProfile.country}
+                          onChange={(e) => setEditProfile({...editProfile, country: e.target.value})}
+                          className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-850 border border-slate-200 dark:border-slate-800 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50 dark:focus:ring-blue-450"
+                        />
+                      </div>
+                      
+                      <div>
+                        <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">
+                          Twitter URL
+                        </label>
+                        <input
+                          type="url"
+                          value={editProfile.twitterUrl || creatorProfile.twitterUrl || ''}
+                          onChange={(e) => setEditProfile({...editProfile, twitterUrl: e.target.value})}
+                          placeholder="https://twitter.com/username"
+                          className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-850 border border-slate-200 dark:border-slate-800 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50 dark:focus:ring-blue-450"
+                        />
+                      </div>
+                      
+                      <div>
+                        <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">
+                          GitHub URL
+                        </label>
+                        <input
+                          type="url"
+                          value={editProfile.githubUrl || creatorProfile.githubUrl || ''}
+                          onChange={(e) => setEditProfile({...editProfile, githubUrl: e.target.value})}
+                          placeholder="https://github.com/username"
+                          className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-850 border border-slate-200 dark:border-slate-800 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50 dark:focus:ring-blue-450"
+                        />
+                      </div>
+                      
+                      <div>
+                        <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">
+                          Website URL
+                        </label>
+                        <input
+                          type="url"
+                          value={editProfile.websiteUrl || creatorProfile.websiteUrl || ''}
+                          onChange={(e) => setEditProfile({...editProfile, websiteUrl: e.target.value})}
+                          placeholder="https://yourwebsite.com"
+                          className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-850 border border-slate-200 dark:border-slate-800 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50 dark:focus:ring-blue-450"
+                        />
+                      </div>
+                      
+                      <div className="pt-4">
+                        <button
+                          onClick={handleUpdateProfile}
+                          disabled={isUpdating}
+                          className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${isUpdating ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700 text-white'}`}
+                        >
+                          {isUpdating ? 'Updating...' : 'Save Changes'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </motion.div>
             )}

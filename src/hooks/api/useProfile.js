@@ -33,6 +33,21 @@ export function useTopCreators() {
   });
 }
 
+export function useUpdateProfile() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: profileService.updateProfile,
+    onSuccess: (data) => {
+      if (data.user?.walletAddress) {
+        queryClient.invalidateQueries({ 
+          queryKey: queryKeys.profile.detail(data.user.walletAddress) 
+        });
+      }
+    },
+  });
+}
+
 export function useDashboardStats() {
   return useQuery({
     queryKey: queryKeys.dashboard.stats(),
