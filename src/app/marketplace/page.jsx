@@ -62,6 +62,16 @@ export default function MarketPage() {
 		}, 0);
 
 		return () => window.clearTimeout(timer);
+		const params = new URLSearchParams(window.location.search);
+		setSearchQuery(params.get("search") || "");
+		setActiveSubject(params.get("subject") || "All");
+		setSortBy(params.get("sortBy") || "Popular");
+		setMinPrice(params.get("minPrice") || "");
+		setMaxPrice(params.get("maxPrice") || "");
+		setCreator(params.get("creator") || "");
+		setUsageRights(params.get("usageRights") || "");
+		setCurrentPage(Number(params.get("page") || 1));
+		setHydrated(true);
 	}, []);
 
 	// Subject categories
