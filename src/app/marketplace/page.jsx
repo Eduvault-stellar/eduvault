@@ -2,10 +2,10 @@
 
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { FaHeart, FaSearch, FaFilter, FaStar, FaFilePdf, FaFileWord, FaFilePowerpoint, FaRegClock } from "react-icons/fa";
+import { FaHeart, FaSearch, FaFilter, FaStar, FaFilePdf, FaFileWord, FaFilePowerpoint, FaRegClock, FaExchangeAlt, FaShoppingCart, FaGraduationCap, FaWallet, FaBook } from "react-icons/fa";
 import { motion } from "framer-motion";
 import Navbar from "@/components/Navbar";
 import { useRouter } from "next/navigation";
@@ -14,6 +14,10 @@ import { useMarketplaceMaterials } from "@/hooks/api/useMaterials";
 export const dynamic = "force-dynamic";
 
 const SUBJECTS = ["Math", "Science", "Law", "Technology", "Business", "Medicine", "Arts"];
+import { useCart } from "@/hooks/useCart";
+import { useComparison } from "@/hooks/useComparison";
+import { useProfile } from "@/hooks/api/useProfile";
+import { useState, useEffect } from 'react';
 
 function getPreviewImage(material) {
 	return material.coverImageUrl || material.thumbnailUrl || material.image || "/images/image1.jpg";
@@ -28,6 +32,8 @@ function getPreviewCounts(material) {
 }
 
 export default function MarketPage() {
+	const { addToCart, cartItems } = useCart();
+	const { addToComparison, comparedItems } = useComparison();
 	const router = useRouter();
 	const [searchQuery, setSearchQuery] = useState("");
 	const [activeSubject, setActiveSubject] = useState("All");
@@ -57,6 +63,43 @@ export default function MarketPage() {
 
 		return () => window.clearTimeout(timer);
 	}, []);
+
+	// Subject categories
+	const [subjects, setSubjects] = useState(["All"]);
+	const [subjectsLoading, setSubjectsLoading] = useState(true);
+
+	// Fetch subject categories
+	useEffect(() => {
+		async function loadSubjects() {
+			try {
+				setSubjectsLoading(true);
+				const res = await fetch('/api/subjects');
+				if (res.ok) {
+					const data = await res.json();
+					setSubjects(data.subjects || ["All"]);
+				}
+			} catch (err) {
+				console.error('Failed to load subjects:', err);
+				// Fallback to default subjects
+				setSubjects(["All", "Math", "Science", "Law", "Technology", "Business", "Medicine", "Arts"]);
+			} finally {
+				setSubjectsLoading(false);
+			}
+		}
+		loadSubjects();
+	}, []);
+
+	// Fetch creator profiles for materials
+	const creatorProfiles = useMemo(() => {
+		if (!data?.items) return {};
+		return data.items.reduce((acc, material) => {
+			const creatorAddress = material.userAddress || material.ownerAddress || '';
+			if (creatorAddress && !acc[creatorAddress]) {
+				acc[creatorAddress] = useUserProfile(creatorAddress);
+			}
+			return acc;
+		}, {});
+	}, [data]);
 
 	// Sync state to URL
 	useEffect(() => {
@@ -116,36 +159,46 @@ export default function MarketPage() {
 
 			<section className="flex flex-col lg:flex-row min-h-screen bg-[#fffaf6] relative z-0">
 				<div className="lg:hidden w-full overflow-x-auto bg-white border-b border-gray-200 px-4 py-3 hide-scrollbar flex gap-2">
-					{["All", ...SUBJECTS].map((subject) => (
-						<button
-							key={subject}
-							onClick={() => {
-								setActiveSubject(subject);
-								setCurrentPage(1);
-							}}
-							className={`whitespace-nowrap px-4 py-1.5 rounded-full text-sm transition-all ${activeSubject === subject ? "bg-blue-600 text-white font-medium shadow-sm" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}
-						>
-							{subject}
-						</button>
-					))}
+					{subjectsLoading ? (
+						<div className="px-4 py-1.5 text-sm text-gray-500">Loading subjects...</div>
+					) : (
+						subjects.map((subject) => (
+							<button
+								key={subject}
+								onClick={() => {
+									setActiveSubject(subject);
+									setCurrentPage(1);
+								}}
+								className={`whitespace-nowrap px-4 py-1.5 rounded-full text-sm transition-all ${activeSubject === subject ? "bg-blue-600 text-white font-medium shadow-sm" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}
+							>
+								{subject}
+							</button>
+						))
+					)}
 				</div>
 
 				<aside className="hidden lg:block w-72 bg-white border-r border-gray-200 px-6 py-10 sticky top-0 h-screen overflow-y-auto">
 					<h3 className="text-sm font-bold text-gray-900 mb-6 uppercase tracking-wider">Subjects</h3>
 					<ul className="space-y-1">
-						{["All", ...SUBJECTS].map((subject) => (
-							<li key={subject}>
-								<button
-									onClick={() => {
-										setActiveSubject(subject);
-										setCurrentPage(1);
-									}}
-									className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-all ${activeSubject === subject ? "bg-blue-50 text-blue-700 font-semibold" : "text-gray-600 hover:bg-gray-50 hover:text-gray-900"}`}
-								>
-									{subject}
-								</button>
+						{subjectsLoading ? (
+							<li>
+								<div className="px-3 py-2 text-sm text-gray-500">Loading subjects...</div>
 							</li>
-						))}
+						) : (
+							subjects.map((subject) => (
+								<li key={subject}>
+									<button
+										onClick={() => {
+											setActiveSubject(subject);
+											setCurrentPage(1);
+										}}
+										className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-all ${activeSubject === subject ? "bg-blue-50 text-blue-700 font-semibold" : "text-gray-600 hover:bg-gray-50 hover:text-gray-900"}`}
+									>
+										{subject}
+									</button>
+								</li>
+							))
+						)}
 					</ul>
 				</aside>
 
@@ -185,9 +238,13 @@ export default function MarketPage() {
 									className="bg-transparent text-sm text-gray-700 focus:outline-none cursor-pointer"
 								>
 									<option value="All">All Subjects</option>
-									{SUBJECTS.map((subject) => (
-										<option key={subject} value={subject}>{subject}</option>
-									))}
+									{subjectsLoading ? (
+										<option value="loading" disabled>Loading subjects...</option>
+									) : (
+										subjects.slice(1).map((subject) => (
+											<option key={subject} value={subject}>{subject}</option>
+										))
+									)}
 								</select>
 							</div>
 
@@ -283,13 +340,67 @@ export default function MarketPage() {
 												<div className="flex items-center text-xs text-gray-500 gap-3">
 													<span className="flex items-center gap-1">{/* File icon logic can be improved if fileType is available */}<FaFilePdf className="text-red-500" /> <span className="uppercase">PDF</span></span>
 													<div className="flex items-center gap-1"><FaHeart className="text-gray-400" /><span>{material.likes || 0}</span></div>
+								{materials.map((material) => {
+									const materialId = material._id || material.id;
+									const isAlreadyInCart = cartItems.some((item) => (item._id || item.id) === materialId);
+									const isAlreadyInComp = comparedItems.some((item) => (item._id || item.id) === materialId);
+									const creatorAddress = material.userAddress || material.ownerAddress || 'GCS7TA6CS7TA6CS7TA6CS7TA6CS7TA6CS7TA6CS7TA6CS7TA';
+									
+									return (
+										<div key={materialId} className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm hover:shadow-md hover:border-blue-300 transition-all duration-300 flex flex-col group relative">
+											<Link href={`/marketplace/${materialId}`} className="relative w-full h-28 bg-gray-100 overflow-hidden block">
+												<Image src={material.image || material.thumbnailUrl || "/images/image1.jpg"} alt={material.title} fill className="object-cover group-hover:scale-105 transition-transform duration-500" />
+											</Link>
+											<div className="p-4 flex-1 flex flex-col">
+												<Link href={`/marketplace/${materialId}`}>
+													<h3 className="text-sm font-bold text-gray-900 mb-1 line-clamp-2 leading-tight group-hover:text-blue-600 transition-colors">{material.title}</h3>
+												</Link>
+												<p className="text-xs text-gray-500 mb-1">
+													by{" "}
+													<Link href={`/creator/${creatorAddress}`} className="font-semibold text-blue-600 hover:underline hover:text-blue-750 transition-colors">
+														{material.author || 'Anonymous'}
+													</Link>
+												</p>
+																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																					
+												<div className="mt-auto pt-3 border-t border-gray-100 flex justify-between items-center">
+													<div className="flex items-center text-xs text-gray-500 gap-3">
+														<span className="flex items-center gap-1"><FaFilePdf className="text-red-500" /> <span className="uppercase">PDF</span></span>
+														<div className="flex items-center gap-1"><FaHeart className="text-gray-400" /><span>{material.likes || 0}</span></div>
+													</div>
+													<div className="bg-blue-50 text-blue-700 px-2.5 py-1 rounded-md text-sm font-bold shadow-sm border border-blue-100">{material.price} <span className="text-[10px] font-medium text-blue-500">XLM</span></div>
 												</div>
-												<div className="bg-blue-50 text-blue-700 px-2.5 py-1 rounded-md text-sm font-bold shadow-sm border border-blue-100">{material.price} <span className="text-[10px] font-medium text-blue-500">XLM</span></div>
+												<div className="mt-2 flex justify-between text-xs text-gray-500 pb-3 border-b border-gray-100">
+													<span>{material.subject}</span>
+													<span><FaStar className="inline text-yellow-500 mr-0.5" /> {material.rating || 4.8}</span>
+												</div>
+												<div className="grid grid-cols-2 gap-2 mt-3">
+													<button
+														onClick={() => addToComparison(material)}
+														className={`flex items-center justify-center gap-1 py-1.5 rounded-lg font-bold text-[10px] transition-all border cursor-pointer ${
+															isAlreadyInComp
+																? "bg-amber-550 border-amber-600 text-white shadow-xs"
+																: "bg-white hover:bg-gray-50 border-gray-200 text-gray-600"
+														}`}
+													>
+														<FaExchangeAlt className="w-2.5 h-2.5" />
+														{isAlreadyInComp ? "Contrasted" : "Contrast"}
+													</button>
+													<button
+														onClick={() => addToCart(material)}
+														className={`flex items-center justify-center gap-1 py-1.5 rounded-lg font-bold text-[10px] transition-all border cursor-pointer ${
+															isAlreadyInCart
+																? "bg-emerald-600 border-emerald-700 text-white shadow-xs"
+																: "bg-blue-600 hover:bg-blue-750 border-blue-700 text-white shadow-xs"
+														}`}
+													>
+														<FaShoppingCart className="w-2.5 h-2.5" />
+														{isAlreadyInCart ? "In Cart" : "Add to Cart"}
+													</button>
+												</div>
 											</div>
-											<div className="mt-2 flex justify-between text-xs text-gray-500"><span>{material.subject}</span><span><FaStar className="inline text-yellow-500" /> {material.rating || 4.8}</span></div>
 										</div>
-									</Link>
-								))}
+									);
+								})}
 							</motion.div>
 							{/* Pagination */}
 							{totalPages > 1 && (

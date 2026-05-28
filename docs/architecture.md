@@ -1,5 +1,57 @@
 # EduVault Architecture
 
+This document shows the high-level data and payment flow for EduVault.
+
+## Publishing Flow (Creator)
+
+```mermaid
+flowchart LR
+  subgraph Frontend
+    A[Creator UI] --> B[Upload Metadata + File]
+  end
+  B --> C[Backend API]
+  C --> D[Pinata/IPFS]
+  C --> E[MongoDB materials collection]
+  C --> F[Soroban MaterialRegistry]
+  F -->|emit material.registered| G[Stellar RPC/Event Stream]
+  G --> H[Indexer] --> E
+```
+
+## Checkout & Entitlement Flow (Buyer)
+
+```mermaid
+sequenceDiagram
+  participant UI as Frontend
+  participant API as Backend
+  participant RPC as Stellar RPC/Soroban
+  participant Contract as PurchaseManager
+  UI->>API: request checkout
+  API->>RPC: submit transaction to Contract
+  RPC->>Contract: record purchase + emit purchase.completed
+  RPC->>Indexer: events stream
+  Indexer->>MongoDB: purchases + entitlement_cache
+  UI->>API: request material access
+  API->>MongoDB: check entitlement_cache/purchases
+  API-->>UI: grant or deny access
+```
+
+## Indexer Responsibilities
+
+- Polls Stellar RPC for events related to Soroban contracts
+- Writes sync events into `sync_events` to ensure idempotency
+- Applies event side-effects (materials, purchases, entitlement_cache)
+- On transient failures: records retry metadata in `dead_letter_events`
+- Provides a `reprocess-deadletter.mjs` script for maintainers to reprocess
+
+## Source-of-truth boundaries
+
+- On-chain (Soroban contracts): authoritative for entitlement and payments
+- MongoDB: authoritative for application catalog, caches, and derived state
+- IPFS/Pinata: authoritative for file bytes and pinned metadata content
+
+Link: see `scripts/run-stellar-indexer.mjs` and `scripts/reprocess-deadletter.mjs` for operational commands.
+# EduVault Architecture
+
 ## 1. System Goals
 
 EduVault needs to do four things reliably:

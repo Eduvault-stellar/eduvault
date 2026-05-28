@@ -8,11 +8,14 @@ import { useRouter } from "next/navigation";
 import { formatAddress } from "@/utils/formatAddress";
 import { WalletButton } from "./WalletBtn";
 import { useWallet } from "@/hooks/useWallet";
+import { useCart } from "@/hooks/useCart";
+import { FaShoppingCart } from "react-icons/fa";
 
 export default function Navbar() {
 	const [menuOpen, setMenuOpen] = useState(false);
 	const [scrolled, setScrolled] = useState(false);
 	const router = useRouter();
+	const { cartItems, setIsCartOpen } = useCart();
 
 	const {
 		address,
@@ -84,6 +87,20 @@ export default function Navbar() {
 
 				{/* Actions */}
 				<div className="flex items-center gap-4">
+					{/* Shopping Cart Drawer Trigger */}
+					<button
+						onClick={() => setIsCartOpen(true)}
+						className="relative p-2.5 bg-gray-150/40 hover:bg-gray-200/60 active:scale-95 rounded-full text-gray-700 hover:text-stellar-blue transition-all cursor-pointer flex items-center justify-center shrink-0 border border-gray-200/20"
+						title="Open shopping cart"
+					>
+						<FaShoppingCart className="w-4 h-4" />
+						{cartItems.length > 0 && (
+							<span className="absolute -top-1 -right-1.5 bg-stellar-blue text-white font-extrabold text-[9px] w-4.5 h-4.5 rounded-full flex items-center justify-center border border-white">
+								{cartItems.length}
+							</span>
+						)}
+					</button>
+
 					{isConnected && address ? (
 						<div className="hidden md:flex items-center gap-4">
 							{balance && (

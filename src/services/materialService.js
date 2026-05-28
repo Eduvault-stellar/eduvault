@@ -30,6 +30,17 @@ export const materialService = {
     return apiClient(`/api/materials/download/${id}`);
   },
 
+  updateMaterial: async (id, updateData) => {
+    return apiClient(`/api/materials?id=${id}`, {
+      method: 'PUT',
+      body: updateData,
+    });
+  },
+
+  getMaterialHistory: async (id) => {
+    return apiClient(`/api/materials/history?id=${id}`);
+  },
+
   getTrendingMaterials: async (params = {}) => {
     const searchParams = new URLSearchParams({ ...params, sort: 'trending' });
     return apiClient(`/api/market-materials?${searchParams.toString()}`);

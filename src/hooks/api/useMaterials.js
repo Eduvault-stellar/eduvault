@@ -57,3 +57,15 @@ export function useDownloadMaterial() {
     mutationFn: (id) => materialService.getDownloadUrl(id),
   });
 }
+
+export function useUpdateMaterial() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ id, data }) => materialService.updateMaterial(id, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.materials.all });
+      queryClient.invalidateQueries({ queryKey: ['materials', 'marketplace'] });
+    },
+  });
+}

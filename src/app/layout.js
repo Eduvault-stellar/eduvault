@@ -1,6 +1,11 @@
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import Web3Provider from "@/providers/Web3Provider";
+import { ToastProvider } from "@/providers/ToastProvider";
+import { CartProvider } from "@/providers/CartProvider";
+import { ComparisonProvider } from "@/providers/ComparisonProvider";
+import CartDrawer from "@/components/CartDrawer";
+import ComparisonMatrix from "@/components/ComparisonMatrix";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -28,7 +33,17 @@ export default function RootLayout({ children }) {
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
-        <Web3Provider>{children}</Web3Provider>
+        <Web3Provider>
+          <ToastProvider>
+            <CartProvider>
+              <ComparisonProvider>
+                {children}
+                <CartDrawer />
+                <ComparisonMatrix />
+              </ComparisonProvider>
+            </CartProvider>
+          </ToastProvider>
+        </Web3Provider>
       </body>
     </html>
   );

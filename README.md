@@ -199,6 +199,14 @@ If you want a local MongoDB instance:
 docker compose up -d mongodb
 ```
 
+## Architecture & User Flows
+
+See the architecture and product flow docs for developer onboarding:
+
+- [Architecture](docs/architecture.md)
+- [User Flows](docs/user-flows.md)
+
+
 Start the app:
 
 ```bash
