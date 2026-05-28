@@ -2,12 +2,13 @@
 
 import Image from "next/image";
 import { useState, useEffect } from "react";
-import { FaCloudUploadAlt, FaCheck, FaArrowRight, FaArrowLeft, FaFileAlt, FaTags, FaDollarSign, FaEye } from "react-icons/fa";
-import { useAccount, useWriteContract, useWaitForTransactionReceipt } from "wagmi";
+import { FaCloudUploadAlt, FaCheck, FaArrowRight, FaArrowLeft, FaFileAlt, FaTags, FaDollarSign, FaEye, FaExclamationTriangle } from "react-icons/fa";
+import { useAccount, useWriteContract, useWaitForTransactionReceipt, useSwitchChain } from "wagmi";
 import { abi } from "../../../../../contracts/EduVaultAbi.js";
 import { celoSepolia } from "wagmi/chains";
 import { parseAbiItem } from "viem";
 import { useCreateMaterial, useUploadFile } from "@/hooks/api/useMaterials";
+import { isUploadChain, SUPPORTED_CHAINS } from "@/lib/web3/chains";
 
 const contractAddress = "0x3f48520ca0d8d51345b416b5a3e083dac8790f55";
 
@@ -24,7 +25,7 @@ const STEPS = [
 ];
 
 export default function UploadWizard() {
-  const { address } = useAccount();
+  const { address, chainId } = useAccount();
   const { writeContract, data: txHash, error: writeError, isPending } = useWriteContract();
   const {
     isLoading: isWaiting,
@@ -32,6 +33,7 @@ export default function UploadWizard() {
     isError: isFailed,
     data: receipt,
   } = useWaitForTransactionReceipt({ hash: txHash });
+  const { switchChainAsync } = useSwitchChain();
 
   const [currentStep, setCurrentStep] = useState(1);
   
@@ -52,6 +54,9 @@ export default function UploadWizard() {
   const [errorType, setErrorType] = useState(null);
   const [mintResult, setMintResult] = useState(null);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [switchingChain, setSwitchingChain] = useState(false);
+
+  const chainMismatch = address && chainId && !isUploadChain(chainId);
 
   const handleDocChange = (e) => {
     const file = e.target.files?.[0];
@@ -110,6 +115,27 @@ export default function UploadWizard() {
     }
   };
 
+  const handleSwitchChain = async () => {
+    setError(null);
+    setSwitchingChain(true);
+    try {
+      await switchChainAsync({ chainId: celoSepolia.id });
+    } catch (err) {
+      if (err.code === "ACTION_REJECTED" || err.message?.includes("User rejected")) {
+        setError("Network switch was rejected. Please switch to Celo Sepolia to publish.");
+        setErrorType("chain");
+      } else if (err.message?.includes("does not support")) {
+        setError("Your wallet does not support switching to Celo Sepolia. Please switch manually.");
+        setErrorType("chain");
+      } else {
+        setError(err.message || "Failed to switch network. Please try manually.");
+        setErrorType("chain");
+      }
+    } finally {
+      setSwitchingChain(false);
+    }
+  };
+
   const uploadFileMutation = useUploadFile();
   const createMaterialMutation = useCreateMaterial();
 
@@ -120,6 +146,12 @@ export default function UploadWizard() {
     if (!address) {
       setError("Please connect your wallet to mint an NFT.");
       setErrorType("wallet");
+      return;
+    }
+
+    if (chainMismatch) {
+      setError(`Please switch to ${celoSepolia.name} before publishing. Use the network switch button above.`);
+      setErrorType("chain");
       return;
     }
 
@@ -326,9 +358,33 @@ export default function UploadWizard() {
       </div>
 
       {/* Error Alert */}
-      {error && (
+      {error && !chainMismatch && (
         <div className="mx-6 mt-4 p-3 bg-red-50 border border-red-200 rounded-md">
           <p className="text-red-600 text-sm">{error}</p>
+        </div>
+      )}
+
+      {chainMismatch && (
+        <div className="mx-6 mt-4 p-4 bg-amber-50 border border-amber-200 rounded-md">
+          <div className="flex items-start gap-3">
+            <FaExclamationTriangle className="text-amber-500 mt-0.5 shrink-0" />
+            <div className="flex-1">
+              <p className="text-sm font-medium text-amber-800 mb-1">
+                Wrong Network Detected
+              </p>
+              <p className="text-xs text-amber-700 mb-3">
+                Publishing requires the <strong>{celoSepolia.name}</strong> network. Your wallet is currently on chain ID <strong>{chainId}</strong>.
+              </p>
+              <button
+                type="button"
+                onClick={handleSwitchChain}
+                disabled={switchingChain}
+                className="px-4 py-1.5 bg-amber-600 hover:bg-amber-700 disabled:opacity-60 text-white text-xs font-medium rounded-md transition"
+              >
+                {switchingChain ? "Switching..." : `Switch to ${celoSepolia.name}`}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -577,7 +633,7 @@ export default function UploadWizard() {
           <button
             type="button"
             onClick={handleSubmit}
-            disabled={isSubmitting || !address}
+            disabled={isSubmitting || !address || chainMismatch}
             className="px-6 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 transition text-sm font-medium disabled:opacity-50 flex items-center gap-2"
           >
             {workflowState === "uploading" ? (

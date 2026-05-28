@@ -2,18 +2,18 @@
 
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { FaHeart, FaSearch, FaFilter, FaStar, FaFilePdf, FaFileWord, FaFilePowerpoint, FaRegClock, FaExchangeAlt, FaShoppingCart } from "react-icons/fa";
+import { FaHeart, FaSearch, FaFilter, FaStar, FaFilePdf, FaFileWord, FaFilePowerpoint, FaRegClock, FaExchangeAlt, FaShoppingCart, FaGraduationCap, FaWallet, FaBook } from "react-icons/fa";
 import { motion } from "framer-motion";
 import Navbar from "@/components/Navbar";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useMarketplaceMaterials } from "@/hooks/api/useMaterials";
 import { useCart } from "@/hooks/useCart";
 import { useComparison } from "@/hooks/useComparison";
-
-const SUBJECTS = ["Math", "Science", "Law", "Technology", "Business", "Medicine", "Arts"];
+import { useProfile } from "@/hooks/api/useProfile";
+import { useState, useEffect } from 'react';
 
 export default function MarketPage() {
 	const { addToCart, cartItems } = useCart();
@@ -29,6 +29,43 @@ export default function MarketPage() {
 	const [usageRights, setUsageRights] = useState(searchParams.get("usageRights") || "");
 	const [currentPage, setCurrentPage] = useState(Number(searchParams.get("page") || 1));
 	const itemsPerPage = 12;
+
+	// Subject categories
+	const [subjects, setSubjects] = useState(["All"]);
+	const [subjectsLoading, setSubjectsLoading] = useState(true);
+
+	// Fetch subject categories
+	useEffect(() => {
+		async function loadSubjects() {
+			try {
+				setSubjectsLoading(true);
+				const res = await fetch('/api/subjects');
+				if (res.ok) {
+					const data = await res.json();
+					setSubjects(data.subjects || ["All"]);
+				}
+			} catch (err) {
+				console.error('Failed to load subjects:', err);
+				// Fallback to default subjects
+				setSubjects(["All", "Math", "Science", "Law", "Technology", "Business", "Medicine", "Arts"]);
+			} finally {
+				setSubjectsLoading(false);
+			}
+		}
+		loadSubjects();
+	}, []);
+
+	// Fetch creator profiles for materials
+	const creatorProfiles = useMemo(() => {
+		if (!data?.items) return {};
+		return data.items.reduce((acc, material) => {
+			const creatorAddress = material.userAddress || material.ownerAddress || '';
+			if (creatorAddress && !acc[creatorAddress]) {
+				acc[creatorAddress] = useUserProfile(creatorAddress);
+			}
+			return acc;
+		}, {});
+	}, [data]);
 
 	// Sync state to URL
 	useEffect(() => {
@@ -87,36 +124,46 @@ export default function MarketPage() {
 
 			<section className="flex flex-col lg:flex-row min-h-screen bg-[#fffaf6] relative z-0">
 				<div className="lg:hidden w-full overflow-x-auto bg-white border-b border-gray-200 px-4 py-3 hide-scrollbar flex gap-2">
-					{["All", ...SUBJECTS].map((subject) => (
-						<button
-							key={subject}
-							onClick={() => {
-								setActiveSubject(subject);
-								setCurrentPage(1);
-							}}
-							className={`whitespace-nowrap px-4 py-1.5 rounded-full text-sm transition-all ${activeSubject === subject ? "bg-blue-600 text-white font-medium shadow-sm" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}
-						>
-							{subject}
-						</button>
-					))}
+					{subjectsLoading ? (
+						<div className="px-4 py-1.5 text-sm text-gray-500">Loading subjects...</div>
+					) : (
+						subjects.map((subject) => (
+							<button
+								key={subject}
+								onClick={() => {
+									setActiveSubject(subject);
+									setCurrentPage(1);
+								}}
+								className={`whitespace-nowrap px-4 py-1.5 rounded-full text-sm transition-all ${activeSubject === subject ? "bg-blue-600 text-white font-medium shadow-sm" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}
+							>
+								{subject}
+							</button>
+						))
+					)}
 				</div>
 
 				<aside className="hidden lg:block w-72 bg-white border-r border-gray-200 px-6 py-10 sticky top-0 h-screen overflow-y-auto">
 					<h3 className="text-sm font-bold text-gray-900 mb-6 uppercase tracking-wider">Subjects</h3>
 					<ul className="space-y-1">
-						{["All", ...SUBJECTS].map((subject) => (
-							<li key={subject}>
-								<button
-									onClick={() => {
-										setActiveSubject(subject);
-										setCurrentPage(1);
-									}}
-									className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-all ${activeSubject === subject ? "bg-blue-50 text-blue-700 font-semibold" : "text-gray-600 hover:bg-gray-50 hover:text-gray-900"}`}
-								>
-									{subject}
-								</button>
+						{subjectsLoading ? (
+							<li>
+								<div className="px-3 py-2 text-sm text-gray-500">Loading subjects...</div>
 							</li>
-						))}
+						) : (
+							subjects.map((subject) => (
+								<li key={subject}>
+									<button
+										onClick={() => {
+											setActiveSubject(subject);
+											setCurrentPage(1);
+										}}
+										className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-all ${activeSubject === subject ? "bg-blue-50 text-blue-700 font-semibold" : "text-gray-600 hover:bg-gray-50 hover:text-gray-900"}`}
+									>
+										{subject}
+									</button>
+								</li>
+							))
+						)}
 					</ul>
 				</aside>
 
@@ -156,9 +203,13 @@ export default function MarketPage() {
 									className="bg-transparent text-sm text-gray-700 focus:outline-none cursor-pointer"
 								>
 									<option value="All">All Subjects</option>
-									{SUBJECTS.map((subject) => (
-										<option key={subject} value={subject}>{subject}</option>
-									))}
+									{subjectsLoading ? (
+										<option value="loading" disabled>Loading subjects...</option>
+									) : (
+										subjects.slice(1).map((subject) => (
+											<option key={subject} value={subject}>{subject}</option>
+										))
+									)}
 								</select>
 							</div>
 
@@ -240,7 +291,7 @@ export default function MarketPage() {
 														{material.author || 'Anonymous'}
 													</Link>
 												</p>
-												<p className="text-xs text-gray-500 mb-3 line-clamp-2">{material.description}</p>
+																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																																					
 												<div className="mt-auto pt-3 border-t border-gray-100 flex justify-between items-center">
 													<div className="flex items-center text-xs text-gray-500 gap-3">
 														<span className="flex items-center gap-1"><FaFilePdf className="text-red-500" /> <span className="uppercase">PDF</span></span>

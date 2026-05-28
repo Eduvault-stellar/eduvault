@@ -151,3 +151,84 @@ export async function GET(request) {
     }
   );
 }
+
+// PATCH /api/profile
+// Update the authenticated user's profile
+export async function PATCH(request) {
+  return withApiHardening(
+    request,
+    { route: "profile", rateLimit: { limit: 30, windowMs: 60_000 } },
+    async () => {
+      try {
+        const user = await getUserFromCookie(request);
+        if (!user) {
+          return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+        }
+
+        const profileData = await request.json();
+        
+        // Validate and sanitize profile data
+        const updateFields = {};
+        
+        if (profileData.displayName && typeof profileData.displayName === 'string') {
+          updateFields.fullName = sanitizeString(profileData.displayName, { maxLength: 120 });
+        }
+        
+        if (profileData.bio && typeof profileData.bio === 'string') {
+          updateFields.bio = sanitizeString(profileData.bio, { maxLength: 1000 });
+        }
+        
+        if (profileData.institution && typeof profileData.institution === 'string') {
+          updateFields.institution = sanitizeString(profileData.institution, { maxLength: 160 });
+        }
+        
+        if (profileData.country && typeof profileData.country === 'string') {
+          updateFields.country = sanitizeString(profileData.country, { maxLength: 80 });
+        }
+        
+        if (profileData.twitterUrl && typeof profileData.twitterUrl === 'string') {
+          updateFields.twitterUrl = sanitizeString(profileData.twitterUrl, { maxLength: 256 });
+        }
+        
+        if (profileData.githubUrl && typeof profileData.githubUrl === 'string') {
+          updateFields.githubUrl = sanitizeString(profileData.githubUrl, { maxLength: 256 });
+        }
+        
+        if (profileData.websiteUrl && typeof profileData.websiteUrl === 'string') {
+          updateFields.websiteUrl = sanitizeString(profileData.websiteUrl, { maxLength: 256 });
+        }
+        
+        if (Object.keys(updateFields).length === 0) {
+          return NextResponse.json({ error: "No valid fields to update" }, { status: 400 });
+        }
+        
+        const db = await getDb();
+        const users = db.collection("users");
+        
+        // Update the user profile
+        const result = await users.updateOne(
+          { _id: user._id },
+          { 
+            $set: { 
+              ...updateFields,
+              updatedAt: new Date().toISOString() 
+            } 
+          }
+        );
+        
+        if (result.matchedCount === 0) {
+          return NextResponse.json({ error: "User not found" }, { status: 404 });
+        }
+        
+        // Fetch updated user
+        const updatedUser = await users.findOne({ _id: user._id });
+        
+        return NextResponse.json({ success: true, user: updatedUser });
+      } catch (error) {
+        if (error.name === "ValidationError") throw error;
+        auditLog({ event: "profile_update_failed", route: "profile", method: "PATCH", status: 500, reason: error.message });
+        return NextResponse.json({ error: "Server error" }, { status: 500 });
+      }
+    }
+  );
+}

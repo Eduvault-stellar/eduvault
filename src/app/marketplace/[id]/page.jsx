@@ -218,7 +218,6 @@ export default function MaterialDetailsPage() {
 				</QueryStateProvider>
 			</section>
 
-			{/* 💳 Integrated Buy Now Modal */}
 			{materialQuery.data && (
 				<Web3ErrorBoundary onRetry={() => setShowBuyModal(false)}>
 					<BuyNowModal
@@ -226,6 +225,8 @@ export default function MaterialDetailsPage() {
 						onClose={() => setShowBuyModal(false)}
 						price={materialQuery.data.price}
 						materialId={id}
+						materialTitle={materialQuery.data.title}
+						materialCreator={materialQuery.data.author?.name || materialQuery.data.creator || "Unknown"}
 					/>
 				</Web3ErrorBoundary>
 			)}

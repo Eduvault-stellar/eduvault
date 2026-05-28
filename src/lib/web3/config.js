@@ -1,6 +1,6 @@
 import { http, createConfig } from 'wagmi';
-import { mainnet, sepolia } from 'wagmi/chains';
 import { walletConnect, injected, coinbaseWallet } from 'wagmi/connectors';
+import { SUPPORTED_CHAINS } from './chains';
 
 // ── WalletConnect is optional. ─────────────────────────────────────────────────
 // Set NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID in your environment to enable it.
@@ -17,8 +17,8 @@ const PLACEHOLDER = 'YOUR_PROJECT_ID';
 export const walletConnectEnabled =
   _rawProjectId.length > 0 && _rawProjectId !== PLACEHOLDER;
 
-// Define supported chains
-export const chains = [mainnet, sepolia];
+// Define supported chains — shared config from chains.js
+export const chains = SUPPORTED_CHAINS;
 
 // Build connector list — WalletConnect is omitted when no real project ID exists.
 const connectors = [
@@ -48,12 +48,11 @@ if (walletConnectEnabled) {
   );
 }
 
-// Configure wagmi
+// Configure wagmi — using shared SUPPORTED_CHAINS from chains.js
 export const config = createConfig({
-  chains: [mainnet, sepolia],
+  chains: SUPPORTED_CHAINS,
   connectors,
-  transports: {
-    [mainnet.id]: http(),
-    [sepolia.id]: http(),
-  },
+  transports: Object.fromEntries(
+    SUPPORTED_CHAINS.map((chain) => [chain.id, http()])
+  ),
 });
