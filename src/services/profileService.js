@@ -9,6 +9,10 @@ export const profileService = {
     return apiClient('/api/profile', { body: profileData });
   },
 
+  updateProfile: async (profileData) => {
+    return apiClient('/api/profile', { method: 'PATCH', body: profileData });
+  },
+
   getTopCreators: async () => {
     return apiClient('/api/creators/top');
   },

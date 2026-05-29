@@ -30,9 +30,12 @@ export async function applyIndexedEvent(db, event, { now = new Date() } = {}) {
     });
   } catch (error) {
     if (duplicateKey(error)) {
-      return { eventId: id, skipped: true };
+      // event already recorded; mark and continue to ensure downstream
+      // side-effects (purchases/entitlement/materials) are applied on reprocess.
+      var alreadyIndexed = true; // eslint-disable-line no-var
+    } else {
+      throw error;
     }
-    throw error;
   }
 
   if (event.type === "material.registered") {
@@ -93,7 +96,7 @@ export async function applyIndexedEvent(db, event, { now = new Date() } = {}) {
     );
   }
 
-  return { eventId: id, skipped: false };
+  return { eventId: id, skipped: !!alreadyIndexed };
 }
 
 export async function runIndexerBatch({ db, eventSource, source = "stellar", limit = 100 }) {
@@ -104,10 +107,59 @@ export async function runIndexerBatch({ db, eventSource, source = "stellar", lim
   let applied = 0;
   let skipped = 0;
 
+  const maxRetries = Number(process.env.INDEXER_MAX_RETRIES || 3);
+
   for (const event of events) {
-    const result = await applyIndexedEvent(db, { ...event, source });
-    if (result.skipped) skipped += 1;
-    else applied += 1;
+    try {
+      const result = await applyIndexedEvent(db, { ...event, source });
+      if (result.skipped) {
+        skipped += 1;
+        // If a dead-letter exists for this event, increment its retry count
+        try {
+          const dlCol = db.collection(COLLECTIONS.deadLetterEvents);
+          const existing = await dlCol.findOne({ _id: result.eventId });
+          if (existing) {
+            const retryCount = (existing.retryCount || 0) + 1;
+            const status = retryCount > maxRetries ? 'failed' : 'retryable';
+            await dlCol.updateOne(
+              { _id: result.eventId },
+              { $set: { retryCount, lastAttemptedAt: new Date(), status } },
+              { upsert: true }
+            );
+          }
+        } catch (e) {
+          // ignore
+        }
+      } else applied += 1;
+
+      // on success (not skipped), remove any dead-letter record
+      try {
+        if (!result.skipped && result.eventId) await db.collection(COLLECTIONS.deadLetterEvents).deleteOne({ _id: result.eventId });
+      } catch (err) {
+        // ignore cleanup errors
+      }
+    } catch (err) {
+      const id = eventId(event) || `${source}:unknown:${Math.random().toString(36).slice(2, 8)}`;
+      const dlCol = db.collection(COLLECTIONS.deadLetterEvents);
+      const existing = await dlCol.findOne({ _id: id });
+      const retryCount = (existing?.retryCount || 0) + 1;
+      const status = retryCount > maxRetries ? 'failed' : 'retryable';
+      await dlCol.updateOne(
+        { _id: id },
+        {
+          $set: {
+            raw: event,
+            lastError: String(err?.message || err),
+            retryCount,
+            lastAttemptedAt: new Date(),
+            status,
+            source,
+          },
+          $setOnInsert: { createdAt: new Date() },
+        },
+        { upsert: true }
+      );
+    }
   }
 
   await db.collection(COLLECTIONS.syncState).updateOne(
@@ -162,4 +214,38 @@ export function createJsonRpcEventSource({ rpcUrl, contractId, fetchImpl = fetch
       };
     },
   };
+}
+
+export async function reprocessDeadLetters(db, { statuses = ['retryable', 'failed'], limit = 100 } = {}) {
+  const dlCol = db.collection(COLLECTIONS.deadLetterEvents);
+  const items = [];
+
+  if (typeof dlCol.find === 'function') {
+    const cursor = dlCol.find({ status: { $in: statuses } }).limit(limit);
+    for await (const doc of cursor) items.push(doc);
+  } else {
+    const records = dlCol.records instanceof Map ? Array.from(dlCol.records.values()) : [];
+    for (const r of records) if (statuses.includes(r.status)) items.push(r);
+  }
+
+  const reprocessed = [];
+  for (const entry of items.slice(0, limit)) {
+    try {
+      await applyIndexedEvent(db, entry.raw);
+      await dlCol.deleteOne({ _id: entry._id });
+      reprocessed.push({ id: entry._id });
+    } catch (err) {
+      // attempt one more immediate retry (helps transient failures during reprocess)
+      try {
+        await applyIndexedEvent(db, entry.raw);
+        await dlCol.deleteOne({ _id: entry._id });
+        reprocessed.push({ id: entry._id });
+        continue;
+      } catch (err2) {
+        await dlCol.updateOne({ _id: entry._id }, { $set: { lastError: String(err2?.message || err2), lastAttemptedAt: new Date() } }, { upsert: true });
+      }
+    }
+  }
+
+  return { reprocessed };
 }

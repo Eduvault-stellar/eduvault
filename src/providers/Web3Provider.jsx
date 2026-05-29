@@ -6,6 +6,7 @@ import { WagmiProvider } from 'wagmi';
 
 import { config } from '@/lib/web3/config';
 import { WalletProvider } from '@/providers/WalletProvider';
+import { TransactionProvider } from '@/providers/TransactionProvider';
 
 export default function Web3Provider({ children }) {
   const [queryClient] = useState(
@@ -24,7 +25,9 @@ export default function Web3Provider({ children }) {
   return (
     <WagmiProvider config={config}>
       <QueryClientProvider client={queryClient}>
-        <WalletProvider>{children}</WalletProvider>
+        <WalletProvider>
+          <TransactionProvider>{children}</TransactionProvider>
+        </WalletProvider>
       </QueryClientProvider>
     </WagmiProvider>
   );

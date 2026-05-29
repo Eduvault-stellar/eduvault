@@ -86,6 +86,7 @@ fn seed_material(
         metadata_uri: metadata_uri(env),
         metadata_hash: bytes32(env, 1),
         rights_hash: bytes32(env, 2),
+        paused: false,
         status: MaterialStatus::Active,
         quotes: default_quotes(env),
         payout_shares: default_payout_shares(env),
@@ -125,6 +126,7 @@ fn registers_material_and_emits_registered_event() {
     assert_eq!(record.metadata_uri, metadata_uri);
     assert_eq!(record.metadata_hash, metadata_hash);
     assert_eq!(record.rights_hash, rights_hash);
+    assert!(!record.paused);
     assert_eq!(record.status, MaterialStatus::Active);
     assert_eq!(record.quotes, quotes);
     assert_eq!(record.payout_shares, payout_shares);
@@ -462,9 +464,9 @@ fn updates_sale_terms_and_status_and_supports_quote_lookup() {
         .to_xdr(&env, &contract_id)
     );
 
-    client.set_material_status(&material_id, &MaterialStatus::Paused);
+    client.set_material_status(&creator, &material_id, &MaterialStatus::Paused);
     let status_events = env.events().all();
-    assert_eq!(status_events.events().len(), 1);
+    assert_eq!(status_events.events().len(), 2);
     assert_eq!(
         &status_events.events()[0],
         &MaterialStatusUpdatedEvent {
@@ -480,6 +482,7 @@ fn updates_sale_terms_and_status_and_supports_quote_lookup() {
     let missing_quote = client.get_quote(&material_id, &Address::generate(&env));
 
     assert_eq!(record.status, MaterialStatus::Paused);
+    assert!(record.paused);
     assert_eq!(record.quotes, next_quotes);
     assert_eq!(record.payout_shares, next_payout_shares);
     assert_eq!(quote, Some(next_quotes.get_unchecked(0)));

@@ -332,6 +332,7 @@ fn successful_purchase_creates_entitlement_and_distributes_multiple_payouts() {
     let material = MaterialRecord {
         material_id: material_id.clone(),
         creator: creator.clone(),
+        paused: false,
         status: MaterialStatus::Active,
         quotes: vec![
             &env,
@@ -412,6 +413,7 @@ fn purchase_distribution_gives_final_recipient_rounding_remainder() {
     let material = MaterialRecord {
         material_id: material_id.clone(),
         creator,
+        paused: false,
         status: MaterialStatus::Active,
         quotes: vec![
             &env,
@@ -488,6 +490,7 @@ fn rejects_invalid_registry_payout_shares_before_asset_transfer() {
     let material = MaterialRecord {
         material_id: material_id.clone(),
         creator,
+        paused: false,
         status: MaterialStatus::Active,
         quotes: vec![
             &env,
@@ -564,6 +567,49 @@ fn rejects_purchase_when_asset_not_allowed() {
 
     let result = client.try_purchase(&buyer, &material_id, &asset, &1_000_000);
     assert_eq!(result, Err(Ok(PurchaseError::AssetNotAllowed)));
+}
+
+#[test]
+fn rejects_purchase_when_material_is_paused() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let registry = env.register(MockRegistry, ());
+    let treasury = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let creator = Address::generate(&env);
+    let asset = env.register(MockAsset, ());
+
+    let material_id = bytes32(&env, 21);
+    let material = MaterialRecord {
+        material_id: material_id.clone(),
+        creator,
+        paused: true,
+        status: MaterialStatus::Paused,
+        quotes: vec![
+            &env,
+            AssetQuote {
+                asset: asset.clone(),
+                amount: 1_000_000,
+            },
+        ],
+        payout_shares: vec![
+            &env,
+            PayoutShare {
+                recipient: Address::generate(&env),
+                share_bps: 10_000,
+            },
+        ],
+    };
+    let registry_client = MockRegistryClient::new(&env, &registry);
+    registry_client.set_material(&material_id, &material);
+
+    let (_, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
+    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
+
+    let result = client.try_purchase(&buyer, &material_id, &asset, &1_000_000);
+    assert_eq!(result, Err(Ok(PurchaseError::MaterialNotActive)));
 }
 
 // ============== Entitlement Query Tests ==============
@@ -782,6 +828,7 @@ fn material_record_struct_works() {
     let record = MaterialRecord {
         material_id: material_id.clone(),
         creator: creator.clone(),
+        paused: false,
         status: MaterialStatus::Active,
         quotes: vec![
             &env,

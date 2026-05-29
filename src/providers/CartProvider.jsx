@@ -4,6 +4,7 @@ import { createContext, useContext, useState, useCallback, useMemo } from 'react
 import { useToast } from '@/hooks/useToast';
 import { purchaseService } from '@/services/purchaseService';
 import { useWallet } from '@/hooks/useWallet';
+import { isMainnet } from '@/lib/config/chain';
 
 export const CartContext = createContext(null);
 
@@ -117,7 +118,7 @@ export function CartProvider({ children }) {
       // Simulate Stellar Soroban smart contract purchase broadcasting
       toast.update(toastId, {
         title: 'Broadcasting Transaction',
-        message: 'Broadcasting transaction to Soroban testnet validators...',
+        message: `Broadcasting transaction to Soroban ${isMainnet ? 'mainnet' : 'testnet'} validators...`,
         type: 'loading',
       });
       await new Promise((resolve) => setTimeout(resolve, 1500));

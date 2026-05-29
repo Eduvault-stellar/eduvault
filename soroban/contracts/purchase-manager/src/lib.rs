@@ -63,6 +63,7 @@ pub struct PayoutShare {
 pub struct MaterialRecord {
     pub material_id: BytesN<32>,
     pub creator: Address,
+    pub paused: bool,
     pub status: MaterialStatus,
     pub quotes: Vec<AssetQuote>,
     pub payout_shares: Vec<PayoutShare>,
@@ -384,7 +385,7 @@ impl PurchaseManager {
             .map_err(|_| PurchaseError::MaterialNotFound)?;
 
         // Verify material is active
-        if material.status != MaterialStatus::Active {
+        if material.status != MaterialStatus::Active || material.paused {
             return Err(PurchaseError::MaterialNotActive);
         }
 

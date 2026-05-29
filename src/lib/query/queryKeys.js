@@ -5,6 +5,7 @@ export const queryKeys = {
     trending: (params) => ['materials', 'trending', params],
     detail: (id) => ['materials', 'detail', id],
     user: (address) => ['materials', 'user', address],
+    saved: (address) => ['materials', 'saved', address],
   },
   profile: {
     all: ['profile'],

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from 'react';
 import { FaFilter } from "react-icons/fa";
 
 const SkeletonCard = () => (
@@ -14,7 +14,29 @@ const SkeletonCard = () => (
 
 export default function MarketPage() {
   const [activeCategory, setActiveCategory] = useState("All");
-  const categories = ["All", "Social Sciences", "Engineering", "Pharmacy"];
+  const [categories, setCategories] = useState(["All"]);
+  const [categoriesLoading, setCategoriesLoading] = useState(true);
+
+  // Load subject categories
+  useEffect(() => {
+    async function loadCategories() {
+      try {
+        setCategoriesLoading(true);
+        const res = await fetch('/api/subjects');
+        if (res.ok) {
+          const data = await res.json();
+          setCategories(data.subjects || ["All"]);
+        }
+      } catch (err) {
+        console.error('Failed to load categories:', err);
+        // Fallback to default categories
+        setCategories(["All", "Social Sciences", "Engineering", "Pharmacy"]);
+      } finally {
+        setCategoriesLoading(false);
+      }
+    }
+    loadCategories();
+  }, []);
 
   return (
     <div className="min-h-screen bg-gray-50 text-gray-900">
@@ -27,19 +49,23 @@ export default function MarketPage() {
         </p>
 
         <div className="flex flex-wrap items-center gap-3 mb-6 mt-4">
-          {categories.map((category) => (
-            <button
-              key={category}
-              onClick={() => setActiveCategory(category)}
-              className={`px-4 py-2 text-sm font-medium rounded-full border transition-all ${
-                activeCategory === category
-                  ? "bg-blue-600 text-white border-blue-600"
-                  : "bg-white text-gray-700 border-gray-300 hover:bg-gray-100"
-              }`}
-            >
-              {category}
-            </button>
-          ))}
+          {categoriesLoading ? (
+            <div className="px-4 py-2 text-sm text-gray-500">Loading categories...</div>
+          ) : (
+            categories.map((category) => (
+              <button
+                key={category}
+                onClick={() => setActiveCategory(category)}
+                className={`px-4 py-2 text-sm font-medium rounded-full border transition-all ${
+                  activeCategory === category
+                    ? "bg-blue-600 text-white border-blue-600"
+                    : "bg-white text-gray-700 border-gray-300 hover:bg-gray-100"
+                }`}
+              >
+                {category}
+              </button>
+            ))
+          )}
           <button className="ml-auto flex items-center gap-2 text-gray-700 border border-gray-300 px-4 py-2 rounded-full text-sm hover:bg-gray-100">
             <FaFilter className="text-gray-600" /> Filter
           </button>

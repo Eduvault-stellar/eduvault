@@ -34,13 +34,22 @@ Authoritative off-chain listing metadata and derived chain linkage.
 Required fields:
 
 - `userAddress`: creator wallet address.
-- `title`, `fileUrl`, `visibility`, `price`.
+- `title`, `storageKey` (or legacy `fileUrl`), `visibility`, `price`.
 - `createdAt` / `updatedAt`.
 
 Optional fields:
 
 - `description`, `usageRights`, `thumbnailUrl`.
+- `coverImageUrl`, `shortSummary`, `learningOutcomes`, `tableOfContents`, `sampleNotes`.
 - `materialId`, `chainContractId`, `chainLedger`, `chainTxHash`, `syncStatus`.
+
+Marketplace preview field notes:
+
+- `coverImageUrl`: optional public image URL for the listing hero.
+- `shortSummary`: short teaser used on marketplace cards and detail headers.
+- `learningOutcomes`: array of short strings, or newline/comma-separated values accepted by the upload flow.
+- `tableOfContents`: array of short strings, or newline/comma-separated values accepted by the upload flow.
+- `sampleNotes`: array of short strings, or newline/comma-separated values accepted by the upload flow.
 
 Indexes:
 
@@ -129,10 +138,12 @@ Response:
 Request:
 
 - `title`: required string.
-- `fileUrl`: required string.
+- `storageKey`: required string for new uploads.
+- `fileUrl`: accepted as a legacy alias for `storageKey`.
 - `price`: optional non-negative number.
 - `visibility`: `private`, `public`, or `unlisted`.
 - `description`, `usageRights`, `thumbnailUrl`: optional strings.
+- `coverImageUrl`, `shortSummary`, `learningOutcomes`, `tableOfContents`, `sampleNotes`: optional preview metadata fields.
 
 Response:
 

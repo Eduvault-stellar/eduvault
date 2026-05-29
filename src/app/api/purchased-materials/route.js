@@ -3,19 +3,9 @@ export const dynamic = "force-dynamic";
 import { getDb } from "@/lib/mongodb";
 import { NextResponse } from "next/server";
 import { ObjectId } from "mongodb";
-import { verifyDashboardToken } from "@/lib/auth/session";
 import { withApiHardening } from "@/lib/api/hardening";
 import { auditLog } from "@/lib/api/audit";
-
-async function getUserFromCookie(request) {
-  const cookieHeader = request.headers.get("cookie") || "";
-  const cookieMatch = cookieHeader.match(/auth_token=([^;]+)/);
-  const token = cookieMatch ? decodeURIComponent(cookieMatch[1]) : null;
-  if (!token) return null;
-  const verification = await verifyDashboardToken(token, process.env.JWT_SECRET);
-  if (!verification.valid) return null;
-  return verification.payload;
-}
+import { getUserFromCookie } from "@/lib/api/auth";
 
 /**
  * GET /api/purchased-materials

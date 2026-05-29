@@ -5,6 +5,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { FaDownload, FaExternalLinkAlt, FaShoppingBag, FaSpinner, FaCheckCircle } from "react-icons/fa";
 import { MdOutlineSchool } from "react-icons/md";
+import { getExplorerTxUrl } from "@/lib/config/chain";
 
 function formatDate(dateStr) {
   if (!dateStr) return "—";
@@ -130,7 +131,7 @@ function PurchasedMaterialCard({ item }) {
             <span className="font-mono">{truncateHash(item.transactionHash)}</span>
             {item.transactionHash && (
               <a
-                href={`https://stellar.expert/explorer/testnet/tx/${item.transactionHash}`}
+                href={getExplorerTxUrl(item.transactionHash)}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="ml-1 text-blue-400 hover:text-blue-600"

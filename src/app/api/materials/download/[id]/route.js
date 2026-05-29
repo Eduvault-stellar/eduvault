@@ -3,17 +3,7 @@ export const dynamic = "force-dynamic";
 import { getDb } from "@/lib/mongodb";
 import { NextResponse } from "next/server";
 import { ObjectId } from "mongodb";
-import { verifyDashboardToken } from "@/lib/auth/session";
-
-async function getUserFromCookie(request) {
-  const cookieHeader = request.headers.get("cookie") || "";
-  const cookieMatch = cookieHeader.match(/auth_token=([^;]+)/);
-  const token = cookieMatch ? decodeURIComponent(cookieMatch[1]) : null;
-  if (!token) return null;
-  const verification = await verifyDashboardToken(token, process.env.JWT_SECRET);
-  if (!verification.valid) {
-    return null;
-  }
+import { getUserFromCookie } from "@/lib/api/auth";
   return verification.payload;
 }
 
@@ -32,22 +22,18 @@ export async function GET(req, { params }) {
     const userAddress = user.walletAddress || user.address || user.id;
     const db = await getDb();
 
-    // 1. Find material
     const material = await db
       .collection("materials")
       .findOne({ _id: new ObjectId(id) });
-    
+
     if (!material) {
       return NextResponse.json({ error: "Material not found" }, { status: 404 });
     }
 
-    // 2. Gate access
-    // Check if user is the owner
     const isOwner = material.userAddress === userAddress || material.ownerAddress === userAddress;
-    
+
     let hasAccess = isOwner;
 
-    // If not owner, check for purchase or if it's free & public
     if (!hasAccess) {
       if (material.price > 0) {
         const entitlement = await db.collection("purchases").findOne({
@@ -59,7 +45,6 @@ export async function GET(req, { params }) {
           hasAccess = true;
         }
       } else if (material.visibility === "public") {
-        // Free and public materials are accessible to all registered users
         hasAccess = true;
       }
     }
@@ -73,18 +58,13 @@ export async function GET(req, { params }) {
       );
     }
 
-    // 3. Yield Protected Resource
-    // Use storageKey (CID) or fallback to fileUrl (if it's a legacy record)
     const storageKey = material.storageKey || material.fileUrl;
-    
+
     if (!storageKey) {
       return NextResponse.json({ error: "Material file reference missing" }, { status: 404 });
     }
 
-    // If it's a full URL already (legacy), return it, otherwise construct gateway URL
-    const downloadUrl = storageKey.startsWith("http") 
-      ? storageKey 
-      : `${process.env.NEXT_PUBLIC_GATEWAY_URL || 'https://gateway.pinata.cloud'}/ipfs/${storageKey}`;
+    const downloadUrl = getIpfsUrl(storageKey);
 
     return NextResponse.json(
       {

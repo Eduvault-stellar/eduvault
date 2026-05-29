@@ -2,6 +2,10 @@
 
 import Image from "next/image";
 import Link from "next/link";
+"use client";
+
+import Image from "next/image";
+import Link from "next/link";
 import { motion } from "framer-motion";
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
@@ -39,6 +43,38 @@ export default function Navbar() {
 		<header
 			className={`fixed top-0 left-0 right-0 flex justify-center py-4 px-4 md:px-0 z-[100] transition-all duration-300 ${
 				scrolled ? "bg-background/10 backdrop-blur-xl py-3" : "bg-transparent"
+import { WalletStatus } from "@/providers/WalletProvider";
+import { FaShoppingCart, FaExternalLinkAlt } from "react-icons/fa";
+import { getExplorerAccountUrl } from "@/lib/config/chain";
+
+export default function Navbar() {
+	const [menuOpen, setMenuOpen] = useState(false);
+	const [scrolled, setScrolled] = useState(false);
+	const router = useRouter();
+	const { cartItems, setIsCartOpen } = useCart();
+
+	const {
+		address,
+		isConnected,
+		state,
+		balances,
+		disconnect
+	} = useWallet();
+	const balance = balances?.snapshot?.native?.balance;
+	const balanceSymbol = 'XLM';
+
+	useEffect(() => {
+		const handleScroll = () => {
+			setScrolled(window.scrollY > 20);
+		};
+		window.addEventListener("scroll", handleScroll);
+		return () => window.removeEventListener("scroll", handleScroll);
+	}, []);
+
+	return (
+		<header 
+			className={`fixed top-0 left-0 right-0 flex justify-center py-4 px-4 md:px-0 z-[100] transition-all duration-300 ${
+				scrolled ? "bg-white/10 backdrop-blur-xl py-3" : "bg-transparent"
 			}`}
 		>
 			<motion.nav
@@ -47,6 +83,8 @@ export default function Navbar() {
 				transition={{ duration: 0.6, ease: "easeOut" }}
 				className={`flex items-center justify-between w-full md:w-[90%] lg:w-[85%] max-w-6xl
         ${scrolled ? "bg-surface/95" : "bg-surface/85"} backdrop-blur-lg border border-border-subtle rounded-full py-2.5 px-6 md:px-10 shadow-lg shadow-black/5 z-10 transition-all duration-300`}
+				className={`flex items-center justify-between w-full md:w-[90%] lg:w-[85%] max-w-6xl 
+        ${scrolled ? "bg-white/90" : "bg-white/80"} backdrop-blur-lg border border-gray-200/50 rounded-full py-2.5 px-6 md:px-10 shadow-lg shadow-black/5 z-10 transition-all duration-300`}
 			>
 				{/* Logo */}
 				<Link href="/" className="flex items-center gap-2.5 group">
@@ -59,12 +97,14 @@ export default function Navbar() {
 						/>
 					</div>
 					<div className="text-xl font-bold tracking-tight text-foreground">
+					<div className="text-xl font-bold tracking-tight text-stellar-dark">
 						EduVault<span className="text-stellar-blue">.</span>
 					</div>
 				</Link>
 
 				{/* Desktop Menu */}
 				<div className="hidden md:flex items-center space-x-8 text-sm font-semibold text-muted-foreground">
+				<div className="hidden md:flex items-center space-x-8 text-sm font-semibold text-gray-600">
 					<Link
 						href="/#howitworks"
 						className="hover:text-stellar-blue transition-all duration-200"
@@ -110,6 +150,43 @@ export default function Navbar() {
 								<div className="hidden lg:flex flex-col items-end">
 									<span className="text-[10px] uppercase tracking-wider text-muted-foreground font-bold">Balance</span>
 									<span className="text-xs text-foreground font-bold">
+					<Link
+						href="/marketplace"
+						className="hover:text-stellar-blue transition-all duration-200"
+					>
+						Marketplace
+					</Link>
+					<Link
+						href="https://edu-vault.gitbook.io/edu-vault-docs/"
+						target="_blank"
+						className="hover:text-stellar-blue transition-all duration-200"
+					>
+						Docs
+					</Link>
+				</div>
+
+				{/* Actions */}
+				<div className="flex items-center gap-4">
+					{/* Shopping Cart Drawer Trigger */}
+					<button
+						onClick={() => setIsCartOpen(true)}
+						className="relative p-2.5 bg-gray-150/40 hover:bg-gray-200/60 active:scale-95 rounded-full text-gray-700 hover:text-stellar-blue transition-all cursor-pointer flex items-center justify-center shrink-0 border border-gray-200/20"
+						title="Open shopping cart"
+					>
+						<FaShoppingCart className="w-4 h-4" />
+						{cartItems.length > 0 && (
+							<span className="absolute -top-1 -right-1.5 bg-stellar-blue text-white font-extrabold text-[9px] w-4.5 h-4.5 rounded-full flex items-center justify-center border border-white">
+								{cartItems.length}
+							</span>
+						)}
+					</button>
+
+					{isConnected && address ? (
+						<div className="hidden md:flex items-center gap-4">
+							{balance && (
+								<div className="hidden lg:flex flex-col items-end">
+									<span className="text-[10px] uppercase tracking-wider text-gray-400 font-bold">Balance</span>
+									<span className="text-xs text-gray-900 font-bold">
 										{parseFloat(balance).toFixed(2)} {balanceSymbol}
 									</span>
 								</div>
@@ -132,6 +209,32 @@ export default function Navbar() {
 									>
 										Dashboard
 									</Link>
+
+							<div className="relative group">
+								<button
+									onClick={() => router.push("/dashboard")}
+									className="flex items-center gap-2 bg-stellar-dark text-white hover:bg-stellar-dark/90 
+																	text-sm font-bold py-2.5 px-5 rounded-full transition-all duration-300 shadow-md shadow-stellar-dark/10"
+								>
+									<div className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div>
+									{formatAddress(address)}
+								</button>
+
+								<div className="absolute right-0 mt-3 w-48 bg-white rounded-2xl shadow-xl border border-gray-100 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50 p-2 overflow-hidden">
+									<Link
+										href="/dashboard"
+										className="flex items-center px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 rounded-xl transition-colors"
+									>
+										Dashboard
+									</Link>
+									<a
+										href={getExplorerAccountUrl(address)}
+										target="_blank"
+										rel="noopener noreferrer"
+										className="flex items-center px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 rounded-xl transition-colors"
+									>
+										View on Explorer <FaExternalLinkAlt className="ml-1" size={10} />
+									</a>
 									<button
 										onClick={disconnect}
 										className="flex items-center w-full text-left px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 rounded-xl transition-colors"
@@ -162,6 +265,26 @@ export default function Navbar() {
 						initial={{ opacity: 0, scale: 0.95 }}
 						animate={{ opacity: 1, scale: 1 }}
 						className="absolute top-full left-0 right-0 mt-4 mx-4 bg-surface-strong border border-border-subtle rounded-3xl shadow-2xl flex flex-col items-center space-y-4 py-8 text-foreground md:hidden z-50"
+						<WalletButton />
+					)}
+
+					{/* Mobile Menu Button */}
+					<button
+						className="md:hidden flex flex-col space-y-1.5 p-2"
+						onClick={() => setMenuOpen(!menuOpen)}
+					>
+						<span className={`w-5 h-0.5 bg-stellar-dark transition-transform ${menuOpen ? "rotate-45 translate-y-2" : ""}`}></span>
+						<span className={`w-5 h-0.5 bg-stellar-dark transition-opacity ${menuOpen ? "opacity-0" : ""}`}></span>
+						<span className={`w-5 h-0.5 bg-stellar-dark transition-transform ${menuOpen ? "-rotate-45 -translate-y-2" : ""}`}></span>
+					</button>
+				</div>
+
+				{/* Mobile Dropdown Menu */}
+				{menuOpen && (
+					<motion.div 
+						initial={{ opacity: 0, scale: 0.95 }}
+						animate={{ opacity: 1, scale: 1 }}
+						className="absolute top-full left-0 right-0 mt-4 mx-4 bg-white border border-gray-100 rounded-3xl shadow-2xl flex flex-col items-center space-y-4 py-8 text-gray-700 md:hidden z-50"
 					>
 						<Link href="/#howitworks" onClick={() => setMenuOpen(false)} className="text-lg font-bold">How It Works</Link>
 						<Link href="/marketplace" onClick={() => setMenuOpen(false)} className="text-lg font-bold">Marketplace</Link>
@@ -177,6 +300,17 @@ export default function Navbar() {
 										<div className="w-2 h-2 bg-green-500 rounded-full"></div>
 										{formatAddress(address)}
 									</div>
+							{isConnected && address ? (
+								<div className="flex flex-col items-center gap-4 w-full">
+									<div className="flex items-center gap-2 text-sm font-bold text-stellar-dark bg-gray-100 px-4 py-2 rounded-full">
+										<div className="w-2 h-2 bg-green-500 rounded-full"></div>
+										{formatAddress(address)}
+									</div>
+									{balance && (
+										<p className="text-xs text-gray-500">
+											{parseFloat(balance).toFixed(2)} {balanceSymbol}
+										</p>
+									)}
 									<div className="flex gap-2 w-full">
 										<Link
 											href="/dashboard"
@@ -199,6 +333,19 @@ export default function Navbar() {
 							) : (
 								<div className="flex justify-center w-full">
 									<WalletButton	/>
+								</div>
+							)}
+						</div>
+					</motion.div>
+				)}
+			</motion.nav>
+		</header>
+	);
+}
+								</div>
+							) : (
+								<div className="flex justify-center w-full">
+									<WalletButton />
 								</div>
 							)}
 						</div>

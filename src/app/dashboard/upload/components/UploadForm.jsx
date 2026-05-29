@@ -8,12 +8,23 @@ import { useWallet } from "@/hooks/useWallet";
 import { WalletStatus } from "@/providers/WalletProvider";
 import { useUploadFile, useCreateMaterial } from "@/hooks/api/useMaterials";
 import { getCroppedImageBlob } from "./cropImage";
+import TransactionStatusPanel from "@/components/transactions/TransactionStatusPanel";
+import { useTransactionCenter } from "@/providers/TransactionProvider";
+import { TransactionStatus } from "@/lib/transactions/transaction";
 
 export default function UploadForm() {
   const { state } = useWallet();
   const address = state.status === WalletStatus.Connected ? state.session.address : null;
   const uploadFileMutation = useUploadFile();
   const createMaterialMutation = useCreateMaterial();
+  const {
+    activeTransaction,
+    beginTransaction,
+    markStatus,
+    confirmTransaction,
+    failTransaction,
+    clearTransaction,
+  } = useTransactionCenter();
 
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -55,17 +66,38 @@ export default function UploadForm() {
     setError(null);
     setSuccess(null);
 
+    beginTransaction({
+      scope: "publish",
+      title: "Publishing material",
+      message: "Preparing your material for upload and wallet approval.",
+    });
+
     if (!title || !docFile) {
       setError("Title and document file are required.");
+      failTransaction(new Error("Title and document file are required."), {
+        title: "Missing required fields",
+        message: "Add a title and upload a document before publishing.",
+        retryable: false,
+      });
       return;
     }
 
     if (!address) {
       setError("Please connect your wallet to upload a material.");
+      failTransaction(new Error("Please connect your wallet to upload a material."), {
+        title: "Wallet required",
+        message: "Connect your wallet before publishing this material.",
+        retryable: true,
+      });
       return;
     }
 
     try {
+      markStatus(TransactionStatus.Submitting, {
+        title: "Uploading material",
+        message: "Uploading files and creating the on-chain record.",
+      });
+
       const formData = new FormData();
       formData.append("file", docFile);
       if (thumbFile && thumbPreview && croppedPixels) {
@@ -92,6 +124,11 @@ export default function UploadForm() {
         throw new Error("File upload failed");
       }
 
+      markStatus(TransactionStatus.PendingConfirmation, {
+        title: "Awaiting confirmation",
+        message: "The upload succeeded. We are finalizing the material record.",
+      });
+
       // 2. Create database record
       await createMaterialMutation.mutateAsync({
         title,
@@ -103,6 +140,11 @@ export default function UploadForm() {
         thumbnail: uploadData.image,
         metadataUrl: uploadData.metadata,
         creator: address,
+      });
+
+      confirmTransaction({
+        title: "Material published",
+        message: "Your material is now available in the marketplace.",
       });
 
       setSuccess(
@@ -123,6 +165,11 @@ export default function UploadForm() {
     } catch (err) {
       console.error("Upload Error:", err);
       setError(err?.message || "Something went wrong. Please try again.");
+      failTransaction(err instanceof Error ? err : new Error(String(err)), {
+        title: "Publish failed",
+        message: err?.message || "Something went wrong. Please try again.",
+        retryable: true,
+      });
     }
   };
 
@@ -316,13 +363,25 @@ export default function UploadForm() {
       {error && <p className="text-red-600 text-sm mb-4">{error}</p>}
       {success && <p className="text-green-600 text-sm mb-4">{success}</p>}
 
+      <div className="mb-5">
+        <TransactionStatusPanel
+          transaction={activeTransaction}
+          onRetry={handleSubmit}
+          onClear={clearTransaction}
+        />
+      </div>
+
       <div className="flex justify-end gap-4">
         <button
           type="submit"
           disabled={submitting}
           className="px-5 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition text-sm font-medium disabled:opacity-60"
         >
-          {submitting ? "Processing..." : "Submit Upload"}
+          {activeTransaction.status === TransactionStatus.PendingConfirmation
+            ? "Awaiting confirmation..."
+            : submitting
+              ? "Processing..."
+              : "Submit Upload"}
         </button>
       </div>
     </form>

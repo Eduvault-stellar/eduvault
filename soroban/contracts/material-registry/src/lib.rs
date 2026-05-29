@@ -63,6 +63,7 @@ pub struct MaterialRecord {
     pub metadata_uri: String,
     pub metadata_hash: BytesN<32>,
     pub rights_hash: BytesN<32>,
+    pub paused: bool,
     pub status: MaterialStatus,
     pub quotes: Vec<AssetQuote>,
     pub payout_shares: Vec<PayoutShare>,
@@ -138,6 +139,17 @@ pub struct MaterialStatusUpdatedEvent {
     pub status: MaterialStatus,
 }
 
+#[contractevent(topics = ["material", "status_changed"], data_format = "vec")]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MaterialStatusChangedEvent {
+    #[topic]
+    pub material_id: BytesN<32>,
+    #[topic]
+    pub creator: Address,
+    pub paused: bool,
+    pub status: MaterialStatus,
+}
+
 /// Emitted when the upgrade-admin updates the approved-asset allowlist.
 #[contractevent(topics = ["asset", "policy_updated"], data_format = "vec")]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -185,6 +197,7 @@ impl MaterialRegistry {
             metadata_uri: metadata_uri.clone(),
             metadata_hash: metadata_hash.clone(),
             rights_hash: rights_hash.clone(),
+            paused: false,
             status: MaterialStatus::Active,
             quotes: quotes.clone(),
             payout_shares: payout_shares.clone(),
@@ -241,17 +254,19 @@ impl MaterialRegistry {
 
     pub fn set_material_status(
         env: Env,
+        actor: Address,
         material_id: BytesN<32>,
         status: MaterialStatus,
     ) -> Result<(), RegistryError> {
         let mut record = get_material_record(&env, &material_id)?;
-        record.creator.require_auth();
+        require_creator_or_upgrade_admin(&env, &record.creator, &actor)?;
 
         if record.status == status {
             return Ok(());
         }
 
         record.status = status;
+        record.paused = status == MaterialStatus::Paused;
         record.updated_ledger = env.ledger().sequence();
         put_material(&env, &record);
 
@@ -262,6 +277,85 @@ impl MaterialRegistry {
         }
         .publish(&env);
 
+        MaterialStatusChangedEvent {
+            material_id: material_id.clone(),
+            creator: record.creator.clone(),
+            paused: record.paused,
+            status,
+        }
+        .publish(&env);
+
+        Ok(())
+    }
+
+    pub fn set_material_paused(
+        env: Env,
+        actor: Address,
+        material_id: BytesN<32>,
+        paused: bool,
+    ) -> Result<(), RegistryError> {
+        let status = if paused {
+            MaterialStatus::Paused
+        } else {
+            MaterialStatus::Active
+        };
+        Self::set_material_status(env, actor, material_id, status)
+    }
+
+    pub fn toggle_material_paused(
+        env: Env,
+        actor: Address,
+        material_id: BytesN<32>,
+    ) -> Result<(), RegistryError> {
+        let record = get_material_record(&env, &material_id)?;
+        Self::set_material_paused(env, actor, material_id, !record.paused)
+    }
+
+    pub fn is_material_paused(
+        env: Env,
+        material_id: BytesN<32>,
+    ) -> Result<bool, RegistryError> {
+        let record = get_material_record(&env, &material_id)?;
+        Ok(record.paused)
+    }
+
+    pub fn set_material_active(
+        env: Env,
+        actor: Address,
+        material_id: BytesN<32>,
+        active: bool,
+    ) -> Result<(), RegistryError> {
+        Self::set_material_paused(env, actor, material_id, !active)
+    }
+
+    pub fn set_material_deactivated(
+        env: Env,
+        actor: Address,
+        material_id: BytesN<32>,
+        deactivated: bool,
+    ) -> Result<(), RegistryError> {
+        let mut record = get_material_record(&env, &material_id)?;
+        require_creator_or_upgrade_admin(&env, &record.creator, &actor)?;
+        let next_status = if deactivated {
+            MaterialStatus::Archived
+        } else if record.paused {
+            MaterialStatus::Paused
+        } else {
+            MaterialStatus::Active
+        };
+        if record.status == next_status {
+            return Ok(());
+        }
+        record.status = next_status;
+        record.updated_ledger = env.ledger().sequence();
+        put_material(&env, &record);
+        MaterialStatusChangedEvent {
+            material_id: material_id.clone(),
+            creator: record.creator.clone(),
+            paused: record.paused,
+            status: next_status,
+        }
+        .publish(&env);
         Ok(())
     }
 
@@ -502,6 +596,18 @@ fn require_upgrade_admin(env: &Env, candidate: &Address) -> Result<(), RegistryE
         return Err(RegistryError::NotAuthorized);
     }
     Ok(())
+}
+
+fn require_creator_or_upgrade_admin(
+    env: &Env,
+    creator: &Address,
+    actor: &Address,
+) -> Result<(), RegistryError> {
+    actor.require_auth();
+    if actor == creator {
+        return Ok(());
+    }
+    require_upgrade_admin(env, actor)
 }
 
 // ============== Asset Allowlist Internals ==============
