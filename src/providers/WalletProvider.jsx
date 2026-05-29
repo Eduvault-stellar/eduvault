@@ -8,8 +8,7 @@ import {
   useRef,
   useState,
 } from 'react';
-import { StellarWalletsKit } from '@creit-tech/stellar-wallets-kit/sdk';
-import { KitEventType } from '@creit-tech/stellar-wallets-kit/types';
+import { KitEventType, StellarWalletsKit } from '@creit-tech/stellar-wallets-kit';
 
 import { ensureKitInitialized, NETWORK_PASSPHRASE } from '@/lib/wallet/kit';
 import { fetchBalances, BalancesStatus } from '@/lib/wallet/balance';

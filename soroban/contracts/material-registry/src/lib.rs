@@ -19,6 +19,28 @@ pub enum MaterialStatus {
     Archived = 2,
 }
 
+/// Classification of a Stellar asset supported by the registry.
+///
+/// - `Native`      – XLM (the Stellar native asset, wrapped via its SAC).
+/// - `Token`       – Any SAC-wrapped token such as USDC or EURC.
+/// - `CreatorToken`– A creator-specific SAC token (e.g. a course-access token
+///                   minted by the content creator themselves).
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AssetKind {
+    Native = 0,
+    Token = 1,
+    CreatorToken = 2,
+}
+
+/// Metadata stored in the registry allowlist for each approved asset.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AllowedAssetInfo {
+    pub kind: AssetKind,
+    pub enabled: bool,
+}
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AssetQuote {
@@ -41,6 +63,7 @@ pub struct MaterialRecord {
     pub metadata_uri: String,
     pub metadata_hash: BytesN<32>,
     pub rights_hash: BytesN<32>,
+    pub paused: bool,
     pub status: MaterialStatus,
     pub quotes: Vec<AssetQuote>,
     pub payout_shares: Vec<PayoutShare>,
@@ -54,6 +77,7 @@ enum DataKey {
     UpgradeAdmin,
     CreatorNonce(Address),
     Material(BytesN<32>),
+    AllowedAsset(Address),
 }
 
 #[contracterror]
@@ -74,6 +98,8 @@ pub enum RegistryError {
     MaterialAlreadyExists = 12,
     MaterialNotFound = 13,
     NotAuthorized = 14,
+    /// A quote asset is not in the registry's approved-asset allowlist.
+    UnapprovedAsset = 15,
 }
 
 #[contractevent(topics = ["material", "registered"], data_format = "vec")]
@@ -113,6 +139,27 @@ pub struct MaterialStatusUpdatedEvent {
     pub status: MaterialStatus,
 }
 
+#[contractevent(topics = ["material", "status_changed"], data_format = "vec")]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MaterialStatusChangedEvent {
+    #[topic]
+    pub material_id: BytesN<32>,
+    #[topic]
+    pub creator: Address,
+    pub paused: bool,
+    pub status: MaterialStatus,
+}
+
+/// Emitted when the upgrade-admin updates the approved-asset allowlist.
+#[contractevent(topics = ["asset", "policy_updated"], data_format = "vec")]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AssetPolicyUpdatedEvent {
+    #[topic]
+    pub asset: Address,
+    pub kind: AssetKind,
+    pub enabled: bool,
+}
+
 #[contract]
 pub struct MaterialRegistry;
 
@@ -131,6 +178,10 @@ impl MaterialRegistry {
         validate_metadata_uri(&metadata_uri)?;
         validate_quotes(&quotes)?;
         validate_payout_shares(&payout_shares)?;
+        // Asset allowlist is enforced once the upgrade-admin has been established
+        // (i.e. after the very first material registration). This allows the
+        // initial deployer to bootstrap assets without a chicken-and-egg problem.
+        validate_quote_assets(&env, &quotes)?;
         initialize_upgrade_admin_if_missing(&env, &creator);
 
         let next_nonce = get_creator_nonce(&env, &creator);
@@ -146,6 +197,7 @@ impl MaterialRegistry {
             metadata_uri: metadata_uri.clone(),
             metadata_hash: metadata_hash.clone(),
             rights_hash: rights_hash.clone(),
+            paused: false,
             status: MaterialStatus::Active,
             quotes: quotes.clone(),
             payout_shares: payout_shares.clone(),
@@ -178,6 +230,7 @@ impl MaterialRegistry {
     ) -> Result<(), RegistryError> {
         validate_quotes(&quotes)?;
         validate_payout_shares(&payout_shares)?;
+        validate_quote_assets(&env, &quotes)?;
 
         let mut record = get_material_record(&env, &material_id)?;
         record.creator.require_auth();
@@ -201,17 +254,19 @@ impl MaterialRegistry {
 
     pub fn set_material_status(
         env: Env,
+        actor: Address,
         material_id: BytesN<32>,
         status: MaterialStatus,
     ) -> Result<(), RegistryError> {
         let mut record = get_material_record(&env, &material_id)?;
-        record.creator.require_auth();
+        require_creator_or_upgrade_admin(&env, &record.creator, &actor)?;
 
         if record.status == status {
             return Ok(());
         }
 
         record.status = status;
+        record.paused = status == MaterialStatus::Paused;
         record.updated_ledger = env.ledger().sequence();
         put_material(&env, &record);
 
@@ -222,10 +277,92 @@ impl MaterialRegistry {
         }
         .publish(&env);
 
+        MaterialStatusChangedEvent {
+            material_id: material_id.clone(),
+            creator: record.creator.clone(),
+            paused: record.paused,
+            status,
+        }
+        .publish(&env);
+
         Ok(())
     }
 
-    pub fn get_material(env: Env, material_id: BytesN<32>) -> Result<MaterialRecord, RegistryError> {
+    pub fn set_material_paused(
+        env: Env,
+        actor: Address,
+        material_id: BytesN<32>,
+        paused: bool,
+    ) -> Result<(), RegistryError> {
+        let status = if paused {
+            MaterialStatus::Paused
+        } else {
+            MaterialStatus::Active
+        };
+        Self::set_material_status(env, actor, material_id, status)
+    }
+
+    pub fn toggle_material_paused(
+        env: Env,
+        actor: Address,
+        material_id: BytesN<32>,
+    ) -> Result<(), RegistryError> {
+        let record = get_material_record(&env, &material_id)?;
+        Self::set_material_paused(env, actor, material_id, !record.paused)
+    }
+
+    pub fn is_material_paused(
+        env: Env,
+        material_id: BytesN<32>,
+    ) -> Result<bool, RegistryError> {
+        let record = get_material_record(&env, &material_id)?;
+        Ok(record.paused)
+    }
+
+    pub fn set_material_active(
+        env: Env,
+        actor: Address,
+        material_id: BytesN<32>,
+        active: bool,
+    ) -> Result<(), RegistryError> {
+        Self::set_material_paused(env, actor, material_id, !active)
+    }
+
+    pub fn set_material_deactivated(
+        env: Env,
+        actor: Address,
+        material_id: BytesN<32>,
+        deactivated: bool,
+    ) -> Result<(), RegistryError> {
+        let mut record = get_material_record(&env, &material_id)?;
+        require_creator_or_upgrade_admin(&env, &record.creator, &actor)?;
+        let next_status = if deactivated {
+            MaterialStatus::Archived
+        } else if record.paused {
+            MaterialStatus::Paused
+        } else {
+            MaterialStatus::Active
+        };
+        if record.status == next_status {
+            return Ok(());
+        }
+        record.status = next_status;
+        record.updated_ledger = env.ledger().sequence();
+        put_material(&env, &record);
+        MaterialStatusChangedEvent {
+            material_id: material_id.clone(),
+            creator: record.creator.clone(),
+            paused: record.paused,
+            status: next_status,
+        }
+        .publish(&env);
+        Ok(())
+    }
+
+    pub fn get_material(
+        env: Env,
+        material_id: BytesN<32>,
+    ) -> Result<MaterialRecord, RegistryError> {
         get_material_record(&env, &material_id)
     }
 
@@ -246,6 +383,48 @@ impl MaterialRegistry {
 
         Ok(None)
     }
+
+    // ============== Asset Allowlist (SAC / Multi-Asset Support) ==============
+
+    /// Add or update an asset in the registry's approved-asset allowlist.
+    ///
+    /// Only the upgrade-admin may call this. Assets must be approved before
+    /// creators can include them in material quotes. Supports XLM (Native),
+    /// USDC/other SAC-wrapped tokens (Token), and creator-specific tokens
+    /// (CreatorToken).
+    pub fn set_asset_allowed(
+        env: Env,
+        admin: Address,
+        asset: Address,
+        kind: AssetKind,
+        enabled: bool,
+    ) -> Result<(), RegistryError> {
+        admin.require_auth();
+        require_upgrade_admin(&env, &admin)?;
+
+        let info = AllowedAssetInfo { kind, enabled };
+        env.storage()
+            .persistent()
+            .set(&DataKey::AllowedAsset(asset.clone()), &info);
+
+        AssetPolicyUpdatedEvent { asset, kind, enabled }.publish(&env);
+
+        Ok(())
+    }
+
+    /// Returns `true` when `asset` is in the allowlist and currently enabled.
+    pub fn is_asset_allowed(env: Env, asset: Address) -> bool {
+        get_allowed_asset_info(&env, &asset)
+            .map(|i| i.enabled)
+            .unwrap_or(false)
+    }
+
+    /// Returns the full `AllowedAssetInfo` record for `asset`, if present.
+    pub fn get_asset_info(env: Env, asset: Address) -> Option<AllowedAssetInfo> {
+        get_allowed_asset_info(&env, &asset)
+    }
+
+    // ============== Upgrade / Admin ==============
 
     /// Transfer upgrade admin role to another address.
     pub fn set_upgrade_admin(
@@ -332,11 +511,13 @@ fn validate_payout_shares(payout_shares: &Vec<PayoutShare>) -> Result<(), Regist
     let mut index = 0;
     while index < len {
         let share = payout_shares.get_unchecked(index);
-        if share.share_bps == 0 {
+        if share.share_bps == 0 || share.share_bps > BASIS_POINTS {
             return Err(RegistryError::InvalidPayoutShare);
         }
 
-        total_share_bps += share.share_bps;
+        total_share_bps = total_share_bps
+            .checked_add(share.share_bps)
+            .ok_or(RegistryError::InvalidPayoutShareSum)?;
 
         let mut other = index + 1;
         while other < len {
@@ -381,7 +562,10 @@ fn has_material(env: &Env, material_id: &BytesN<32>) -> bool {
         .has(&DataKey::Material(material_id.clone()))
 }
 
-fn get_material_record(env: &Env, material_id: &BytesN<32>) -> Result<MaterialRecord, RegistryError> {
+fn get_material_record(
+    env: &Env,
+    material_id: &BytesN<32>,
+) -> Result<MaterialRecord, RegistryError> {
     env.storage()
         .persistent()
         .get(&DataKey::Material(material_id.clone()))
@@ -410,6 +594,52 @@ fn require_upgrade_admin(env: &Env, candidate: &Address) -> Result<(), RegistryE
         .ok_or(RegistryError::NotAuthorized)?;
     if admin != *candidate {
         return Err(RegistryError::NotAuthorized);
+    }
+    Ok(())
+}
+
+fn require_creator_or_upgrade_admin(
+    env: &Env,
+    creator: &Address,
+    actor: &Address,
+) -> Result<(), RegistryError> {
+    actor.require_auth();
+    if actor == creator {
+        return Ok(());
+    }
+    require_upgrade_admin(env, actor)
+}
+
+// ============== Asset Allowlist Internals ==============
+
+fn get_allowed_asset_info(env: &Env, asset: &Address) -> Option<AllowedAssetInfo> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::AllowedAsset(asset.clone()))
+}
+
+/// Validate that every asset referenced in `quotes` is present in the
+/// allowlist and currently enabled.
+///
+/// Validation is skipped when the upgrade-admin has not yet been set (i.e.
+/// before the very first `register_material` call) to avoid a bootstrap
+/// deadlock where no admin exists to pre-approve assets.
+fn validate_quote_assets(env: &Env, quotes: &Vec<AssetQuote>) -> Result<(), RegistryError> {
+    // No allowlist enforcement until an upgrade-admin is established.
+    if !env.storage().persistent().has(&DataKey::UpgradeAdmin) {
+        return Ok(());
+    }
+
+    let mut index = 0;
+    while index < quotes.len() {
+        let quote = quotes.get_unchecked(index);
+        let approved = get_allowed_asset_info(env, &quote.asset)
+            .map(|i| i.enabled)
+            .unwrap_or(false);
+        if !approved {
+            return Err(RegistryError::UnapprovedAsset);
+        }
+        index += 1;
     }
     Ok(())
 }

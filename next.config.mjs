@@ -1,6 +1,5 @@
+import { PHASE_PRODUCTION_BUILD } from "next/constants.js";
 import { assertRuntimeEnv } from "./src/lib/env.js";
-
-assertRuntimeEnv();
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
@@ -44,4 +43,10 @@ const nextConfig = {
   },
 };
 
-export default nextConfig;
+export default function config(phase) {
+  if (phase !== PHASE_PRODUCTION_BUILD) {
+    assertRuntimeEnv();
+  }
+
+  return nextConfig;
+}

@@ -20,10 +20,9 @@
 import { NextResponse } from 'next/server';
 import { verifyEntitlement } from '@/lib/entitlement';
 import { getDb } from '@/lib/mongodb';
+import { getIpfsUrl } from '@/lib/config/chain';
 
 export const dynamic = 'force-dynamic';
-
-const IPFS_GATEWAY = process.env.IPFS_GATEWAY_URL ?? 'https://ipfs.io/ipfs';
 
 export async function GET(request) {
   const { searchParams } = new URL(request.url);
@@ -96,7 +95,7 @@ export async function GET(request) {
   // We use Option A here: return the resolved URL. Switch to Option B if CIDs
   // must stay private (requires streaming the IPFS response through fetch).
 
-  const fileUrl = `${IPFS_GATEWAY}/${cid}`;
+  const fileUrl = getIpfsUrl(cid);
 
   return NextResponse.json(
     {

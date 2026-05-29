@@ -1,22 +1,9 @@
-// components/WalletButton.jsx
 'use client';
 
 import { useWallet } from '@/hooks/useWallet';
 import { WalletStatus } from '@/providers/WalletProvider';
+import { isMainnet } from '@/lib/config/chain';
 
-/**
- * Reference consumer of `useWallet`. Every wallet-facing surface (upload CTA,
- * purchase button, auth gate) should branch on `state.status` the same way —
- * no ad-hoc `isConnected && !isLocked` chains.
- *
- * Alternative: the kit ships its own `createButton` / profile modal if you
- * prefer to delegate the UI entirely. This component is for when you want
- * bespoke copy and layout.
- */
-
-// Shared Tailwind class sets — extracted so variants stay consistent across
-// the switch arms. Kept as module-level constants (not inside the component)
-// so we don't re-allocate the strings on every render.
 const BTN_BASE =
   'inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-white disabled:cursor-not-allowed disabled:opacity-60';
 
@@ -91,9 +78,7 @@ export function WalletButton() {
           <p className="text-sm text-amber-800">
             Your wallet is on the wrong network. Switch to{' '}
             <span className="font-semibold">
-              {process.env.NEXT_PUBLIC_STELLAR_NETWORK === 'PUBLIC'
-                ? 'Mainnet'
-                : 'Testnet'}
+              {isMainnet ? 'Mainnet' : 'Testnet'}
             </span>{' '}
             in your wallet and reconnect.
           </p>

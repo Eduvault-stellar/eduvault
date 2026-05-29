@@ -1,52 +1,28 @@
-/**
- * POST /api/indexer — Issue #65
- *
- * Triggers one batch of Soroban event indexing for the PurchaseManager and
- * MaterialRegistry contracts. Designed to be called on a schedule (e.g. via
- * Vercel Cron, GitHub Actions, or an external cron service).
- *
- * Security: requires a shared INDEXER_SECRET header so the endpoint cannot
- * be abused by unauthenticated callers.
- *
- * The indexer handles:
- *  - `material.registered` events → updates materials collection
- *  - `purchase.completed` events → upserts purchases + entitlement_cache
- *  - Cursor-based pagination so no events are processed twice
- *  - Idempotent writes (duplicate event IDs are skipped)
- */
+export const dynamic = "force-dynamic";
+export const maxDuration = 60;
 
-import { NextResponse } from 'next/server';
-import { getDb } from '@/lib/mongodb';
+import { NextResponse } from "next/server";
+import { getDb } from "@/lib/mongodb";
 import {
   runIndexerBatch,
   createJsonRpcEventSource,
-} from '@/lib/indexer/stellarIndexer';
+} from "@/lib/indexer/stellarIndexer";
+import {
+  PURCHASE_MANAGER_CONTRACT_ID,
+  MATERIAL_REGISTRY_CONTRACT_ID,
+  STELLAR_RPC_URL,
+} from "@/lib/config/chain";
 
-export const dynamic = 'force-dynamic';
-export const maxDuration = 60; // seconds — allow up to 60s for a large batch
-
-const PURCHASE_MANAGER_CONTRACT_ID =
-  process.env.PURCHASE_MANAGER_CONTRACT_ID ?? '';
-const MATERIAL_REGISTRY_CONTRACT_ID =
-  process.env.MATERIAL_REGISTRY_CONTRACT_ID ?? '';
-const STELLAR_RPC_URL =
-  process.env.STELLAR_RPC_URL ?? 'https://soroban-testnet.stellar.org';
-const INDEXER_SECRET = process.env.INDEXER_SECRET ?? '';
+const INDEXER_SECRET = process.env.INDEXER_SECRET ?? "";
 const BATCH_LIMIT = 100;
 
-/**
- * Validate the caller is the authorised scheduler.
- * Accepts the secret via:
- *   - `Authorization: Bearer <secret>` header
- *   - `x-indexer-secret: <secret>` header (legacy)
- */
 function isAuthorised(request) {
-  if (!INDEXER_SECRET) return true; // secret not configured → open (dev only)
+  if (!INDEXER_SECRET) return true;
 
-  const authHeader = request.headers.get('authorization') ?? '';
+  const authHeader = request.headers.get("authorization") ?? "";
   if (authHeader === `Bearer ${INDEXER_SECRET}`) return true;
 
-  const legacyHeader = request.headers.get('x-indexer-secret') ?? '';
+  const legacyHeader = request.headers.get("x-indexer-secret") ?? "";
   if (legacyHeader === INDEXER_SECRET) return true;
 
   return false;
@@ -54,7 +30,7 @@ function isAuthorised(request) {
 
 export async function POST(request) {
   if (!isAuthorised(request)) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   const contractIds = [
@@ -71,9 +47,9 @@ export async function POST(request) {
   try {
     db = await getDb();
   } catch (err) {
-    console.error('[indexer] DB connection failed:', err);
+    console.error("[indexer] DB connection failed:", err);
     return NextResponse.json(
-      { error: 'Database unavailable' },
+      { error: "Database unavailable" },
       { status: 503 }
     );
   }
@@ -82,7 +58,7 @@ export async function POST(request) {
     const result = await runIndexerBatch({
       db,
       eventSource,
-      source: 'stellar',
+      source: "stellar",
       limit: BATCH_LIMIT,
     });
 
@@ -97,27 +73,24 @@ export async function POST(request) {
       nextCursor: result.nextCursor,
     });
   } catch (err) {
-    console.error('[indexer] batch error:', err);
+    console.error("[indexer] batch error:", err);
     return NextResponse.json(
-      { error: 'Indexer batch failed', detail: err.message },
+      { error: "Indexer batch failed", detail: err.message },
       { status: 500 }
     );
   }
 }
 
-/**
- * GET /api/indexer — return current sync cursor state for monitoring.
- */
 export async function GET(request) {
   if (!isAuthorised(request)) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   try {
     const db = await getDb();
     const state = await db
-      .collection('sync_state')
-      .findOne({ _id: 'stellar:events' });
+      .collection("sync_state")
+      .findOne({ _id: "stellar:events" });
 
     return NextResponse.json({
       synced: !!state,
@@ -127,7 +100,7 @@ export async function GET(request) {
     });
   } catch (err) {
     return NextResponse.json(
-      { error: 'Failed to read sync state' },
+      { error: "Failed to read sync state" },
       { status: 500 }
     );
   }

@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import {
   sanitizeObject,
+  normalizeStringList,
   validateMaterialPayload,
   validateProfilePayload,
 } from "../../src/lib/api/validation.js";
@@ -38,8 +39,35 @@ test("validateMaterialPayload rejects invalid price and unknown visibility", () 
   );
 });
 
+test("validateMaterialPayload preserves preview fields", () => {
+  const material = validateMaterialPayload({
+    title: "Notes",
+    fileUrl: "ipfs://file",
+    coverImageUrl: "https://example.com/cover.png",
+    shortSummary: "  Useful summary  ",
+    learningOutcomes: "Outcome 1\nOutcome 2,Outcome 3",
+    tableOfContents: ["Intro", "Methods", "Conclusion"],
+    sampleNotes: "First note,Second note",
+  });
+
+  assert.equal(material.coverImageUrl, "https://example.com/cover.png");
+  assert.equal(material.shortSummary, "Useful summary");
+  assert.deepEqual(material.learningOutcomes, ["Outcome 1", "Outcome 2", "Outcome 3"]);
+  assert.deepEqual(material.tableOfContents, ["Intro", "Methods", "Conclusion"]);
+  assert.deepEqual(material.sampleNotes, ["First note", "Second note"]);
+  assert.equal(material.storageKey, "ipfs://file");
+  assert.equal(material.fileUrl, "ipfs://file");
+});
+
 test("sanitizeObject strips control characters from stored metadata", () => {
   assert.deepEqual(sanitizeObject({ title: "  Math\u0000 Notes " }), { title: "Math Notes" });
+});
+
+test("normalizeStringList trims empty values and caps the list", () => {
+  assert.deepEqual(
+    normalizeStringList([" first ", "", "second", "third"], { maxItems: 2 }),
+    ["first", "second"]
+  );
 });
 
 test("assertRuntimeEnv skips placeholder checks in CI", () => {

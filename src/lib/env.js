@@ -31,6 +31,14 @@ function optionalWhenEnabled(name, value, errors, enabled, { productionOnly = fa
   }
 }
 
+function requiredWhenSet(name, value, errors, dependencyValue, { productionOnly = false } = {}) {
+  if (!dependencyValue) return;
+  if (productionOnly && process.env.NODE_ENV !== "production") return;
+  if (isPlaceholder(value)) {
+    errors.push(`${name} is required when ${dependencyValue} is configured.`);
+  }
+}
+
 export function validateRuntimeEnv() {
   const errors = [];
   const production = process.env.NODE_ENV === "production";
@@ -41,25 +49,38 @@ export function validateRuntimeEnv() {
   required("PINATA_JWT", process.env.PINATA_JWT, errors, { productionOnly: production });
   required("NEXT_PUBLIC_GATEWAY_URL", process.env.NEXT_PUBLIC_GATEWAY_URL, errors, { productionOnly: production });
 
+  const materialContract = process.env.NEXT_PUBLIC_MATERIAL_REGISTRY_CONTRACT_ID;
+  const purchaseContract = process.env.NEXT_PUBLIC_PURCHASE_MANAGER_CONTRACT_ID;
+  const sorobanContract = process.env.NEXT_PUBLIC_SOROBAN_CONTRACT_ID;
+  const hasContract = Boolean(materialContract || purchaseContract || sorobanContract);
+
   optionalWhenEnabled(
     "NEXT_PUBLIC_STELLAR_RPC_URL",
     process.env.NEXT_PUBLIC_STELLAR_RPC_URL,
     errors,
-    Boolean(process.env.NEXT_PUBLIC_SOROBAN_CONTRACT_ID),
+    hasContract,
     { productionOnly: production }
   );
   optionalWhenEnabled(
     "NEXT_PUBLIC_HORIZON_URL",
     process.env.NEXT_PUBLIC_HORIZON_URL,
     errors,
-    Boolean(process.env.NEXT_PUBLIC_STELLAR_NETWORK || process.env.NEXT_PUBLIC_SOROBAN_CONTRACT_ID),
+    hasContract,
     { productionOnly: production }
   );
-  optionalWhenEnabled(
-    "NEXT_PUBLIC_SOROBAN_CONTRACT_ID",
-    process.env.NEXT_PUBLIC_SOROBAN_CONTRACT_ID,
+
+  requiredWhenSet(
+    "NEXT_PUBLIC_MATERIAL_REGISTRY_CONTRACT_ID",
+    process.env.NEXT_PUBLIC_MATERIAL_REGISTRY_CONTRACT_ID,
     errors,
-    Boolean(process.env.NEXT_PUBLIC_STELLAR_RPC_URL || process.env.NEXT_PUBLIC_HORIZON_URL),
+    process.env.NEXT_PUBLIC_STELLAR_RPC_URL,
+    { productionOnly: production }
+  );
+  requiredWhenSet(
+    "NEXT_PUBLIC_PURCHASE_MANAGER_CONTRACT_ID",
+    process.env.NEXT_PUBLIC_PURCHASE_MANAGER_CONTRACT_ID,
+    errors,
+    process.env.NEXT_PUBLIC_STELLAR_RPC_URL,
     { productionOnly: production }
   );
 

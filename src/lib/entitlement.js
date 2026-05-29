@@ -1,22 +1,5 @@
-/**
- * On-chain entitlement verification utility — Issue #63
- *
- * Checks whether a buyer holds a valid purchase record for a material by:
- *  1. Querying the local entitlement_cache collection first (fast path).
- *  2. Falling back to a direct Soroban RPC call against the PurchaseManager
- *     contract when the cache has no record (slow path / first-time check).
- *
- * The result is written back to the cache so subsequent requests are fast.
- */
-
 import { getDb } from '@/lib/mongodb';
-
-const PURCHASE_MANAGER_CONTRACT_ID =
-  process.env.PURCHASE_MANAGER_CONTRACT_ID ?? '';
-const STELLAR_RPC_URL =
-  process.env.STELLAR_RPC_URL ?? 'https://soroban-testnet.stellar.org';
-
-// ── Cache helpers ──────────────────────────────────────────────────────────────
+import { PURCHASE_MANAGER_CONTRACT_ID, STELLAR_RPC_URL } from '@/lib/config/chain';
 
 async function getCachedEntitlement(db, materialId, buyerAddress) {
   return db.collection('entitlement_cache').findOne({
@@ -42,21 +25,10 @@ async function setCachedEntitlement(db, materialId, buyerAddress, active) {
   );
 }
 
-// ── On-chain check via Soroban RPC (simulateTransaction) ──────────────────────
-
-/**
- * Build a minimal Soroban `simulateTransaction` request to call
- * `PurchaseManager.has_entitlement(material_id, buyer)`.
- *
- * Uses the JSON-RPC `simulateTransaction` method which does not broadcast
- * — it's a read-only simulation. Returns true if the contract returns true.
- */
 async function checkChainEntitlement(materialId, buyerAddress) {
   if (!PURCHASE_MANAGER_CONTRACT_ID || !STELLAR_RPC_URL) return null;
 
   try {
-    // Encode arguments as XDR ScVal (bytes32 + address)
-    // This is a simplified encoding — in production use stellar-sdk helpers.
     const body = {
       jsonrpc: '2.0',
       id: 1,
@@ -76,43 +48,23 @@ async function checkChainEntitlement(materialId, buyerAddress) {
     const payload = await res.json();
     if (payload.error) return null;
 
-    // Parse return value — true means entitlement is active
     const retval = payload.result?.results?.[0]?.xdr;
     if (!retval) return null;
 
     return decodeBoolean(retval);
   } catch {
-    return null; // network/parse failure — caller falls back to DB only
+    return null;
   }
 }
 
-/**
- * Placeholder XDR builder — in production, use:
- *   import { Contract, Address, xdr, nativeToScVal } from '@stellar/stellar-sdk'
- *   const contract = new Contract(PURCHASE_MANAGER_CONTRACT_ID)
- *   contract.call('has_entitlement', materialIdScVal, addressScVal)
- */
 function buildHasEntitlementXdr(_materialId, _buyerAddress) {
-  // Return an empty string — the rpc call will fail gracefully and we fall
-  // back to the cache. Replace with real XDR building via stellar-sdk.
   return '';
 }
 
 function decodeBoolean(xdrBase64) {
-  // Simplified — a real implementation decodes the XDR ScVal.
-  // `true` encodes as `AAAABAAAAAEAAAAAAAAeAA==` in XDR.
   return xdrBase64.includes('AAAE') || xdrBase64.includes('true');
 }
 
-// ── Public API ─────────────────────────────────────────────────────────────────
-
-/**
- * Verify that `buyerAddress` holds an active entitlement for `materialId`.
- *
- * @param {string} materialId   - Material identifier (hex or stringified bytes32)
- * @param {string} buyerAddress - Stellar public key of the buyer
- * @returns {{ hasAccess: boolean, source: string }}
- */
 export async function verifyEntitlement(materialId, buyerAddress) {
   if (!materialId || !buyerAddress) {
     return { hasAccess: false, source: 'invalid-params' };
@@ -121,14 +73,11 @@ export async function verifyEntitlement(materialId, buyerAddress) {
   const db = await getDb();
   const normalised = buyerAddress.toLowerCase();
 
-  // 1. Fast path — check the purchase cache first
   const cached = await getCachedEntitlement(db, materialId, normalised);
   if (cached) {
     if (cached.active) return { hasAccess: true, source: 'cache' };
-    // Negative cache — still try chain to handle late confirmation
   }
 
-  // 2. Check purchases collection (indexed from events)
   const purchase = await db.collection('purchases').findOne({
     materialId,
     buyerAddress: normalised,
@@ -140,24 +89,15 @@ export async function verifyEntitlement(materialId, buyerAddress) {
     return { hasAccess: true, source: 'purchases-db' };
   }
 
-  // 3. Slow path — query the chain directly
   const onChain = await checkChainEntitlement(materialId, buyerAddress);
   if (onChain === true) {
     await setCachedEntitlement(db, materialId, normalised, true);
     return { hasAccess: true, source: 'chain' };
   }
 
-  // No entitlement found
   return { hasAccess: false, source: 'not-found' };
 }
 
-/**
- * Express/Next.js middleware factory for route-level entitlement protection.
- *
- * Usage (Next.js App Router):
- *   import { requireEntitlement } from '@/lib/entitlement'
- *   export const GET = requireEntitlement(handler, getMaterialId)
- */
 export function requireEntitlement(handler, getMaterialId) {
   return async function protectedHandler(request, context) {
     const { searchParams } = new URL(request.url);

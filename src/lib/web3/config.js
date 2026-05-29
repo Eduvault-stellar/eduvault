@@ -1,25 +1,42 @@
 import { http, createConfig } from 'wagmi';
-import { mainnet, sepolia } from 'wagmi/chains';
 import { walletConnect, injected, coinbaseWallet } from 'wagmi/connectors';
+import { SUPPORTED_CHAINS } from './chains';
 
-// WalletConnect Project ID - Get from https://cloud.walletconnect.com/
-const projectId = process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID || 'YOUR_PROJECT_ID';
+// ── WalletConnect is optional. ─────────────────────────────────────────────────
+// Set NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID in your environment to enable it.
+// Leaving the variable unset (or keeping the placeholder) disables WalletConnect
+// so that next build does NOT trigger a remote Reown/Web3Modal config fetch.
+// See .env.example for details.
+const _rawProjectId = process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID ?? '';
+const PLACEHOLDER = 'YOUR_PROJECT_ID';
 
-// Define supported chains
-export const chains = [mainnet, sepolia];
+/**
+ * True only when a real WalletConnect project ID has been configured.
+ * Exported so tests can assert on the resolved connector list.
+ */
+export const walletConnectEnabled =
+  _rawProjectId.length > 0 && _rawProjectId !== PLACEHOLDER;
 
-// Configure wagmi
-export const config = createConfig({
-  chains: [mainnet, sepolia],
-  connectors: [
-    // Injected connector (MetaMask, Browser Wallets)
-    // Using default injected() without target to detect all injected wallets
-    injected({
-      shimDisconnect: true,
-    }),
-    // WalletConnect
+// Define supported chains — shared config from chains.js
+export const chains = SUPPORTED_CHAINS;
+
+// Build connector list — WalletConnect is omitted when no real project ID exists.
+const connectors = [
+  // Injected connector (MetaMask, browser wallets)
+  injected({
+    shimDisconnect: true,
+  }),
+  // Coinbase Wallet — always available regardless of WalletConnect status
+  coinbaseWallet({
+    appName: 'EduVault',
+    appLogoUrl: 'https://eduvault.com/icon.png',
+  }),
+];
+
+if (walletConnectEnabled) {
+  connectors.push(
     walletConnect({
-      projectId,
+      projectId: _rawProjectId,
       metadata: {
         name: 'EduVault',
         description: 'Decentralized Educational Materials Sharing Platform',
@@ -27,17 +44,15 @@ export const config = createConfig({
         icons: ['https://eduvault.com/icon.png'],
       },
       showQrModal: true,
-    }),
-    // Coinbase Wallet
-    coinbaseWallet({
-      appName: 'EduVault',
-      appLogoUrl: 'https://eduvault.com/icon.png',
-    }),
-  ],
-  transports: {
-    [mainnet.id]: http(),
-    [sepolia.id]: http(),
-  },
+    })
+  );
+}
+
+// Configure wagmi — using shared SUPPORTED_CHAINS from chains.js
+export const config = createConfig({
+  chains: SUPPORTED_CHAINS,
+  connectors,
+  transports: Object.fromEntries(
+    SUPPORTED_CHAINS.map((chain) => [chain.id, http()])
+  ),
 });
-
-
