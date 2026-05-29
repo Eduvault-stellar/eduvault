@@ -1,3 +1,10 @@
+import {
+  normalizeSubject,
+  normalizeCategory,
+  normalizeLevel,
+  validateCategorySubject,
+} from "@/lib/backend/taxonomy";
+
 export class ValidationError extends Error {
   constructor(message, details = {}) {
     super(message);
@@ -100,6 +107,49 @@ export function validateMaterialPayload(body) {
     throw new ValidationError("Invalid visibility", { field: "visibility" });
   }
 
+  const rawCategory = sanitizeString(body?.category, { maxLength: 60 });
+  const rawSubject = sanitizeString(body?.subject, { maxLength: 60 });
+  const rawLevel = sanitizeString(body?.level, { maxLength: 60 });
+
+  let category = null;
+  let subject = null;
+  let level = null;
+
+  if (rawCategory) {
+    const normalized = normalizeCategory(rawCategory);
+    if (!normalized) {
+      throw new ValidationError(`Unknown category: "${rawCategory}"`, { field: "category" });
+    }
+    category = normalized.id;
+  }
+
+  if (rawSubject) {
+    const normalized = normalizeSubject(rawSubject);
+    if (!normalized) {
+      throw new ValidationError(`Unknown subject: "${rawSubject}"`, { field: "subject" });
+    }
+    subject = normalized.id;
+
+    if (!category) {
+      category = normalized.categoryId;
+    }
+  }
+
+  if (category && subject) {
+    const validation = validateCategorySubject(category, subject);
+    if (!validation.valid) {
+      throw new ValidationError(validation.error, { field: "subject" });
+    }
+  }
+
+  if (rawLevel) {
+    const normalized = normalizeLevel(rawLevel);
+    if (!normalized) {
+      throw new ValidationError(`Unknown level: "${rawLevel}"`, { field: "level" });
+    }
+    level = normalized.id;
+  }
+
   return {
     title,
     description: sanitizeString(body?.description, { maxLength: 5000 }),
@@ -109,6 +159,9 @@ export function validateMaterialPayload(body) {
     visibility,
     coverImageUrl: sanitizeString(body?.coverImageUrl, { maxLength: 2048 }) || null,
     thumbnailUrl: sanitizeString(body?.thumbnailUrl, { maxLength: 2048 }) || null,
+    category,
+    subject,
+    level,
     learningOutcomes: normalizeStringList(body?.learningOutcomes, {
       maxItems: 8,
       maxLength: 180,
@@ -128,7 +181,6 @@ export function validateMaterialPayload(body) {
 
 export function validateMaterialUpdatePayload(body) {
   const allowed = {};
-  const editableFields = ["title", "description", "price", "usageRights", "visibility", "thumbnailUrl"];
 
   if (body.title !== undefined) {
     const title = sanitizeString(body.title, { maxLength: 160 });
@@ -162,6 +214,39 @@ export function validateMaterialUpdatePayload(body) {
 
   if (body.thumbnailUrl !== undefined) {
     allowed.thumbnailUrl = sanitizeString(body.thumbnailUrl, { maxLength: 2048 }) || null;
+  }
+
+  if (body.category !== undefined) {
+    const raw = sanitizeString(body.category, { maxLength: 60 });
+    if (raw) {
+      const normalized = normalizeCategory(raw);
+      if (!normalized) throw new ValidationError(`Unknown category: "${raw}"`, { field: "category" });
+      allowed.category = normalized.id;
+    } else {
+      allowed.category = null;
+    }
+  }
+
+  if (body.subject !== undefined) {
+    const raw = sanitizeString(body.subject, { maxLength: 60 });
+    if (raw) {
+      const normalized = normalizeSubject(raw);
+      if (!normalized) throw new ValidationError(`Unknown subject: "${raw}"`, { field: "subject" });
+      allowed.subject = normalized.id;
+    } else {
+      allowed.subject = null;
+    }
+  }
+
+  if (body.level !== undefined) {
+    const raw = sanitizeString(body.level, { maxLength: 60 });
+    if (raw) {
+      const normalized = normalizeLevel(raw);
+      if (!normalized) throw new ValidationError(`Unknown level: "${raw}"`, { field: "level" });
+      allowed.level = normalized.id;
+    } else {
+      allowed.level = null;
+    }
   }
 
   if (Object.keys(allowed).length === 0) {

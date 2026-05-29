@@ -7,6 +7,7 @@ export const COLLECTIONS = {
   syncEvents: "sync_events",
   deadLetterEvents: "dead_letter_events",
   materialHistory: "material_history",
+  savedMaterials: "saved_materials",
 };
 
 export const REQUIRED_INDEXES = {
@@ -19,6 +20,10 @@ export const REQUIRED_INDEXES = {
     { keys: { visibility: 1, createdAt: -1 } },
     { keys: { materialId: 1 }, options: { sparse: true } },
     { keys: { updatedAt: -1 } },
+    { keys: { category: 1 } },
+    { keys: { subject: 1 } },
+    { keys: { level: 1 } },
+    { keys: { category: 1, subject: 1 } },
   ],
   purchases: [
     { keys: { buyerAddress: 1, createdAt: -1 } },
@@ -40,6 +45,10 @@ export const REQUIRED_INDEXES = {
     { keys: { materialId: 1, updatedAt: -1 } },
     { keys: { updatedBy: 1 } },
   ],
+  saved_materials: [
+    { keys: { walletAddress: 1, savedAt: -1 } },
+    { keys: { walletAddress: 1, materialId: 1 }, options: { unique: true } },
+  ],
 };
 
 export function applyTimestamps(record, now = new Date()) {
@@ -58,6 +67,9 @@ export const EDITABLE_MATERIAL_FIELDS = [
   "usageRights",
   "visibility",
   "thumbnailUrl",
+  "category",
+  "subject",
+  "level",
 ];
 
 export const IMMUTABLE_MATERIAL_FIELDS = [

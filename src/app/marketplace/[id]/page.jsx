@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { FaHeart, FaCheckCircle } from "react-icons/fa";
 import { motion } from "framer-motion";
 import Navbar from "@/components/Navbar";
@@ -13,6 +13,8 @@ import { useEntitlement } from "@/hooks/api/useEntitlements";
 import { QueryStateProvider } from "@/components/common/QueryStateProvider";
 import Web3ErrorBoundary from "@/components/web3/Web3ErrorBoundary";
 import SaveMaterialButton from "@/components/materials/SaveMaterialButton";
+import { trackRecentlyViewed } from "@/hooks/useRecentlyViewed";
+import RecommendedMaterials from "@/components/materials/RecommendedMaterials";
 
 function getPreviewImage(material) {
 	return material.coverImageUrl || material.thumbnailUrl || material.image || "/images/image2.jpg";
@@ -66,6 +68,12 @@ export default function MaterialDetailsPage() {
 	const entitlementQuery = useEntitlement(id);
 
 	const isOwned = entitlementQuery.data?.owned || false;
+
+	useEffect(() => {
+		if (materialQuery.data) {
+			trackRecentlyViewed(materialQuery.data);
+		}
+	}, [materialQuery.data]);
 
 	return (
 		<>
@@ -297,31 +305,17 @@ export default function MaterialDetailsPage() {
 								</div>
 							</div>
 
-							{/* Related Notes - Placeholder for now */}
-							<div className="mt-14">
-								<h2 className="text-lg font-semibold text-gray-900 mb-4">
-									Discover more Notes
-								</h2>
-
-								<div className="grid sm:grid-cols-2 md:grid-cols-4 gap-6">
-									{[1, 2, 3, 4].map((_, i) => (
-										<div
-											key={i}
-											className="bg-white border border-gray-200 rounded-xl shadow-sm hover:shadow-md transition overflow-hidden"
-										>
-											<div className="relative w-full h-40 bg-gray-100">
-												{/* Placeholder */}
-											</div>
-											<div className="p-4">
-												<h3 className="text-sm font-semibold text-gray-900 line-clamp-1">
-													Related Material
-												</h3>
-												<p className="text-xs text-gray-500 mb-2">by Author</p>
-											</div>
-										</div>
-									))}
+							{/* Recommendations */}
+							{materialQuery.data && (
+								<div className="mt-14">
+									<RecommendedMaterials
+										currentId={id}
+										subject={materialQuery.data.subject}
+										category={materialQuery.data.category}
+										creator={materialQuery.data.author || materialQuery.data.creator}
+									/>
 								</div>
-							</div>
+							)}
 						</motion.div>
 					)}
 				</QueryStateProvider>

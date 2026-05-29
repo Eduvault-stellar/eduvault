@@ -56,6 +56,8 @@ export async function GET(request) {
     const query = { visibility: "public" };
     const search = url.searchParams.get("search");
     const subject = url.searchParams.get("subject");
+    const category = url.searchParams.get("category");
+    const level = url.searchParams.get("level");
     const minPrice = url.searchParams.get("minPrice");
     const maxPrice = url.searchParams.get("maxPrice");
     const creator = url.searchParams.get("creator");
@@ -71,6 +73,8 @@ export async function GET(request) {
       ];
     }
     if (subject) query.subject = subject;
+    if (category) query.category = category;
+    if (level) query.level = level;
     if (minPrice) query.price = { ...query.price, $gte: Number(minPrice) };
     if (maxPrice) query.price = { ...query.price, $lte: Number(maxPrice) };
     if (creator) query["author"] = creator;

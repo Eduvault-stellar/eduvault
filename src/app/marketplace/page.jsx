@@ -23,7 +23,7 @@ import { motion } from "framer-motion";
 import Navbar from "@/components/Navbar";
 import SaveMaterialButton from "@/components/materials/SaveMaterialButton";
 
-
+import RecentlyViewedMaterials from "@/components/materials/RecentlyViewedMaterials";
 
 import { useRouter } from "next/navigation";
 import { useMarketplaceMaterials } from "@/hooks/api/useMaterials";
@@ -329,6 +329,9 @@ export default function MarketPage() {
 							Share Your Notes
 						</button>
 					</motion.div>
+
+					{/* Recently Viewed */}
+					<RecentlyViewedMaterials />
 
 					{/* Filters */}
 					<div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm mb-8 flex flex-col md:flex-row gap-4 items-center justify-between">

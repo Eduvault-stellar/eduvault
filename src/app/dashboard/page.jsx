@@ -4,6 +4,7 @@ import TrendingMaterials from "./components/TrendingMaterials";
 import LatestActivity from "./components/LatestActivity";
 import TopCreators from "./components/TopCreators";
 import SavedMaterialsSection from "./components/SavedMaterialsSection";
+import RecentlyViewedSection from "./components/RecentlyViewedSection";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import jwt from "jsonwebtoken";
@@ -64,6 +65,7 @@ export default async function DashboardPage() {
 
                 {/* Right Column (Discovery Focus - 1/3 width) */}
                 <div className="space-y-8">
+                    <RecentlyViewedSection />
                     <TrendingMaterials />
                     <TopCreators />
                 </div>
