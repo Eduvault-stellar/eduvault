@@ -11,8 +11,9 @@ import {
 	FaDollarSign,
 	FaHeart,
 	FaHistory,
-	FaCog,
 	FaBoxOpen,
+	FaFileUpload,
+	FaWallet,
 } from "react-icons/fa";
 
 export default function Sidebar() {
@@ -22,6 +23,7 @@ export default function Sidebar() {
 		{ icon: <FaTachometerAlt />, label: "Dashboard", href: "/dashboard" },
 		{ icon: <FaShoppingBag />, label: "Market", href: "/dashboard/market" },
 		{ icon: <FaUpload />, label: "Upload Material", href: "/dashboard/upload" },
+		{ icon: <FaFileUpload />, label: "Bulk Upload", href: "/dashboard/bulk-upload" },
 		{ icon: <FaAward />, label: "Leaderboard", href: "/dashboard/leaderboard" },
 	];
 
@@ -39,7 +41,7 @@ export default function Sidebar() {
 		{ icon: <FaDollarSign />, label: "Earnings", href: "/dashboard/earnings" },
 		{ icon: <FaHeart />, label: "Favourites", href: "/dashboard/favourites" },
 		{ icon: <FaHistory />, label: "History", href: "/dashboard/history" },
-		{ icon: <FaCog />, label: "Settings", href: "/dashboard/settings" },
+		{ icon: <FaWallet />, label: "Payout Settings", href: "/dashboard/settings" },
 	];
 
 	const isActive = (href) => pathname === href;

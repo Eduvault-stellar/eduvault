@@ -89,6 +89,79 @@ components:
           format: uri
       required: [title, price]
 
+    MaterialImportRecord:
+      type: object
+      properties:
+        title:
+          type: string
+        storageKey:
+          type: string
+        description:
+          type: string
+        shortSummary:
+          type: string
+        price:
+          type: number
+        visibility:
+          type: string
+          enum: [private, public, unlisted]
+        category:
+          type: string
+        subject:
+          type: string
+        level:
+          type: string
+        usageRights:
+          type: string
+        coverImageUrl:
+          type: string
+          format: uri
+        thumbnailUrl:
+          type: string
+          format: uri
+        learningOutcomes:
+          type: array
+          items:
+            type: string
+        tableOfContents:
+          type: array
+          items:
+            type: string
+        sampleNotes:
+          type: array
+          items:
+            type: string
+
+    MaterialImportResponse:
+      type: object
+      properties:
+        dryRun:
+          type: boolean
+        total:
+          type: integer
+        valid:
+          type: integer
+        invalid:
+          type: integer
+        imported:
+          type: integer
+        invalidRows:
+          type: array
+          items:
+            type: object
+            properties:
+              row:
+                type: integer
+              errors:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    field:
+                      type: string
+                    message:
+                      type: string
+
     UserProfile:
       type: object
       properties:
@@ -99,6 +172,16 @@ components:
         displayName:
           type: string
         bio:
+          type: string
+        institution:
+          type: string
+        country:
+          type: string
+        payoutWalletAddress:
+          type: string
+        preferredPayoutCurrency:
+          type: string
+        payoutNotes:
           type: string
         createdAt:
           type: string
@@ -113,15 +196,15 @@ components:
           type: string
         materialId:
           type: string
-        amount:
-          type: number
-        txHash:
+        userEmail:
           type: string
-          description: Stellar / Soroban transaction hash
         status:
           type: string
           enum: [pending, confirmed, failed]
         createdAt:
+          type: string
+          format: date-time
+        updatedAt:
           type: string
           format: date-time
 
@@ -191,6 +274,51 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /api/materials/import:
+    post:
+      summary: Validate or import structured material records
+      operationId: importMaterials
+      tags: [Materials]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                format:
+                  type: string
+                  enum: [json, csv]
+                dryRun:
+                  type: boolean
+                records:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/MaterialImportRecord"
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/MaterialImportRecord"
+      responses:
+        "200":
+          description: Validation results for a dry run
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MaterialImportResponse"
+        "201":
+          description: Imported records
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MaterialImportResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "429":
@@ -279,6 +407,22 @@ paths:
   # Purchase
   # ---------------------------------------------------------------------------
   /api/purchase:
+    get:
+      summary: List the authenticated user's purchases
+      operationId: listPurchases
+      tags: [Purchase]
+      responses:
+        "200":
+          description: Purchase history
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Purchase"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
     post:
       summary: Record a material purchase after on-chain payment
       operationId: recordPurchase
@@ -292,11 +436,11 @@ paths:
               properties:
                 materialId:
                   type: string
-                txHash:
+                signedXdr:
                   type: string
-                amount:
-                  type: number
-              required: [materialId, txHash, amount]
+                email:
+                  type: string
+              required: [materialId]
       responses:
         "201":
           description: Purchase recorded
@@ -304,6 +448,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Purchase"
+        "200":
+          description: Existing purchase returned when the buyer already owns the material
+          content:
+            application/json:
+              schema:
+                type: object
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
@@ -409,6 +559,22 @@ paths:
                 bio:
                   type: string
                   maxLength: 500
+                institution:
+                  type: string
+                country:
+                  type: string
+                twitterUrl:
+                  type: string
+                githubUrl:
+                  type: string
+                websiteUrl:
+                  type: string
+                payoutWalletAddress:
+                  type: string
+                preferredPayoutCurrency:
+                  type: string
+                payoutNotes:
+                  type: string
       responses:
         "200":
           description: Updated profile

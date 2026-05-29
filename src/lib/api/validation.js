@@ -17,6 +17,7 @@ const CONTROL_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const EVM_ADDRESS_PATTERN = /^0x[a-fA-F0-9]{40}$/;
 const STELLAR_ADDRESS_PATTERN = /^G[A-Z2-7]{55}$/;
+const CURRENCY_CODE_PATTERN = /^[A-Z][A-Z0-9]{2,11}$/;
 
 export function sanitizeString(value, { maxLength = 5000 } = {}) {
   if (value === undefined || value === null) return "";
@@ -66,6 +67,15 @@ export function normalizeWalletAddress(address) {
   return clean;
 }
 
+export function normalizeCurrencyCode(currency) {
+  const clean = sanitizeString(currency, { maxLength: 12 }).toUpperCase();
+  if (!clean) return null;
+  if (!CURRENCY_CODE_PATTERN.test(clean)) {
+    throw new ValidationError("Invalid currency code", { field: "preferredPayoutCurrency" });
+  }
+  return clean;
+}
+
 export function validateProfilePayload(body) {
   const fullName = sanitizeString(body?.fullName, { maxLength: 120 });
   if (!fullName) {
@@ -87,6 +97,22 @@ export function validateProfilePayload(body) {
     websiteUrl: sanitizeString(body?.websiteUrl, { maxLength: 256 }) || null,
     walletAddress,
     walletAddressLower: walletAddress ? walletAddress.toLowerCase() : null,
+  };
+}
+
+export function validatePayoutSettingsPayload(body) {
+  const payoutWalletAddress =
+    body?.payoutWalletAddress === undefined ? undefined : normalizeWalletAddress(body.payoutWalletAddress);
+  const preferredPayoutCurrency =
+    body?.preferredPayoutCurrency === undefined ? undefined : normalizeCurrencyCode(body.preferredPayoutCurrency);
+  const payoutNotes =
+    body?.payoutNotes === undefined ? undefined : (sanitizeString(body.payoutNotes, { maxLength: 1000 }) || null);
+
+  return {
+    payoutWalletAddress,
+    payoutWalletAddressLower: payoutWalletAddress ? payoutWalletAddress.toLowerCase() : null,
+    preferredPayoutCurrency,
+    payoutNotes,
   };
 }
 

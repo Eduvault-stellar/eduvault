@@ -1,9 +1,15 @@
 export const dynamic = "force-dynamic";
 
 import { NextResponse } from "next/server";
+import { ObjectId } from "mongodb";
 import { auditLog } from "@/lib/api/audit";
 import { withApiHardening } from "@/lib/api/hardening";
-import { escapeRegExp, normalizeWalletAddress, validateProfilePayload } from "@/lib/api/validation";
+import {
+  escapeRegExp,
+  normalizeWalletAddress,
+  validateProfilePayload,
+  validatePayoutSettingsPayload,
+} from "@/lib/api/validation";
 import { getUserFromCookie, sanitizeString } from "@/lib/api/auth";
 import { sendWelcomeEmail } from "@/lib/email";
 import { getDb } from "@/lib/mongodb";
@@ -141,15 +147,44 @@ export async function PATCH(request) {
           updateFields.websiteUrl = sanitizeString(profileData.websiteUrl, { maxLength: 256 });
         }
 
+        if (
+          profileData.payoutWalletAddress !== undefined ||
+          profileData.preferredPayoutCurrency !== undefined ||
+          profileData.payoutNotes !== undefined
+        ) {
+          const payoutSettings = validatePayoutSettingsPayload(profileData);
+          if (payoutSettings.payoutWalletAddress !== undefined) {
+            updateFields.payoutWalletAddress = payoutSettings.payoutWalletAddress;
+            updateFields.payoutWalletAddressLower = payoutSettings.payoutWalletAddressLower;
+          }
+          if (payoutSettings.preferredPayoutCurrency !== undefined) {
+            updateFields.preferredPayoutCurrency = payoutSettings.preferredPayoutCurrency;
+          }
+          if (payoutSettings.payoutNotes !== undefined) {
+            updateFields.payoutNotes = payoutSettings.payoutNotes;
+          }
+        }
+
         if (Object.keys(updateFields).length === 0) {
           return NextResponse.json({ error: "No valid fields to update" }, { status: 400 });
         }
 
         const db = await getDb();
         const users = db.collection("users");
+        const userId = ObjectId.isValid(user.sub) ? new ObjectId(user.sub) : null;
+        const updateQuery = userId
+          ? { _id: userId }
+          : user.walletAddress
+            ? {
+                $or: [
+                  { walletAddress: user.walletAddress },
+                  { walletAddressLower: String(user.walletAddress).toLowerCase() },
+                ],
+              }
+            : { _id: user._id };
 
         const result = await users.updateOne(
-          { _id: user._id },
+          updateQuery,
           {
             $set: {
               ...updateFields,
@@ -162,7 +197,7 @@ export async function PATCH(request) {
           return NextResponse.json({ error: "User not found" }, { status: 404 });
         }
 
-        const updatedUser = await users.findOne({ _id: user._id });
+        const updatedUser = await users.findOne(updateQuery);
 
         return NextResponse.json({ success: true, user: updatedUser });
       } catch (error) {

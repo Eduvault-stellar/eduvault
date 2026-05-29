@@ -21,6 +21,10 @@ Optional fields:
 - `institution`, `country`, `bio`.
 - `walletAddress`: original wallet address supplied by the user.
 - `walletAddressLower`: normalized lookup key.
+- `payoutWalletAddress`: creator settlement wallet for future payouts.
+- `payoutWalletAddressLower`: normalized lookup key for the payout wallet.
+- `preferredPayoutCurrency`: preferred display currency for earnings and settlement metadata.
+- `payoutNotes`: optional creator notes for finance and operations.
 
 Indexes:
 
@@ -123,6 +127,19 @@ Response:
 
 - `success`, `user`, `emailSent`.
 
+### `PATCH /api/profile`
+
+Request:
+
+- `displayName`, `bio`, `avatarUrl`, `institution`, `country`, `twitterUrl`, `githubUrl`, `websiteUrl`: optional profile fields.
+- `payoutWalletAddress`: optional wallet address for settlement routing.
+- `preferredPayoutCurrency`: optional uppercase currency code such as `XLM`, `USD`, or `USDC`.
+- `payoutNotes`: optional plain-text payout notes.
+
+Response:
+
+- `success`, `user`.
+
 ### `GET /api/profile?address=...`
 
 Request:
@@ -149,11 +166,48 @@ Response:
 
 - inserted material record with `id`.
 
+### `POST /api/materials/import`
+
+Request:
+
+- `format`: `json` or `csv`.
+- `dryRun`: boolean flag. When `true`, the API validates without saving.
+- `records` or `items`: array of material records.
+
+Response:
+
+- `dryRun`, `total`, `valid`, `invalid`, `invalidRows`.
+- `imported` when the import is committed.
+
 ### `GET /api/materials`
 
 Response:
 
 - authenticated creator materials sorted newest first.
+
+### `GET /api/purchase`
+
+Response:
+
+- current purchase history for the authenticated account.
+
+### `POST /api/purchase`
+
+Request:
+
+- `materialId`: required material identifier.
+- `signedXdr`: optional signed transaction payload.
+- `email`: optional buyer email used for record enrichment.
+
+Response:
+
+- persisted purchase record or an existing confirmed purchase when the buyer already owns the item.
+
+### `GET /api/entitlements`
+
+Response:
+
+- list of active entitlement records for the authenticated account.
 
 ### `GET /api/market-materials`
 
