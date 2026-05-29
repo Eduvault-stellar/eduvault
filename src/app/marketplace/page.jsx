@@ -6,6 +6,7 @@ import Link from "next/link";
 import { FaHeart, FaSearch, FaFilter, FaStar, FaFilePdf, FaFileWord, FaFilePowerpoint, FaRegClock } from "react-icons/fa";
 import { motion } from "framer-motion";
 import Navbar from "@/components/Navbar";
+import SaveMaterialButton from "@/components/materials/SaveMaterialButton";
 
 const SUBJECTS = ["Math", "Science", "Law", "Technology", "Business", "Medicine", "Arts"];
 
@@ -208,25 +209,28 @@ export default function MarketPage() {
 							</div>
 							<motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.4 }} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5 relative z-10">
 								{displayedMaterials.map((material) => (
-									<Link href={`/marketplace/${material.id}`} key={material.id} className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm hover:shadow-md hover:border-blue-300 transition-all duration-300 flex flex-col group">
-										<div className="relative w-full h-28 bg-gray-100 overflow-hidden">
-											<Image src={material.image} alt={material.title} fill className="object-cover group-hover:scale-105 transition-transform duration-500" />
-										</div>
-										<div className="p-4 flex-1 flex flex-col">
-											<h3 className="text-sm font-bold text-gray-900 mb-1 line-clamp-2 leading-tight group-hover:text-blue-600 transition-colors">{material.title}</h3>
-											<p className="text-xs text-gray-500 mb-1">by <span className="font-medium text-gray-700">{material.author}</span></p>
-											<p className="text-xs text-gray-500 mb-3 line-clamp-2">{material.description}</p>
-											<div className="mt-auto pt-3 border-t border-gray-100 flex justify-between items-center">
-												<div className="flex items-center text-xs text-gray-500 gap-3">
-													<span className="flex items-center gap-1">{getFileIcon(material.fileType)} <span className="uppercase">{material.fileType}</span></span>
-													<div className="flex items-center gap-1"><FaHeart className="text-gray-400" /><span>{material.likes}</span></div>
-													<div className="flex items-center gap-1"><FaRegClock className="text-gray-400" /><span>{material.pages} pgs</span></div>
-												</div>
-												<div className="bg-blue-50 text-blue-700 px-2.5 py-1 rounded-md text-sm font-bold shadow-sm border border-blue-100">{material.price} <span className="text-[10px] font-medium text-blue-500">XLM</span></div>
+									<article key={material.id} className="relative bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm hover:shadow-md hover:border-blue-300 transition-all duration-300 flex flex-col group">
+										<SaveMaterialButton material={material} />
+										<Link href={`/marketplace/${material.id}`} className="flex flex-col flex-1">
+											<div className="relative w-full h-28 bg-gray-100 overflow-hidden">
+												<Image src={material.image} alt={material.title} fill className="object-cover group-hover:scale-105 transition-transform duration-500" />
 											</div>
-											<div className="mt-2 flex justify-between text-xs text-gray-500"><span>{material.subject}</span><span><FaStar className="inline text-yellow-500" /> {material.rating}</span></div>
-										</div>
-									</Link>
+											<div className="p-4 flex-1 flex flex-col">
+												<h3 className="text-sm font-bold text-gray-900 mb-1 line-clamp-2 leading-tight group-hover:text-blue-600 transition-colors">{material.title}</h3>
+												<p className="text-xs text-gray-500 mb-1">by <span className="font-medium text-gray-700">{material.author}</span></p>
+												<p className="text-xs text-gray-500 mb-3 line-clamp-2">{material.description}</p>
+												<div className="mt-auto pt-3 border-t border-gray-100 flex justify-between items-center">
+													<div className="flex items-center text-xs text-gray-500 gap-3">
+														<span className="flex items-center gap-1">{getFileIcon(material.fileType)} <span className="uppercase">{material.fileType}</span></span>
+														<div className="flex items-center gap-1"><FaHeart className="text-gray-400" /><span>{material.likes}</span></div>
+														<div className="flex items-center gap-1"><FaRegClock className="text-gray-400" /><span>{material.pages} pgs</span></div>
+													</div>
+													<div className="bg-blue-50 text-blue-700 px-2.5 py-1 rounded-md text-sm font-bold shadow-sm border border-blue-100">{material.price} <span className="text-[10px] font-medium text-blue-500">XLM</span></div>
+												</div>
+												<div className="mt-2 flex justify-between text-xs text-gray-500"><span>{material.subject}</span><span><FaStar className="inline text-yellow-500" /> {material.rating}</span></div>
+											</div>
+										</Link>
+									</article>
 								))}
 							</motion.div>
 						</>
