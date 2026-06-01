@@ -37,7 +37,7 @@ export async function POST(req) {
     const db = await getDb();
     const body = await req.json();
 
-    const { materialId, signedXdr, email } = body;
+    const { materialId, signedXdr, email, transactionHash } = body;
     const buyerAddress = user.walletAddress;
 
     if (!materialId) {
@@ -60,6 +60,8 @@ export async function POST(req) {
       buyerAddress,
       userEmail: email || null,
       status: 'confirmed',
+      transactionHash: transactionHash || null,
+      signedXdr: signedXdr || null,
       createdAt: new Date(),
       updatedAt: new Date(),
     };
