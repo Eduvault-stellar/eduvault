@@ -77,6 +77,7 @@ export default function ProfileOnboarding() {
       <div className="flex items-center gap-4 p-4 bg-white rounded-xl border border-gray-200 shadow-sm">
         <div className="w-12 h-12 rounded-full bg-indigo-100 flex items-center justify-center overflow-hidden">
           {profile.avatarUrl ? (
+            /* eslint-disable-next-line @next/next/no-img-element */
             <img src={profile.avatarUrl} alt="" className="w-full h-full object-cover" />
           ) : (
             <FaUser className="text-indigo-500 text-lg" />

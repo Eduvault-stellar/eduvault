@@ -244,6 +244,7 @@ export default function MyMaterialsPage() {
             >
               <div className="w-full h-36 bg-gradient-to-br from-blue-50 to-purple-50 rounded-t-xl flex items-center justify-center overflow-hidden">
                 {material.thumbnailUrl ? (
+                  /* eslint-disable-next-line @next/next/no-img-element */
                   <img
                     src={material.thumbnailUrl}
                     alt={material.title}

@@ -637,7 +637,7 @@ export default function CreatorProfilePage() {
                       </div>
                     </div>
                     <p className="text-xs md:text-sm text-slate-650 dark:text-slate-350 italic leading-relaxed font-medium">
-                      &ldquo;{rev.comment}&rdquo;
+                      &quot;{rev.comment}&quot;
                     </p>
                   </div>
                 ))}

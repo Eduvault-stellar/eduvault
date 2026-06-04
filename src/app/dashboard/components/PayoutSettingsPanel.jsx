@@ -25,6 +25,15 @@ export default function PayoutSettingsPanel({ initialUser }) {
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(null);
 
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setForm({
+      payoutWalletAddress: initialUser?.payoutWalletAddress || "",
+      preferredPayoutCurrency: initialUser?.preferredPayoutCurrency || "XLM",
+      payoutNotes: initialUser?.payoutNotes || "",
+    });
+  }, [initialUser]);
+
   const onSubmit = async (event) => {
     event.preventDefault();
     setError(null);

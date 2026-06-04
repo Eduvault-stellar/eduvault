@@ -271,15 +271,15 @@ impl MaterialRegistry {
         put_material(&env, &record);
 
         MaterialStatusUpdatedEvent {
-            material_id,
-            creator: record.creator,
+            material_id: material_id.clone(),
+            creator: record.creator.clone(),
             status,
         }
         .publish(&env);
 
         MaterialStatusChangedEvent {
-            material_id: material_id.clone(),
-            creator: record.creator.clone(),
+            material_id,
+            creator: record.creator,
             paused: record.paused,
             status,
         }

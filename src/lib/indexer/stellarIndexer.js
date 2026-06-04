@@ -32,7 +32,7 @@ export async function applyIndexedEvent(db, event, { now = new Date() } = {}) {
     if (duplicateKey(error)) {
       // event already recorded; mark and continue to ensure downstream
       // side-effects (purchases/entitlement/materials) are applied on reprocess.
-      var alreadyIndexed = true; // eslint-disable-line no-var
+      var alreadyIndexed = true;
     } else {
       throw error;
     }

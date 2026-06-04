@@ -652,6 +652,7 @@ export default function MarketPage() {
 										</article>
 									);
 								})}
+							</motion.div>
 
 							</motion.div>
 

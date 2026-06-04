@@ -336,7 +336,7 @@ export default function ComparisonMatrix() {
                         return (
                           <td key={itemId} className="py-4 px-4">
                             <p className="text-xs text-slate-600 dark:text-slate-300 font-medium leading-relaxed max-w-[240px] italic">
-                              &ldquo;{item.usageRights || 'Personal study access only. Not for resale or redistribution.'}&rdquo;
+                              &quot;{item.usageRights || 'Personal study access only. Not for resale or redistribution.'}&quot;
                             </p>
                           </td>
                         );
