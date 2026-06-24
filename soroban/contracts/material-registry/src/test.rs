@@ -588,7 +588,10 @@ fn disabling_asset_blocks_quote_registration() {
     // Attempting to register a second material quoting the disabled asset must fail.
     let bad_quotes = vec![
         &env,
-        AssetQuote { asset: usdc, amount: 1_000_000 },
+        AssetQuote {
+            asset: usdc,
+            amount: 1_000_000,
+        },
     ];
     let result = client.try_register_material(
         &creator,
@@ -621,13 +624,16 @@ fn update_sale_terms_rejects_unapproved_asset() {
 
     // Try to update with an asset that has never been approved.
     let unapproved = Address::generate(&env);
-    let bad_quotes = vec![&env, AssetQuote { asset: unapproved, amount: 5_000_000 }];
+    let bad_quotes = vec![
+        &env,
+        AssetQuote {
+            asset: unapproved,
+            amount: 5_000_000,
+        },
+    ];
 
-    let result = client.try_update_sale_terms(
-        &material_id,
-        &bad_quotes,
-        &default_payout_shares(&env),
-    );
+    let result =
+        client.try_update_sale_terms(&material_id, &bad_quotes, &default_payout_shares(&env));
     assert_eq!(result, Err(Ok(RegistryError::UnapprovedAsset)));
 }
 

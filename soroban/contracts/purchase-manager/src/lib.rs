@@ -518,7 +518,12 @@ impl PurchaseManager {
             .set(&DataKey::AllowedAsset(asset.clone()), &info);
 
         // Emit policy update event
-        AssetPolicyUpdatedEvent { asset, kind, enabled }.publish(&env);
+        AssetPolicyUpdatedEvent {
+            asset,
+            kind,
+            enabled,
+        }
+        .publish(&env);
 
         Ok(())
     }

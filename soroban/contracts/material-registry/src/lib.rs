@@ -311,10 +311,7 @@ impl MaterialRegistry {
         Self::set_material_paused(env, actor, material_id, !record.paused)
     }
 
-    pub fn is_material_paused(
-        env: Env,
-        material_id: BytesN<32>,
-    ) -> Result<bool, RegistryError> {
+    pub fn is_material_paused(env: Env, material_id: BytesN<32>) -> Result<bool, RegistryError> {
         let record = get_material_record(&env, &material_id)?;
         Ok(record.paused)
     }
@@ -407,7 +404,12 @@ impl MaterialRegistry {
             .persistent()
             .set(&DataKey::AllowedAsset(asset.clone()), &info);
 
-        AssetPolicyUpdatedEvent { asset, kind, enabled }.publish(&env);
+        AssetPolicyUpdatedEvent {
+            asset,
+            kind,
+            enabled,
+        }
+        .publish(&env);
 
         Ok(())
     }

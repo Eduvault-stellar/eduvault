@@ -22,7 +22,8 @@ let _sentryPromise = null;
 
 async function getSentry() {
   if (_sentryPromise) return _sentryPromise;
-  _sentryPromise = import(/* webpackIgnore: true */ '@sentry/nextjs').catch(() => null);
+  const sentryPackage = "@sentry/nextjs";
+  _sentryPromise = import(/* webpackIgnore: true */ /* @vite-ignore */ sentryPackage).catch(() => null);
   return _sentryPromise;
 }
 
