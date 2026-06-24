@@ -1,16 +1,33 @@
 /**
- * Backend tests for GET /api/creator/analytics — Issue #118
+ * Backend tests for GET /api/creator/analytics - Issues #118 and #193.
  *
- * Tests the aggregation and access-control logic extracted into
- * pure functions, mirroring the pattern established in entitlement.test.mjs.
- *
- * Run with: npm run test:backend
+ * Tests the aggregation and educator dashboard logic using in-memory doubles,
+ * mirroring the API route while keeping the tests fast and deterministic.
  */
 
 import assert from "node:assert/strict";
-import { test, describe } from "node:test";
+import { describe, test } from "node:test";
 
-// ─── Minimal in-memory MongoDB doubles ────────────────────────────────────────
+function matchesQuery(doc, query = {}) {
+  return Object.entries(query).every(([key, value]) => {
+    if (value && typeof value === "object") {
+      if ("$in" in value) return value.$in.includes(doc[key]);
+      if ("$gte" in value && "$lte" in value) {
+        return doc[key] >= value.$gte && doc[key] <= value.$lte;
+      }
+      if ("$gte" in value) return doc[key] >= value.$gte;
+    }
+    return doc[key] === value;
+  });
+}
+
+function makeCursor(results) {
+  return {
+    toArray: async () => results,
+    sort: () => makeCursor(results),
+    limit: (count) => makeCursor(results.slice(0, count)),
+  };
+}
 
 function makeCollection(docs = []) {
   const store = [...docs];
@@ -19,79 +36,45 @@ function makeCollection(docs = []) {
     _store: store,
 
     async find(query = {}) {
-      const results = store.filter((doc) =>
-        Object.entries(query).every(([k, v]) => {
-          if (v && typeof v === "object" && "$in" in v) {
-            return v.$in.includes(doc[k]);
-          }
-          return doc[k] === v;
-        })
-      );
-      return {
-        toArray: async () => results,
-        sort: () => ({ limit: () => ({ toArray: async () => results }) }),
-      };
+      return makeCursor(store.filter((doc) => matchesQuery(doc, query)));
     },
 
     async findOne(query = {}) {
-      return (
-        store.find((doc) =>
-          Object.entries(query).every(([k, v]) => doc[k] === v)
-        ) ?? null
-      );
+      return store.find((doc) => matchesQuery(doc, query)) ?? null;
     },
 
-    // Simplified aggregate — handles the specific pipelines used by the route
     async aggregate(pipeline) {
-      // Step 1: $match
-      const matchStage = pipeline.find((s) => s.$match)?.$match ?? {};
-      let docs = store.filter((doc) =>
-        Object.entries(matchStage).every(([k, v]) => {
-          if (v && typeof v === "object") {
-            if ("$in" in v) return v.$in.includes(doc[k]);
-            if ("$gte" in v && "$lte" in v)
-              return doc[k] >= v.$gte && doc[k] <= v.$lte;
-            if ("$gte" in v) return doc[k] >= v.$gte;
-            if ("$in" in v) return v.$in.includes(doc[k]);
-          }
-          return doc[k] === v;
-        })
-      );
+      const matchStage = pipeline.find((stage) => stage.$match)?.$match ?? {};
+      const matched = store.filter((doc) => matchesQuery(doc, matchStage));
 
-      // Step 2: $count
-      if (pipeline.some((s) => s.$count)) {
-        const field = pipeline.find((s) => s.$count).$count;
-        if (docs.length === 0) return { toArray: async () => [] };
-        return { toArray: async () => [{ [field]: docs.length }] };
+      if (pipeline.some((stage) => stage.$count)) {
+        const field = pipeline.find((stage) => stage.$count).$count;
+        return makeCursor(matched.length === 0 ? [] : [{ [field]: matched.length }]);
       }
 
-      // Step 3: $group
-      const groupStage = pipeline.find((s) => s.$group)?.$group;
-      if (groupStage) {
-        const groups = new Map();
-        for (const doc of docs) {
-          const key = groupStage._id === null ? null : doc[groupStage._id?.replace?.("$", "")];
-          const existing = groups.get(key) ?? { _id: key };
-          for (const [field, expr] of Object.entries(groupStage)) {
-            if (field === "_id") continue;
-            if (expr.$sum) {
-              const val =
-                typeof expr.$sum === "number"
-                  ? expr.$sum
-                  : Number(doc[String(expr.$sum.$toDouble ?? expr.$sum).replace("$", "")]) || 0;
-              existing[field] = (existing[field] ?? 0) + val;
-            }
-            if (expr.$count) {
-              existing[field] = (existing[field] ?? 0) + 1;
-            }
+      const groupStage = pipeline.find((stage) => stage.$group)?.$group;
+      if (!groupStage) return makeCursor(matched);
+
+      const groups = new Map();
+      for (const doc of matched) {
+        const key = groupStage._id === null ? null : doc[groupStage._id?.replace?.("$", "")];
+        const existing = groups.get(key) ?? { _id: key };
+
+        for (const [field, expression] of Object.entries(groupStage)) {
+          if (field === "_id") continue;
+          if (expression.$sum) {
+            const value =
+              typeof expression.$sum === "number"
+                ? expression.$sum
+                : Number(doc[String(expression.$sum.$toDouble ?? expression.$sum).replace("$", "")]) || 0;
+            existing[field] = (existing[field] ?? 0) + value;
           }
-          groups.set(key, existing);
         }
-        const result = [...groups.values()];
-        return { toArray: async () => result };
+
+        groups.set(key, existing);
       }
 
-      return { toArray: async () => docs };
+      return makeCursor([...groups.values()]);
     },
   };
 }
@@ -102,36 +85,64 @@ function makeDb(collections = {}) {
   };
 }
 
-// ─── Extracted analytics logic (mirrors route.js but accepts injected db) ──────
+function getMaterialActivity(material) {
+  return (
+    Number(material.views ?? material.viewCount ?? 0) +
+    Number(material.downloads ?? material.downloadCount ?? 0) +
+    Number(material.reviewsCount ?? material.reviewCount ?? 0)
+  );
+}
 
 async function getAnalytics(creatorAddress, db, { from, to } = {}) {
   const purchases = db.collection("purchases");
   const materials = db.collection("materials");
+  const savedMaterials = db.collection("saved_materials");
+  const completedStatuses = ["confirmed", "settled", "completed"];
 
   const now = new Date();
   const rangeTo = to ?? now;
   const rangeFrom = from ?? new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
 
-  const creatorMaterials = (await (await materials.find({ userAddress: creatorAddress })).toArray());
-  const materialIdStrings = creatorMaterials.map((m) => String(m._id));
+  const creatorMaterials = await (await materials.find({ userAddress: creatorAddress })).toArray();
+  const materialIdStrings = creatorMaterials.map((material) => String(material._id));
+  const uploadCount = creatorMaterials.length;
+  const publishedCount = creatorMaterials.filter((material) => material.visibility !== "private").length;
+  const draftCount = uploadCount - publishedCount;
+  const materialActivity = creatorMaterials.reduce(
+    (total, material) => total + getMaterialActivity(material),
+    0
+  );
+  const savedDocs = await (
+    await savedMaterials.find({ materialId: { $in: materialIdStrings } })
+  ).toArray();
+  const savedCount = savedDocs.length;
 
-  // All-time confirmed
   const allTimeAgg = await (
     await purchases.aggregate([
-      { $match: { materialId: { $in: materialIdStrings }, status: "confirmed" } },
-      { $group: { _id: null, total: { $sum: { $toDouble: "$amount" } }, count: { $sum: 1 } } },
+      {
+        $match: {
+          materialId: { $in: materialIdStrings },
+          status: { $in: completedStatuses },
+        },
+      },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: { $toDouble: "$amount" } },
+          count: { $sum: 1 },
+        },
+      },
     ])
   ).toArray();
   const totalRevenue = allTimeAgg[0]?.total ?? 0;
   const totalSales = allTimeAgg[0]?.count ?? 0;
 
-  // Date-windowed confirmed
   const windowAgg = await (
     await purchases.aggregate([
       {
         $match: {
           materialId: { $in: materialIdStrings },
-          status: "confirmed",
+          status: { $in: completedStatuses },
           purchasedAt: { $gte: rangeFrom, $lte: rangeTo },
         },
       },
@@ -140,7 +151,6 @@ async function getAnalytics(creatorAddress, db, { from, to } = {}) {
   ).toArray();
   const monthlySales = windowAgg[0]?.count ?? 0;
 
-  // Pending / indexing
   const pendingAgg = await (
     await purchases.aggregate([
       {
@@ -152,20 +162,32 @@ async function getAnalytics(creatorAddress, db, { from, to } = {}) {
       { $group: { _id: "$status", count: { $sum: 1 } } },
     ])
   ).toArray();
-  const pendingCount = pendingAgg.find((g) => g._id === "pending")?.count ?? 0;
-  const indexingCount = pendingAgg.find((g) => g._id === "indexing")?.count ?? 0;
+  const pendingCount = pendingAgg.find((group) => group._id === "pending")?.count ?? 0;
+  const indexingCount = pendingAgg.find((group) => group._id === "indexing")?.count ?? 0;
+  const learnerInterest = savedCount + pendingCount + indexingCount;
 
-  return { totalRevenue, totalSales, monthlySales, pendingCount, indexingCount };
+  return {
+    totalRevenue,
+    totalSales,
+    monthlySales,
+    pendingCount,
+    indexingCount,
+    uploadCount,
+    publishedCount,
+    draftCount,
+    materialActivity,
+    savedCount,
+    learnerInterest,
+    completedOrders: totalSales,
+  };
 }
 
-// ─── Tests ────────────────────────────────────────────────────────────────────
-
-describe("Creator analytics — Issue #118", () => {
-  // ── Empty state ─────────────────────────────────────────────────────────────
+describe("Creator analytics - Issues #118 and #193", () => {
   test("returns zeros for a creator with no materials", async () => {
     const db = makeDb({
       materials: makeCollection([]),
       purchases: makeCollection([]),
+      saved_materials: makeCollection([]),
     });
 
     const result = await getAnalytics("GCREATOR_EMPTY", db);
@@ -174,9 +196,11 @@ describe("Creator analytics — Issue #118", () => {
     assert.equal(result.monthlySales, 0);
     assert.equal(result.pendingCount, 0);
     assert.equal(result.indexingCount, 0);
+    assert.equal(result.uploadCount, 0);
+    assert.equal(result.learnerInterest, 0);
+    assert.equal(result.completedOrders, 0);
   });
 
-  // ── Single material, confirmed purchase ─────────────────────────────────────
   test("totalRevenue and totalSales count confirmed purchases", async () => {
     const db = makeDb({
       materials: makeCollection([
@@ -198,15 +222,38 @@ describe("Creator analytics — Issue #118", () => {
           purchasedAt: new Date(),
         },
       ]),
+      saved_materials: makeCollection([]),
     });
 
     const result = await getAnalytics("GCREATOR_1", db);
     assert.equal(result.totalSales, 2);
+    assert.equal(result.completedOrders, 2);
     assert.equal(result.totalRevenue, 20);
   });
 
-  // ── Pending and indexing counts ─────────────────────────────────────────────
-  test("pendingCount and indexingCount reflect non-confirmed purchases", async () => {
+  test("settled purchases count as completed orders", async () => {
+    const db = makeDb({
+      materials: makeCollection([
+        { _id: "mat-settled", userAddress: "GCREATOR_SETTLED", title: "Settled Access" },
+      ]),
+      purchases: makeCollection([
+        {
+          materialId: "mat-settled",
+          buyerAddress: "GBUYER_SETTLED",
+          status: "settled",
+          amount: "7",
+          purchasedAt: new Date(),
+        },
+      ]),
+      saved_materials: makeCollection([]),
+    });
+
+    const result = await getAnalytics("GCREATOR_SETTLED", db);
+    assert.equal(result.completedOrders, 1);
+    assert.equal(result.totalRevenue, 7);
+  });
+
+  test("pendingCount and indexingCount reflect incomplete purchases", async () => {
     const db = makeDb({
       materials: makeCollection([
         { _id: "mat-2", userAddress: "GCREATOR_2", title: "DeFi 101" },
@@ -216,15 +263,16 @@ describe("Creator analytics — Issue #118", () => {
         { materialId: "mat-2", buyerAddress: "GBUYER_D", status: "indexing", amount: "5", purchasedAt: new Date() },
         { materialId: "mat-2", buyerAddress: "GBUYER_E", status: "confirmed", amount: "5", purchasedAt: new Date() },
       ]),
+      saved_materials: makeCollection([]),
     });
 
     const result = await getAnalytics("GCREATOR_2", db);
     assert.equal(result.pendingCount, 1);
     assert.equal(result.indexingCount, 1);
+    assert.equal(result.learnerInterest, 2);
     assert.equal(result.totalSales, 1);
   });
 
-  // ── Multi-material creator ──────────────────────────────────────────────────
   test("aggregates correctly across multiple materials", async () => {
     const db = makeDb({
       materials: makeCollection([
@@ -236,6 +284,7 @@ describe("Creator analytics — Issue #118", () => {
         { materialId: "mat-b", buyerAddress: "GBUYER_2", status: "confirmed", amount: "30", purchasedAt: new Date() },
         { materialId: "mat-b", buyerAddress: "GBUYER_3", status: "confirmed", amount: "30", purchasedAt: new Date() },
       ]),
+      saved_materials: makeCollection([]),
     });
 
     const result = await getAnalytics("GCREATOR_3", db);
@@ -243,7 +292,6 @@ describe("Creator analytics — Issue #118", () => {
     assert.equal(result.totalRevenue, 80);
   });
 
-  // ── Cross-creator isolation ─────────────────────────────────────────────────
   test("does not include purchases for another creator's materials", async () => {
     const db = makeDb({
       materials: makeCollection([
@@ -254,6 +302,7 @@ describe("Creator analytics — Issue #118", () => {
         { materialId: "mat-own", buyerAddress: "GBUYER_X", status: "confirmed", amount: "15", purchasedAt: new Date() },
         { materialId: "mat-other", buyerAddress: "GBUYER_Y", status: "confirmed", amount: "99", purchasedAt: new Date() },
       ]),
+      saved_materials: makeCollection([]),
     });
 
     const result = await getAnalytics("GCREATOR_A", db);
@@ -261,11 +310,10 @@ describe("Creator analytics — Issue #118", () => {
     assert.equal(result.totalRevenue, 15);
   });
 
-  // ── Date range filter ───────────────────────────────────────────────────────
   test("date range filter narrows monthlySales correctly", async () => {
     const now = new Date();
-    const recent = new Date(now.getTime() - 5 * 24 * 60 * 60 * 1000);   // 5 days ago
-    const old = new Date(now.getTime() - 60 * 24 * 60 * 60 * 1000);     // 60 days ago
+    const recent = new Date(now.getTime() - 5 * 24 * 60 * 60 * 1000);
+    const old = new Date(now.getTime() - 60 * 24 * 60 * 60 * 1000);
 
     const db = makeDb({
       materials: makeCollection([
@@ -275,14 +323,54 @@ describe("Creator analytics — Issue #118", () => {
         { materialId: "mat-dr", buyerAddress: "GBUYER_R", status: "confirmed", amount: "10", purchasedAt: recent },
         { materialId: "mat-dr", buyerAddress: "GBUYER_O", status: "confirmed", amount: "10", purchasedAt: old },
       ]),
+      saved_materials: makeCollection([]),
     });
 
-    const windowStart = new Date(now.getTime() - 10 * 24 * 60 * 60 * 1000); // 10 days ago
+    const windowStart = new Date(now.getTime() - 10 * 24 * 60 * 60 * 1000);
     const result = await getAnalytics("GCREATOR_DR", db, { from: windowStart, to: now });
 
-    // Only the "recent" purchase falls within the 10-day window
     assert.equal(result.monthlySales, 1);
-    // But totalSales is all-time
     assert.equal(result.totalSales, 2);
+  });
+
+  test("returns educator uploads, material activity, and saved-material interest", async () => {
+    const db = makeDb({
+      materials: makeCollection([
+        {
+          _id: "mat-uploaded",
+          userAddress: "GCREATOR_EDU",
+          title: "Educator Dashboard Notes",
+          visibility: "public",
+          views: 4,
+          downloads: 2,
+          reviewsCount: 1,
+        },
+        {
+          _id: "mat-private",
+          userAddress: "GCREATOR_EDU",
+          title: "Draft Pack",
+          visibility: "private",
+        },
+      ]),
+      purchases: makeCollection([
+        { materialId: "mat-uploaded", buyerAddress: "GBUYER_1", status: "settled", amount: "12", purchasedAt: new Date() },
+        { materialId: "mat-uploaded", buyerAddress: "GBUYER_2", status: "pending", amount: "12", purchasedAt: new Date() },
+      ]),
+      saved_materials: makeCollection([
+        { materialId: "mat-uploaded", walletAddress: "gbuyer_3", savedAt: new Date() },
+        { materialId: "mat-private", walletAddress: "gbuyer_4", savedAt: new Date() },
+      ]),
+    });
+
+    const result = await getAnalytics("GCREATOR_EDU", db);
+
+    assert.equal(result.uploadCount, 2);
+    assert.equal(result.publishedCount, 1);
+    assert.equal(result.draftCount, 1);
+    assert.equal(result.materialActivity, 7);
+    assert.equal(result.savedCount, 2);
+    assert.equal(result.learnerInterest, 3);
+    assert.equal(result.completedOrders, 1);
+    assert.equal(result.totalRevenue, 12);
   });
 });

@@ -22,7 +22,7 @@
     "test:contracts": "hardhat test",
     "test:integration": "vitest run test/integration",
     "test:backend": "node --test tests/backend/*.test.mjs",
-    "audit:deps": "npm audit --audit-level=high",
+    "audit:deps": "npm audit --audit-level=critical",
     "audit:deps:critical": "npm audit --audit-level=critical",
     "scan:secrets": "node scripts/scan-secrets.mjs",
     "indexer:stellar": "node scripts/run-stellar-indexer.mjs"

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Script from 'next/script';
 import useEarningsData from '../hooks/useEarningsData';
 import './EarningsAnalytics.css';
