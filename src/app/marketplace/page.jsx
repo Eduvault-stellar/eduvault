@@ -2,7 +2,7 @@
 
 "use client";
 
-import { useDeferredValue, useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -23,6 +23,7 @@ import { motion } from "framer-motion";
 import Navbar from "@/components/Navbar";
 import SaveMaterialButton from "@/components/materials/SaveMaterialButton";
 import RecentlyViewedMaterials from "@/components/materials/RecentlyViewedMaterials";
+import ResourceStatusBadge from "@/components/materials/ResourceStatusBadge";
 import { useMarketplaceMaterials } from "@/hooks/api/useMaterials";
 import { useCart } from "@/hooks/useCart";
 import { useComparison } from "@/hooks/useComparison";
@@ -183,68 +184,31 @@ export default function MarketPage() {
 
 				if (res.ok) {
 					const data = await res.json();
+					const normalized = normalizeSubjectOptions(data.subjects || data);
+					setSubjects(normalized.map((s) => s.label || s.id || String(s)));
+				}
+			} catch {
+				// keep default subjects on error
+			} finally {
+				setSubjectsLoading(false);
+			}
+		}
 
-function normalizeSortParam(value) {
-  switch (value) {
-    case "Popular":
-      return "popular";
-    case "Price: Low to High":
-      return "price_asc";
-    case "Price: High to Low":
-      return "price_desc";
-    default:
-      return SORT_OPTIONS.some((option) => option.id === value) ? value : "newest";
-  }
-}
+		loadSubjects();
+	}, []);
 
-function normalizeLicenseParam(value) {
-  if (!value) return "";
-  return LICENSE_OPTIONS.find((option) => option.id === value || option.value === value || option.label === value)?.id || "";
-}
+	// Sync filter state to URL for shareable links
+	useEffect(() => {
+		if (!hydrated) return;
 
-function getFileIcon(value) {
-  const type = String(value || "").toLowerCase();
+		const params = new URLSearchParams();
 
-  if (type.includes("word") || type.includes("doc")) {
-    return <FaFileWord className="text-blue-500" />;
-  }
-
-  if (type.includes("ppt") || type.includes("presentation") || type.includes("powerpoint")) {
-    return <FaFilePowerpoint className="text-orange-500" />;
-  }
-
-  if (type.includes("pdf")) {
-    return <FaFilePdf className="text-red-500" />;
-  }
-
-  return <FaFilePdf className="text-gray-500" />;
-}
-
-function getContentType(material) {
-  return material.fileType || material.contentType || material.mimeType || material.fileName || material.storageKey || "pdf";
-}
-
-function formatContentType(material) {
-  const value = String(getContentType(material)).toLowerCase();
-  if (value.includes("doc")) return "DOC";
-  if (value.includes("ppt") || value.includes("presentation")) return "PPT";
-  if (value.includes("xls") || value.includes("spreadsheet")) return "XLS";
-  if (value.includes("zip")) return "ZIP";
-  if (value.includes("text") || value.includes("txt")) return "TXT";
-  return "PDF";
-}
-
-function formatPrice(price) {
-  const amount = Number(price ?? 0);
-  if (!Number.isFinite(amount) || amount === 0) return "Free";
-  return `${amount} XLM`;
-}
-
-function formatRating(rating) {
-  const value = Number(rating);
-  return Number.isFinite(value) && value > 0 ? value.toFixed(1) : "New";
-}
-
+		if (searchQuery) params.set("search", searchQuery);
+		if (activeSubject && activeSubject !== "All") params.set("subject", activeSubject);
+		if (sortBy && sortBy !== "Popular") params.set("sortBy", sortBy);
+		if (minPrice) params.set("minPrice", minPrice);
+		if (maxPrice) params.set("maxPrice", maxPrice);
+		if (creator) params.set("creator", creator);
 		if (usageRights) params.set("usageRights", usageRights);
 
 		if (currentPage > 1) {
@@ -680,6 +644,8 @@ function formatRating(rating) {
 															"Anonymous"}
 													</Link>
 												</p>
+
+												<ResourceStatusBadge material={material} max={3} />
 
 												<p className="text-xs text-gray-400 line-clamp-2 leading-relaxed">
 													{material.shortSummary ||

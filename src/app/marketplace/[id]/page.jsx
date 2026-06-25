@@ -4,6 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { useState, useEffect } from "react";
 import { FaHeart, FaCheckCircle, FaClock, FaExclamationTriangle } from "react-icons/fa";
+import ResourceStatusBadge from "@/components/materials/ResourceStatusBadge";
 import { motion } from "framer-motion";
 import Navbar from "@/components/Navbar";
 import BuyNowModal from "./modals/BuyNowModal";
@@ -234,6 +235,7 @@ export default function MaterialDetailsPage() {
 									<h1 className="text-2xl md:text-3xl font-bold text-gray-900">
 										{material.title}
 									</h1>
+									<ResourceStatusBadge material={material} className="mt-1" />
 									<p className="text-gray-600 text-sm leading-relaxed">
 										{material.shortSummary || material.description || "Creator preview not shared yet."}
 									</p>

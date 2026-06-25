@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useAccount } from "wagmi";
 import { useUserMaterials, useUpdateMaterial } from "@/hooks/api/useMaterials";
 import { FaEdit, FaSave, FaTimes, FaSpinner, FaCheckCircle, FaExclamationTriangle } from "react-icons/fa";
+import ResourceStatusBadge from "@/components/materials/ResourceStatusBadge";
 import { EDITABLE_MATERIAL_FIELDS, IMMUTABLE_MATERIAL_FIELDS } from "@/lib/backend/schemaContracts";
 
 function EditModal({ material, isOpen, onClose }) {
@@ -259,6 +260,8 @@ export default function MyMaterialsPage() {
                 <h3 className="font-semibold text-gray-900 text-sm leading-snug mb-1 line-clamp-2">
                   {material.title}
                 </h3>
+
+                <ResourceStatusBadge material={material} max={3} className="mb-2" />
 
                 {material.description && (
                   <p className="text-xs text-gray-500 line-clamp-2 mb-3">{material.description}</p>
