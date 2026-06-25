@@ -9,6 +9,7 @@ import {
   isCompletedPurchaseStatus,
   normalizeBuyerAddress,
 } from "@/lib/purchases/access";
+import { broadcastPurchaseEvent } from '@/lib/webhooks/sender';
 
 export async function GET(req) {
   try {
@@ -98,6 +99,17 @@ export async function POST(req) {
 
       const purchase = await db.collection('purchases').findOne({ _id: existing._id });
       const access = await getMaterialAccessStatus(db, materialId, buyerAddress);
+
+      if (paymentCompleted) {
+        // Fire webhook asynchronously
+        broadcastPurchaseEvent(materialId, {
+          buyerAddress,
+          amount: amount ?? existing.amount,
+          asset: asset || existing.asset,
+          transactionHash: transactionHash || existing.transactionHash
+        });
+      }
+
       return NextResponse.json(
         { success: true, purchaseId: existing._id, purchase, access, transactionHash: purchase?.transactionHash },
         { status: 200 }
@@ -129,6 +141,9 @@ export async function POST(req) {
         purchaseId: String(result.insertedId),
         transactionHash: transactionHash || null,
       });
+
+      // Fire webhook asynchronously
+      broadcastPurchaseEvent(materialId, purchaseRecord);
     }
 
     return NextResponse.json(

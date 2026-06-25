@@ -11,10 +11,19 @@
  */
 import { NextResponse } from "next/server";
 import { isProtectedDashboardPath, verifyDashboardToken } from "@/lib/auth/session";
+import { logger } from "@/lib/logger";
 
 export async function proxy(req) {
   const token = req.cookies.get("auth_token")?.value;
   const { pathname } = req.nextUrl;
+
+  // Log all incoming requests handled by the proxy
+  logger.info({
+    method: req.method,
+    url: req.url,
+    pathname,
+    timestamp: new Date().toISOString()
+  }, 'Incoming request');
 
   if (!isProtectedDashboardPath(pathname)) {
     return NextResponse.next();
@@ -36,5 +45,5 @@ export async function proxy(req) {
 }
 
 export const config = {
-  matcher: ["/dashboard/:path*"],
+  matcher: ["/dashboard/:path*", "/api/:path*"],
 };
