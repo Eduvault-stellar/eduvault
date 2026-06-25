@@ -21,6 +21,22 @@ function truncateHash(hash) {
   return `${hash.slice(0, 8)}…${hash.slice(-6)}`;
 }
 
+function formatSpeed(bytesPerSec) {
+  if (!bytesPerSec) return "0 B/s";
+  const mb = bytesPerSec / (1024 * 1024);
+  if (mb >= 1) return `${mb.toFixed(1)} MB/s`;
+  const kb = bytesPerSec / 1024;
+  return `${kb.toFixed(1)} KB/s`;
+}
+
+function formatETA(seconds) {
+  if (seconds === null || isNaN(seconds) || seconds === Infinity) return "Estimating...";
+  if (seconds < 60) return `${Math.floor(seconds)}s left`;
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  return `${m}m ${s}s left`;
+}
+
 // ─── Skeleton card ────────────────────────────────────────────────────────────
 function SkeletonCard() {
   return (
@@ -62,28 +78,90 @@ function EmptyState() {
 function PurchasedMaterialCard({ item }) {
   const [downloading, setDownloading] = useState(false);
   const [downloadError, setDownloadError] = useState(null);
+  const [progress, setProgress] = useState(null);
 
   const handleDownload = useCallback(async () => {
     setDownloading(true);
     setDownloadError(null);
+    setProgress({ percent: 0, speed: 0, eta: null });
     try {
       const res = await fetch(`/api/materials/download/${item.materialId}`);
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.error || "Download failed");
       }
-      const { downloadUrl, title } = await res.json();
-      // Open in new tab — browser handles PDF/image inline or triggers download
+      const { downloadUrl, title: originalTitle } = await res.json();
+      const title = originalTitle || "material";
+
+      const response = await fetch(downloadUrl);
+      if (!response.ok) {
+        throw new Error("Failed to connect to storage gateway");
+      }
+
+      const contentLength = response.headers.get("Content-Length");
+      const totalBytes = contentLength ? parseInt(contentLength, 10) : null;
+
+      let loadedBytes = 0;
+      const startTime = Date.now();
+      let lastReportTime = startTime;
+      let lastReportBytes = 0;
+
+      if (!response.body) {
+        throw new Error("ReadableStream not supported by the browser");
+      }
+
+      const reader = response.body.getReader();
+      const chunks = [];
+
+      while (true) {
+        const { done, value } = await reader.read();
+
+        if (done) {
+          break;
+        }
+
+        chunks.push(value);
+        loadedBytes += value.length;
+
+        const now = Date.now();
+        if (now - lastReportTime > 250) {
+          const timeDiff = (now - lastReportTime) / 1000;
+          const bytesDiff = loadedBytes - lastReportBytes;
+          const speed = bytesDiff / timeDiff;
+
+          let percent = 0;
+          let eta = null;
+
+          if (totalBytes) {
+            percent = Math.floor((loadedBytes / totalBytes) * 100);
+            const remainingBytes = totalBytes - loadedBytes;
+            eta = speed > 0 ? remainingBytes / speed : null;
+          }
+
+          setProgress({ percent, speed, eta });
+          lastReportTime = now;
+          lastReportBytes = loadedBytes;
+        }
+      }
+
+      setProgress({ percent: 100, speed: 0, eta: 0 });
+
+      const blob = new Blob(chunks, {
+        type: response.headers.get("Content-Type") || "application/octet-stream",
+      });
+      const objectUrl = URL.createObjectURL(blob);
+
       const anchor = document.createElement("a");
-      anchor.href = downloadUrl;
-      anchor.target = "_blank";
-      anchor.rel = "noopener noreferrer";
-      anchor.download = title || "material";
+      anchor.href = objectUrl;
+      anchor.download = title;
       anchor.click();
+
+      setTimeout(() => URL.revokeObjectURL(objectUrl), 10000);
     } catch (err) {
       setDownloadError(err.message);
     } finally {
       setDownloading(false);
+      setTimeout(() => setProgress(null), 2000);
     }
   }, [item.materialId]);
 
@@ -147,18 +225,36 @@ function PurchasedMaterialCard({ item }) {
           )}
 
           {/* Actions */}
-          <button
-            onClick={handleDownload}
-            disabled={downloading}
-            className="w-full flex items-center justify-center gap-2 py-2 px-4 bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white text-sm font-medium rounded-lg transition-colors"
-          >
-            {downloading ? (
-              <FaSpinner className="animate-spin" size={14} />
-            ) : (
-              <FaDownload size={14} />
-            )}
-            {downloading ? "Preparing…" : "Download / View"}
-          </button>
+          {progress && downloading ? (
+            <div className="w-full mb-1">
+              <div className="flex justify-between text-xs text-gray-500 mb-1">
+                <span>{formatSpeed(progress.speed)}</span>
+                <span>{formatETA(progress.eta)}</span>
+              </div>
+              <div className="w-full bg-gray-200 rounded-full h-2 mb-1 overflow-hidden relative">
+                <div 
+                  className="bg-blue-600 h-2 rounded-full transition-all duration-300"
+                  style={{ width: `${progress.percent}%` }}
+                />
+              </div>
+              <div className="text-center text-xs font-medium text-blue-600">
+                {progress.percent}% Completed
+              </div>
+            </div>
+          ) : (
+            <button
+              onClick={handleDownload}
+              disabled={downloading}
+              className="w-full flex items-center justify-center gap-2 py-2 px-4 bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white text-sm font-medium rounded-lg transition-colors"
+            >
+              {downloading ? (
+                <FaSpinner className="animate-spin" size={14} />
+              ) : (
+                <FaDownload size={14} />
+              )}
+              {downloading ? "Preparing…" : "Download / View"}
+            </button>
+          )}
         </div>
       </div>
     </div>

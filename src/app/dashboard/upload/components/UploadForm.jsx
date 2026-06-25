@@ -9,6 +9,7 @@ import { WalletStatus } from "@/providers/WalletProvider";
 import { useUploadFile, useCreateMaterial } from "@/hooks/api/useMaterials";
 import { getCroppedImageBlob } from "./cropImage";
 import TransactionStatusPanel from "@/components/transactions/TransactionStatusPanel";
+import DragDropUpload from "@/components/DragDropUpload";
 import { useTransactionCenter } from "@/providers/TransactionProvider";
 import { TransactionStatus } from "@/lib/transactions/transaction";
 
@@ -48,10 +49,10 @@ export default function UploadForm() {
   const handleDocChange = (e) => {
     const file = e.target.files?.[0];
     if (file) {
-      if (file.size > 10 * 1024 * 1024) {
+      if (file.size > 50 * 1024 * 1024) {
         setFieldErrors((prev) => ({
           ...prev,
-          file: `File size ${(file.size / (1024 * 1024)).toFixed(2)}MB exceeds the 10MB limit.`,
+          file: `File size ${(file.size / (1024 * 1024)).toFixed(2)}MB exceeds the 50MB limit.`,
         }));
         return;
       }
@@ -68,6 +69,18 @@ export default function UploadForm() {
   const handleThumbChange = (e) => {
     const file = e.target.files?.[0];
     if (file) {
+      if (file.size > 5 * 1024 * 1024) {
+        setFieldErrors((prev) => ({
+          ...prev,
+          thumb: `File size ${(file.size / (1024 * 1024)).toFixed(2)}MB exceeds the 5MB limit.`,
+        }));
+        return;
+      }
+      setFieldErrors((prev) => {
+        const next = { ...prev };
+        delete next.thumb;
+        return next;
+      });
       setThumbFile(file);
       setThumbPreview(URL.createObjectURL(file));
       setShowCropper(true);
@@ -88,8 +101,11 @@ export default function UploadForm() {
     if (!docFile) {
       errors.file = "Please upload a document file.";
     }
-    if (price && (isNaN(Number(price)) || Number(price) < 0)) {
-      errors.price = "Price must be a positive number or 0.";
+    if (price) {
+      const priceNum = Number(price);
+      if (isNaN(priceNum) || priceNum < 0.1) {
+        errors.price = "Price must be at least 0.1 XLM.";
+      }
     }
 
     if (Object.keys(errors).length > 0) {
@@ -218,7 +234,7 @@ export default function UploadForm() {
           value={title}
           onChange={(e) => setTitle(e.target.value)}
           placeholder="e.g. ECO 304 - Development Economics Lecture Notes"
-          className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-blue-100 focus:border-blue-500"
+          className={`w-full border rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-blue-100 focus:border-blue-500 ${fieldErrors.title ? "border-red-500" : "border-gray-300"}`}
           maxLength={160}
           required
           aria-describedby={fieldErrors.title ? "title-error" : undefined}
@@ -236,7 +252,7 @@ export default function UploadForm() {
           placeholder="Comprehensive lecture notes covering key development theories and examples."
           rows={3}
           maxLength={5000}
-          className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm resize-none focus:ring-2 focus:ring-blue-100 focus:border-blue-500"
+          className={`w-full border rounded-md px-3 py-2 text-sm resize-none focus:ring-2 focus:ring-blue-100 focus:border-blue-500 ${fieldErrors.description ? "border-red-500" : "border-gray-300"}`}
           aria-describedby={fieldErrors.description ? "description-error" : undefined}
         />
         {fieldErrors.description && (
@@ -245,20 +261,28 @@ export default function UploadForm() {
       </div>
 
       <div className="mb-5">
-        <label className="block text-sm font-medium mb-2">Thumbnail Image</label>
+        <label className="block text-sm font-medium mb-2">Cover Image</label>
         <div className="flex flex-col gap-4">
-          <input type="file" accept="image/*" onChange={handleThumbChange} className="text-sm" />
+          {!thumbPreview && (
+            <DragDropUpload
+              onFileSelect={(file) => handleThumbChange({ target: { files: [file] } })}
+              error={fieldErrors.thumb}
+            />
+          )}
+          {fieldErrors.thumb && (
+            <p id="thumb-error" className="text-red-600 text-xs mt-1">{fieldErrors.thumb}</p>
+          )}
           {thumbPreview && showCropper && (
             <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
               <p className="text-xs text-gray-600 mb-2">
-                Crop thumbnail (locked 4:3 ratio for marketplace cards)
+                Crop cover image (locked 16:9 ratio for marketplace cards)
               </p>
               <div className="relative h-56 w-full overflow-hidden rounded-md bg-gray-900">
                 <Cropper
                   image={thumbPreview}
                   crop={thumbCrop}
                   zoom={thumbZoom}
-                  aspect={4 / 3}
+                  aspect={16 / 9}
                   onCropChange={setThumbCrop}
                   onZoomChange={setThumbZoom}
                   onCropComplete={(_, croppedAreaPixels) =>
@@ -290,9 +314,9 @@ export default function UploadForm() {
             <div className="flex items-center gap-4">
               <Image
                 src={thumbPreview}
-                alt="Final Thumbnail Preview"
-                width={128}
-                height={96}
+                alt="Final Cover Preview"
+                width={160}
+                height={90}
                 className="rounded object-cover border"
               />
               <button
@@ -300,7 +324,18 @@ export default function UploadForm() {
                 onClick={() => setShowCropper(true)}
                 className="rounded-md border border-gray-300 px-3 py-2 text-xs hover:bg-gray-100"
               >
-                Re-crop thumbnail
+                Re-crop cover
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setThumbFile(null);
+                  setThumbPreview(null);
+                  setShowCropper(false);
+                }}
+                className="rounded-md border border-gray-300 px-3 py-2 text-xs hover:bg-gray-100 text-red-600"
+              >
+                Remove
               </button>
             </div>
           )}
@@ -310,15 +345,15 @@ export default function UploadForm() {
       <div className="mb-5">
         <label className="block text-sm font-medium mb-2">Upload Your File</label>
         <p className="text-xs text-gray-500 mb-2">
-          Max file size: 10MB. Accepted types: PDF, DOC, DOCX, PPT, PPTX, XLS, XLSX, TXT, ZIP.
+          Max file size: 50MB. Accepted types: PDF, ZIP, EPUB, MP4.
         </p>
-        <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-blue-400 transition">
+        <div className={`border-2 border-dashed rounded-lg p-6 text-center transition ${fieldErrors.file ? "border-red-500 hover:border-red-600 bg-red-50" : "border-gray-300 hover:border-blue-400"}`}>
           <input
             type="file"
             id="file-upload"
             className="hidden"
             onChange={handleDocChange}
-            accept=".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,.zip"
+            accept=".pdf,.zip,.epub,.mp4"
             aria-label="Upload document file"
             aria-describedby={fieldErrors.file ? "file-error" : undefined}
           />
@@ -334,7 +369,7 @@ export default function UploadForm() {
                 <>
                   Tap to Upload{" "}
                   <span className="text-gray-400">
-                    (.pdf, .docx, .pptx, .zip | 10MB max)
+                    (.pdf, .zip, .epub, .mp4 | 50MB max)
                   </span>
                 </>
               )}
@@ -361,7 +396,7 @@ export default function UploadForm() {
             placeholder="amount"
             min="0"
             step="0.01"
-            className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-blue-100 focus:border-blue-500"
+            className={`w-full border rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-blue-100 focus:border-blue-500 ${fieldErrors.price ? "border-red-500" : "border-gray-300"}`}
             aria-describedby={fieldErrors.price ? "price-error" : undefined}
           />
           {fieldErrors.price && (

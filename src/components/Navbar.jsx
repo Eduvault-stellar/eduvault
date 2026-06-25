@@ -11,7 +11,7 @@ import { useWallet } from "@/hooks/useWallet";
 import { useCart } from "@/hooks/useCart";
 import ThemeToggle from "./ThemeToggle";
 import { WalletStatus } from "@/providers/WalletProvider";
-import { FaShoppingCart, FaExternalLinkAlt } from "react-icons/fa";
+import { FaShoppingCart, FaExternalLinkAlt, FaCopy, FaCheck } from "react-icons/fa";
 import { getExplorerAccountUrl } from "@/lib/config/chain";
 
 export default function Navbar() {
@@ -19,6 +19,15 @@ export default function Navbar() {
 	const [scrolled, setScrolled] = useState(false);
 	const router = useRouter();
 	const { cartItems, setIsCartOpen } = useCart();
+	const [copied, setCopied] = useState(false);
+
+	const handleCopy = () => {
+		if (address) {
+			navigator.clipboard.writeText(address);
+			setCopied(true);
+			setTimeout(() => setCopied(false), 2000);
+		}
+	};
 
 	const {
 		address,
@@ -127,6 +136,20 @@ export default function Navbar() {
 								</button>
 
 								<div className="absolute right-0 mt-3 w-48 bg-white rounded-2xl shadow-xl border border-gray-100 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50 p-2 overflow-hidden">
+									<div className="px-4 py-2 border-b border-gray-100 mb-1">
+										<span className="text-xs font-bold text-gray-500 uppercase tracking-wider">Network</span>
+										<div className="flex items-center gap-1.5 mt-0.5">
+											<div className="w-1.5 h-1.5 bg-green-500 rounded-full"></div>
+											<span className="text-sm font-semibold text-gray-800">Testnet</span>
+										</div>
+									</div>
+									<button
+										onClick={handleCopy}
+										className="flex items-center justify-between w-full text-left px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 rounded-xl transition-colors"
+									>
+										Copy Address
+										{copied ? <FaCheck className="text-green-500" size={12} /> : <FaCopy className="text-gray-400" size={12} />}
+									</button>
 									<Link
 										href="/dashboard"
 										className="flex items-center px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 rounded-xl transition-colors"
@@ -143,7 +166,7 @@ export default function Navbar() {
 									</a>
 									<button
 										onClick={disconnect}
-										className="flex items-center w-full text-left px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 rounded-xl transition-colors"
+										className="flex items-center w-full text-left px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 rounded-xl transition-colors mt-1"
 									>
 										Disconnect
 									</button>
@@ -191,23 +214,35 @@ export default function Navbar() {
 											{parseFloat(balance).toFixed(2)} {balanceSymbol}
 										</p>
 									)}
-									<div className="flex gap-2 w-full">
-										<Link
-											href="/dashboard"
-											onClick={() => setMenuOpen(false)}
-											className="flex-1 bg-stellar-dark text-white text-sm font-bold py-3 px-4 rounded-2xl text-center"
-										>
-											Dashboard
-										</Link>
+									<div className="flex gap-2 w-full flex-col">
 										<button
-											onClick={() => {
-												setMenuOpen(false);
-												disconnect();
-											}}
-											className="flex-1 bg-red-50 text-red-600 text-sm font-bold py-3 px-4 rounded-2xl"
+											onClick={handleCopy}
+											className="flex items-center justify-center gap-2 flex-1 bg-gray-50 hover:bg-gray-100 text-gray-700 text-sm font-bold py-3 px-4 rounded-2xl transition-colors"
 										>
-											Log Out
+											{copied ? (
+												<><FaCheck className="text-green-500" size={12} /> Copied!</>
+											) : (
+												<><FaCopy className="text-gray-500" size={12} /> Copy Address</>
+											)}
 										</button>
+										<div className="flex gap-2 w-full">
+											<Link
+												href="/dashboard"
+												onClick={() => setMenuOpen(false)}
+												className="flex-1 bg-stellar-dark text-white text-sm font-bold py-3 px-4 rounded-2xl text-center"
+											>
+												Dashboard
+											</Link>
+											<button
+												onClick={() => {
+													setMenuOpen(false);
+													disconnect();
+												}}
+												className="flex-1 bg-red-50 text-red-600 text-sm font-bold py-3 px-4 rounded-2xl"
+											>
+												Log Out
+											</button>
+										</div>
 									</div>
 								</div>
 							) : (
