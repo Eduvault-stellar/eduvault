@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 
 const STORAGE_KEY = "eduvault_notifications";
 
@@ -15,6 +15,7 @@ const WELCOME = {
 
 function loadFromStorage() {
   try {
+    if (typeof window === "undefined") return null;
     const raw = window.localStorage.getItem(STORAGE_KEY);
     return raw ? JSON.parse(raw) : null;
   } catch {
@@ -24,6 +25,7 @@ function loadFromStorage() {
 
 function saveToStorage(notifications) {
   try {
+    if (typeof window === "undefined") return;
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(notifications));
   } catch {
     // Silently fail if storage is unavailable
@@ -32,7 +34,9 @@ function saveToStorage(notifications) {
 
 export function useNotifications() {
   const [notifications, setNotifications] = useState([]);
+  const isInitialized = useRef(false);
 
+  // Handle Initial Load safely on Mount
   useEffect(() => {
     const stored = loadFromStorage();
     if (stored && Array.isArray(stored) && stored.length > 0) {
@@ -42,10 +46,12 @@ export function useNotifications() {
       setNotifications(initial);
       saveToStorage(initial);
     }
+    isInitialized.current = true;
   }, []);
 
+  // Sync back to storage only after initial mount initialization has occurred
   useEffect(() => {
-    if (notifications.length > 0) {
+    if (isInitialized.current && notifications.length > 0) {
       saveToStorage(notifications);
     }
   }, [notifications]);
@@ -64,7 +70,7 @@ export function useNotifications() {
 
   const markRead = useCallback((id) => {
     setNotifications((prev) =>
-      prev.map((n) => (n.id === id ? { ...n, read: true } : n))
+      prev.map((n) => (n.id === id ? { ...n, read: true } : n)),
     );
   }, []);
 

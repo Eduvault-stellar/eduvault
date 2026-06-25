@@ -176,7 +176,7 @@ export default function OnboardingPage() {
                 How will you use EduVault?
               </h2>
               <p className="text-gray-500">
-                We'll customize your experience based on your role.
+                We&apos;ll customize your experience based on your role.
               </p>
             </div>
             <div className="space-y-3">
@@ -204,7 +204,9 @@ export default function OnboardingPage() {
                       : "border-gray-200 bg-white hover:border-gray-300"
                   }`}
                 >
-                  <h3 className="font-semibold text-gray-900">{option.title}</h3>
+                  <h3 className="font-semibold text-gray-900">
+                    {option.title}
+                  </h3>
                   <p className="text-sm text-gray-500 mt-1">{option.desc}</p>
                 </button>
               ))}
@@ -226,7 +228,9 @@ export default function OnboardingPage() {
                 <FaUser />
               </div>
               <h2 className="text-2xl md:text-3xl font-bold text-gray-900">
-                {accountType === "institution" ? "Institution Setup" : "Tell us about yourself"}
+                {accountType === "institution"
+                  ? "Institution Setup"
+                  : "Tell us about yourself"}
               </h2>
               <p className="text-gray-500">
                 {accountType === "institution"
@@ -259,7 +263,9 @@ export default function OnboardingPage() {
                         aria-required="true"
                         aria-invalid={!!formErrors.institutionName}
                         className={`w-full pl-10 pr-4 py-3 rounded-xl border bg-white text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 transition ${
-                          formErrors.institutionName ? "border-red-400" : "border-gray-200"
+                          formErrors.institutionName
+                            ? "border-red-400"
+                            : "border-gray-200"
                         }`}
                       />
                     </div>
@@ -355,13 +361,21 @@ export default function OnboardingPage() {
                       placeholder="Dr. Jane Smith"
                       aria-required="true"
                       aria-invalid={!!formErrors.fullName}
-                      aria-describedby={formErrors.fullName ? "fullName-error" : undefined}
+                      aria-describedby={
+                        formErrors.fullName ? "fullName-error" : undefined
+                      }
                       className={`w-full px-4 py-3 rounded-xl border bg-white text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 transition ${
-                        formErrors.fullName ? "border-red-400" : "border-gray-200"
+                        formErrors.fullName
+                          ? "border-red-400"
+                          : "border-gray-200"
                       }`}
                     />
                     {formErrors.fullName && (
-                      <p id="fullName-error" className="mt-1 text-sm text-red-500 flex items-center gap-1" role="alert">
+                      <p
+                        id="fullName-error"
+                        className="mt-1 text-sm text-red-500 flex items-center gap-1"
+                        role="alert"
+                      >
                         <FaExclamationCircle className="w-3 h-3" />
                         {formErrors.fullName}
                       </p>
@@ -455,8 +469,8 @@ export default function OnboardingPage() {
               </h2>
               <p className="text-gray-500 leading-relaxed">
                 Link your Stellar wallet to receive payments, sign transactions,
-                and establish immutable creator attribution for every material you
-                publish.
+                and establish immutable creator attribution for every material
+                you publish.
               </p>
             </div>
 
@@ -482,7 +496,10 @@ export default function OnboardingPage() {
                 </div>
               ) : isWalletError ? (
                 <div className="space-y-3">
-                  <div className="text-red-600 bg-red-50 rounded-lg px-4 py-3 text-sm flex items-center gap-2" role="alert">
+                  <div
+                    className="text-red-600 bg-red-50 rounded-lg px-4 py-3 text-sm flex items-center gap-2"
+                    role="alert"
+                  >
                     <FaExclamationCircle className="w-4 h-4 shrink-0" />
                     Wallet connection failed. Please try again.
                   </div>
@@ -503,7 +520,8 @@ export default function OnboardingPage() {
                     Connect Stellar Wallet
                   </button>
                   <p className="text-xs text-gray-400">
-                    Securely sign in with your preferred Stellar wallet provider.
+                    Securely sign in with your preferred Stellar wallet
+                    provider.
                   </p>
                 </div>
               )}
@@ -532,10 +550,13 @@ export default function OnboardingPage() {
                 <FaUpload />
               </div>
               <h2 className="text-2xl md:text-3xl font-bold text-gray-900">
-                {accountType === "institution" ? "Using the Platform" : "Publishing Your Resources"}
+                {accountType === "institution"
+                  ? "Using the Platform"
+                  : "Publishing Your Resources"}
               </h2>
               <p className="text-gray-500 leading-relaxed">
-                Learn how to publish and manage your educational materials on EduVault.
+                Learn how to publish and manage your educational materials on
+                EduVault.
               </p>
             </div>
 
@@ -544,7 +565,7 @@ export default function OnboardingPage() {
                 {
                   step: "1",
                   title: "Upload Your Material",
-                  desc: "Go to your Dashboard and click \"Upload Material.\" Add a title, description, subject, and attach your file (PDF, DOCX, or PPTX up to 50MB).",
+                  desc: 'Go to your Dashboard and click "Upload Material." Add a title, description, subject, and attach your file (PDF, DOCX, or PPTX up to 50MB).',
                 },
                 {
                   step: "2",
@@ -559,7 +580,7 @@ export default function OnboardingPage() {
                 {
                   step: "4",
                   title: "Manage Listings",
-                  desc: "Edit titles, update prices, or unpublish materials anytime from the \"My Materials\" section in your dashboard.",
+                  desc: 'Edit titles, update prices, or unpublish materials anytime from the "My Materials" section in your dashboard.',
                 },
               ].map((item) => (
                 <div
@@ -591,7 +612,9 @@ export default function OnboardingPage() {
                 <FaShieldAlt />
               </div>
               <h2 className="text-2xl md:text-3xl font-bold text-gray-900">
-                {accountType === "institution" ? "Account Security" : "Creator Attribution"}
+                {accountType === "institution"
+                  ? "Account Security"
+                  : "Creator Attribution"}
               </h2>
               <p className="text-gray-500 leading-relaxed">
                 Every material you upload to EduVault is permanently linked to
@@ -704,17 +727,18 @@ export default function OnboardingPage() {
                 {createProfile.isPending
                   ? "Saving your profile..."
                   : createProfile.isError
-                  ? "Something went wrong"
-                  : "You're all set!"}
+                    ? "Something went wrong"
+                    : "You're all set!"}
               </h2>
               <p className="text-gray-500 leading-relaxed">
                 {createProfile.isPending
                   ? `Just a moment while we set up your ${accountType === "institution" ? "institution" : "creator"} account.`
                   : createProfile.isError
-                  ? createProfile.error?.message || "Failed to create your profile. Please try again."
-                  : accountType === "institution"
-                  ? "Your institution is ready. Start managing cohorts and materials."
-                  : "Your creator profile is ready. Start uploading materials and build your reputation on EduVault."}
+                    ? createProfile.error?.message ||
+                      "Failed to create your profile. Please try again."
+                    : accountType === "institution"
+                      ? "Your institution is ready. Start managing cohorts and materials."
+                      : "Your creator profile is ready. Start uploading materials and build your reputation on EduVault."}
               </p>
             </div>
 
@@ -763,7 +787,15 @@ export default function OnboardingPage() {
   const isLastStep = step === 6;
   const isFirstStep = step === 0;
   const canProceed =
-    step === 3 ? isConnected : step === 2 ? (accountType === "institution" ? formData.institutionName.trim().length > 0 : formData.fullName.trim().length > 0) : step === 1 ? accountType : true;
+    step === 3
+      ? isConnected
+      : step === 2
+        ? accountType === "institution"
+          ? formData.institutionName.trim().length > 0
+          : formData.fullName.trim().length > 0
+        : step === 1
+          ? accountType
+          : true;
 
   return (
     <div className="min-h-screen bg-[#fffaf6]">
@@ -772,7 +804,14 @@ export default function OnboardingPage() {
       <main className="pt-28 pb-16 px-4">
         <div className="max-w-2xl mx-auto">
           {/* Progress indicator */}
-          <div className="mb-10" role="progressbar" aria-valuenow={step + 1} aria-valuemin={1} aria-valuemax={6} aria-label={`Step ${step + 1} of 6: ${STEPS[step].title}`}>
+          <div
+            className="mb-10"
+            role="progressbar"
+            aria-valuenow={step + 1}
+            aria-valuemin={1}
+            aria-valuemax={6}
+            aria-label={`Step ${step + 1} of 6: ${STEPS[step].title}`}
+          >
             <div className="flex items-center justify-between mb-3">
               {STEPS.map((s, i) => (
                 <div key={i} className="flex items-center">
@@ -792,15 +831,11 @@ export default function OnboardingPage() {
                         i < step
                           ? "bg-blue-600 text-white"
                           : i === step
-                          ? "bg-blue-600 text-white ring-4 ring-blue-100"
-                          : "bg-gray-200 text-gray-400"
+                            ? "bg-blue-600 text-white ring-4 ring-blue-100"
+                            : "bg-gray-200 text-gray-400"
                       }`}
                     >
-                      {i < step ? (
-                        <FaCheckCircle className="w-4 h-4" />
-                      ) : (
-                        s.num
-                      )}
+                      {i < step ? <FaCheckCircle className="w-4 h-4" /> : s.num}
                     </div>
                     <span
                       className={`text-xs font-semibold hidden sm:block ${
@@ -868,11 +903,15 @@ export default function OnboardingPage() {
                     !canProceed
                   }
                   className={`inline-flex items-center gap-1.5 px-6 py-3 rounded-xl text-sm font-semibold transition shadow-sm ${
-                    (step === 3 && !isConnected) || (step === 5 && createProfile.isPending) || !canProceed
+                    (step === 3 && !isConnected) ||
+                    (step === 5 && createProfile.isPending) ||
+                    !canProceed
                       ? "bg-gray-300 text-gray-500 cursor-not-allowed"
                       : "bg-blue-600 text-white hover:bg-blue-700"
                   }`}
-                  aria-label={step === 5 ? "Complete onboarding" : "Go to next step"}
+                  aria-label={
+                    step === 5 ? "Complete onboarding" : "Go to next step"
+                  }
                 >
                   {step === 5 ? (
                     createProfile.isPending ? (
