@@ -9,6 +9,11 @@ const BASIS_POINTS: u32 = 10_000;
 const MAX_PLATFORM_FEE_BPS: u32 = 1_000;
 const MAX_PAYOUT_RECIPIENTS: u32 = 5;
 
+/// Volume-tier discounted fee rates (basis points).
+/// Tier 1: 2.5 %, Tier 2: 1.5 %.
+const TIER1_FEE_BPS: u32 = 250;
+const TIER2_FEE_BPS: u32 = 150;
+
 /// Material status from registry (replicated here to avoid circular deps)
 #[contracttype]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -16,6 +21,18 @@ pub enum MaterialStatus {
     Active = 0,
     Paused = 1,
     Archived = 2,
+}
+
+/// Volume tier assigned to a creator that controls the platform fee rate they pay.
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CreatorTier {
+    /// Standard rate — uses the global `platform_fee_bps` from `PlatformConfig`.
+    Default = 0,
+    /// High-volume tier: 2.5 % platform fee.
+    Tier1 = 1,
+    /// Premium-volume tier: 1.5 % platform fee.
+    Tier2 = 2,
 }
 
 /// Classification of a Stellar asset accepted by the purchase manager.
@@ -105,6 +122,10 @@ enum DataKey {
     AllowedAsset(Address),
     PurchaseNonce,
     Entitlement((BytesN<32>, Address)),
+    /// Address awaiting confirmation in a two-step admin transfer (#378).
+    PendingAdmin,
+    /// Volume tier assigned to a creator for discounted fee calculation (#381).
+    CreatorTier(Address),
 }
 
 /// Contract errors
@@ -136,6 +157,8 @@ pub enum PurchaseError {
     NotAuthorized = 40,
     InvalidTreasury = 41,
     UpgradeFailed = 42,
+    /// `accept_admin` called when no transfer is in progress (#378).
+    NoPendingAdminTransfer = 43,
 }
 
 /// Event: purchase.completed
@@ -188,6 +211,32 @@ pub struct PlatformConfigUpdatedEvent {
     pub treasury: Address,
     pub platform_fee_bps: u32,
     pub paused: bool,
+}
+
+/// Event: admin.transfer_initiated — emitted when a two-step admin transfer begins (#378).
+#[contractevent(topics = ["admin", "transfer_initiated"], data_format = "vec")]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AdminTransferInitiatedEvent {
+    #[topic]
+    pub from: Address,
+    pub pending_admin: Address,
+}
+
+/// Event: admin.transfer_accepted — emitted when the new admin completes the transfer (#378).
+#[contractevent(topics = ["admin", "transfer_accepted"], data_format = "vec")]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AdminTransferAcceptedEvent {
+    #[topic]
+    pub new_admin: Address,
+}
+
+/// Event: admin.creator_tier_updated — emitted when a creator's volume tier changes (#381).
+#[contractevent(topics = ["admin", "creator_tier_updated"], data_format = "vec")]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CreatorTierUpdatedEvent {
+    #[topic]
+    pub creator: Address,
+    pub tier: CreatorTier,
 }
 
 /// The PurchaseManager contract
@@ -403,9 +452,14 @@ impl PurchaseManager {
 
         validate_payout_shares(&material.payout_shares)?;
 
-        // Calculate payout amounts
+        // Calculate payout amounts.
+        // Effective fee rate respects any volume-tier discount assigned to the creator.
+        // Integer division truncates toward zero, so the creator never pays more than
+        // the stated rate — any sub-stroopa remainder stays with the seller.
         let gross = quote.amount;
-        let platform_fee = (gross * config.platform_fee_bps as i128) / BASIS_POINTS as i128;
+        let effective_fee_bps =
+            get_effective_fee_bps(&env, &material.creator, config.platform_fee_bps);
+        let platform_fee = (gross * effective_fee_bps as i128) / BASIS_POINTS as i128;
         let seller_net = gross - platform_fee;
 
         // Get purchase ID and increment nonce
@@ -675,9 +729,129 @@ impl PurchaseManager {
         env.deployer().update_current_contract_wasm(new_wasm_hash);
         Ok(())
     }
+
+    // ============== Admin Transfer (two-step, #378) ==============
+
+    /// Begin an admin ownership transfer.
+    ///
+    /// Stores `new_admin` as the pending admin and emits an event.  The
+    /// transfer is NOT complete until `new_admin` calls `accept_admin`.
+    pub fn transfer_admin(
+        env: Env,
+        admin: Address,
+        new_admin: Address,
+    ) -> Result<(), PurchaseError> {
+        admin.require_auth();
+        verify_admin(&env, &admin)?;
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::PendingAdmin, &new_admin);
+
+        AdminTransferInitiatedEvent {
+            from: admin,
+            pending_admin: new_admin,
+        }
+        .publish(&env);
+
+        Ok(())
+    }
+
+    /// Complete an admin ownership transfer initiated by `transfer_admin`.
+    ///
+    /// Only the address stored as `PendingAdmin` may call this.  On success
+    /// the caller becomes the sole admin and the pending slot is cleared.
+    pub fn accept_admin(env: Env, new_admin: Address) -> Result<(), PurchaseError> {
+        new_admin.require_auth();
+
+        let pending: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PendingAdmin)
+            .ok_or(PurchaseError::NoPendingAdminTransfer)?;
+
+        if pending != new_admin {
+            return Err(PurchaseError::NotAuthorized);
+        }
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Admin, &new_admin);
+        env.storage()
+            .persistent()
+            .remove(&DataKey::PendingAdmin);
+
+        AdminTransferAcceptedEvent {
+            new_admin: new_admin.clone(),
+        }
+        .publish(&env);
+
+        Ok(())
+    }
+
+    /// Return the pending admin address, if a transfer is in progress.
+    pub fn get_pending_admin(env: Env) -> Option<Address> {
+        env.storage().persistent().get(&DataKey::PendingAdmin)
+    }
+
+    // ============== Creator Volume Tiers (#381) ==============
+
+    /// Assign a volume tier to a creator (admin only).
+    ///
+    /// The tier controls the platform fee rate applied when the creator's
+    /// materials are purchased.  Use `CreatorTier::Default` to revert a
+    /// creator back to the global `platform_fee_bps`.
+    pub fn set_creator_tier(
+        env: Env,
+        admin: Address,
+        creator: Address,
+        tier: CreatorTier,
+    ) -> Result<(), PurchaseError> {
+        admin.require_auth();
+        verify_admin(&env, &admin)?;
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::CreatorTier(creator.clone()), &tier);
+
+        CreatorTierUpdatedEvent {
+            creator,
+            tier,
+        }
+        .publish(&env);
+
+        Ok(())
+    }
+
+    /// Return the volume tier assigned to a creator.
+    /// Returns `CreatorTier::Default` when no tier has been set.
+    pub fn get_creator_tier(env: Env, creator: Address) -> CreatorTier {
+        env.storage()
+            .persistent()
+            .get(&DataKey::CreatorTier(creator))
+            .unwrap_or(CreatorTier::Default)
+    }
 }
 
 // ============== Internal Functions ==============
+
+/// Return the effective platform fee rate for `creator`.
+///
+/// Tier-discounted rates take precedence over the global config fee.
+/// Integer truncation in the caller ensures the creator is never charged more
+/// than the stated rate.
+fn get_effective_fee_bps(env: &Env, creator: &Address, config_fee_bps: u32) -> u32 {
+    match env
+        .storage()
+        .persistent()
+        .get::<DataKey, CreatorTier>(&DataKey::CreatorTier(creator.clone()))
+        .unwrap_or(CreatorTier::Default)
+    {
+        CreatorTier::Default => config_fee_bps,
+        CreatorTier::Tier1 => TIER1_FEE_BPS,
+        CreatorTier::Tier2 => TIER2_FEE_BPS,
+    }
+}
 
 fn get_platform_config(env: &Env) -> Result<PlatformConfig, PurchaseError> {
     env.storage()
