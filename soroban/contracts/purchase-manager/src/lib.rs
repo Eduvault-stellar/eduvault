@@ -5,6 +5,8 @@ use soroban_sdk::{
     IntoVal, Symbol, Vec,
 };
 
+pub mod auth;
+
 const BASIS_POINTS: u32 = 10_000;
 const MAX_PLATFORM_FEE_BPS: u32 = 1_000;
 const MAX_PAYOUT_RECIPIENTS: u32 = 5;
@@ -100,7 +102,6 @@ pub struct EntitlementRecord {
 #[contracttype]
 #[derive(Clone)]
 enum DataKey {
-    Admin,
     PlatformConfig,
     AllowedAsset(Address),
     PurchaseNonce,
@@ -328,7 +329,7 @@ impl PurchaseManager {
             oracle: None,
         };
 
-        env.storage().persistent().set(&DataKey::Admin, &admin);
+        auth::set_admin_role(&env, &admin);
         env.storage()
             .persistent()
             .set(&DataKey::PlatformConfig, &config);
@@ -509,8 +510,7 @@ impl PurchaseManager {
         kind: AssetKind,
         enabled: bool,
     ) -> Result<(), PurchaseError> {
-        admin.require_auth();
-        verify_admin(&env, &admin)?;
+        auth::require_admin(&env, &admin)?;
 
         let info = AssetInfo { kind, enabled };
         env.storage()
@@ -536,8 +536,7 @@ impl PurchaseManager {
         platform_fee_bps: u32,
         paused: bool,
     ) -> Result<(), PurchaseError> {
-        admin.require_auth();
-        verify_admin(&env, &admin)?;
+        auth::require_admin(&env, &admin)?;
 
         // Validate platform fee
         if platform_fee_bps > MAX_PLATFORM_FEE_BPS {
@@ -589,8 +588,7 @@ impl PurchaseManager {
         admin: Address,
         oracle: Option<Address>,
     ) -> Result<(), PurchaseError> {
-        admin.require_auth();
-        verify_admin(&env, &admin)?;
+        auth::require_admin(&env, &admin)?;
 
         let mut config = get_platform_config(&env)?;
         config.oracle = oracle;
@@ -603,8 +601,7 @@ impl PurchaseManager {
 
     /// Update registry address (admin only, for migrations)
     pub fn set_registry(env: Env, admin: Address, registry: Address) -> Result<(), PurchaseError> {
-        admin.require_auth();
-        verify_admin(&env, &admin)?;
+        auth::require_admin(&env, &admin)?;
 
         let mut config = get_platform_config(&env)?;
         config.registry = registry;
@@ -619,8 +616,7 @@ impl PurchaseManager {
     /// Pause contract operations (admin only)
     /// When paused, all state-modifying functions will fail
     pub fn pause(env: Env, admin: Address) -> Result<(), PurchaseError> {
-        admin.require_auth();
-        verify_admin(&env, &admin)?;
+        auth::require_admin(&env, &admin)?;
 
         let mut config = get_platform_config(&env)?;
         config.paused = true;
@@ -643,8 +639,7 @@ impl PurchaseManager {
     /// Unpause contract operations (admin only)
     /// When unpaused, normal operations resume
     pub fn unpause(env: Env, admin: Address) -> Result<(), PurchaseError> {
-        admin.require_auth();
-        verify_admin(&env, &admin)?;
+        auth::require_admin(&env, &admin)?;
 
         let mut config = get_platform_config(&env)?;
         config.paused = false;
@@ -670,8 +665,7 @@ impl PurchaseManager {
         admin: Address,
         new_wasm_hash: BytesN<32>,
     ) -> Result<(), PurchaseError> {
-        admin.require_auth();
-        verify_admin(&env, &admin)?;
+        auth::require_admin(&env, &admin)?;
         env.deployer().update_current_contract_wasm(new_wasm_hash);
         Ok(())
     }
@@ -686,18 +680,6 @@ fn get_platform_config(env: &Env) -> Result<PlatformConfig, PurchaseError> {
         .ok_or(PurchaseError::NotAuthorized)
 }
 
-fn verify_admin(env: &Env, admin: &Address) -> Result<(), PurchaseError> {
-    let _ = get_platform_config(env)?;
-    let stored_admin: Address = env
-        .storage()
-        .persistent()
-        .get(&DataKey::Admin)
-        .ok_or(PurchaseError::NotAuthorized)?;
-    if &stored_admin != admin {
-        return Err(PurchaseError::NotAuthorized);
-    }
-    Ok(())
-}
 
 fn is_asset_allowed(env: &Env, asset: &Address) -> bool {
     env.storage()

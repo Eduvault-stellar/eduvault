@@ -1158,3 +1158,20 @@ fn purchase_fails_for_invalid_items() {
     let result = client.try_purchase(&buyer, &invalid_material_id, &asset, &1_000_000);
     assert_eq!(result, Err(Ok(PurchaseError::MaterialNotFound)));
 }
+
+#[test]
+fn rejects_unauthorized_platform_config_change() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let unauthorized_user = Address::generate(&env);
+    let registry = Address::generate(&env);
+    let treasury = Address::generate(&env);
+
+    let (_, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
+
+    let new_treasury = Address::generate(&env);
+    let result = client.try_set_platform_config(&unauthorized_user, &new_treasury, &600, &false);
+    assert_eq!(result, Err(Ok(PurchaseError::NotAuthorized)));
+}
