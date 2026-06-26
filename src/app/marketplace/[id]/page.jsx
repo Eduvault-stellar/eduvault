@@ -13,6 +13,8 @@ import {
 	FaListUl,
 	FaStickyNote,
 	FaImage,
+	FaHistory,
+	FaFlag,
 } from "react-icons/fa";
 import ResourceStatusBadge from "@/components/materials/ResourceStatusBadge";
 import { motion } from "framer-motion";
@@ -255,6 +257,7 @@ function PurchaseCard({
 	onDownload,
 	onRequestAccess,
 	onAddToCart,
+	onReport,
 }) {
 	// NOTE: avoid `overflow-hidden/clip` on any ancestor of this card or
 	// `lg:sticky` will silently stop working (browsers need an overflow-visible
@@ -314,11 +317,238 @@ function PurchaseCard({
 				</p>
 			) : null}
 
-			<div className="flex items-center gap-2 text-sm text-gray-500 pt-1 border-t border-gray-100">
-				<FaHeart className="text-pink-500" aria-hidden="true" />
-				<span>{material.likes || 0} likes</span>
+			<div className="flex items-center justify-between text-sm text-gray-500 pt-3 border-t border-gray-100">
+				<div className="flex items-center gap-2">
+					<FaHeart className="text-pink-500" aria-hidden="true" />
+					<span>{material.likes || 0} likes</span>
+				</div>
+				<button
+					type="button"
+					onClick={onReport}
+					className="flex items-center gap-1.5 text-gray-400 hover:text-red-600 transition duration-150 font-medium"
+				>
+					<FaFlag className="text-xs" aria-hidden="true" />
+					<span>Report quality issue</span>
+				</button>
 			</div>
 		</aside>
+	);
+}
+
+function RevisionHistoryPanel({ history, currentVersion }) {
+	return (
+		<section className="bg-white border border-gray-200 rounded-2xl p-5 sm:p-6 shadow-sm">
+			<div className="flex items-center gap-2 mb-4">
+				<FaHistory className="text-blue-600" aria-hidden="true" />
+				<h2 className="text-base sm:text-lg font-semibold text-gray-900">Revision History</h2>
+			</div>
+			{history.length === 0 ? (
+				<div className="text-sm text-gray-500 py-3">
+					No past edits recorded. This is the initial version (v1).
+				</div>
+			) : (
+				<div className="relative border-l border-gray-200 pl-4 ml-2 space-y-6">
+					{/* Current active version */}
+					<div className="relative">
+						<span className="absolute -left-[22px] top-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-blue-600 ring-4 ring-white" />
+						<div className="flex flex-col gap-1 text-sm">
+							<div className="flex flex-wrap items-center gap-2">
+								<span className="font-bold text-blue-700 text-xs uppercase px-2 py-0.5 rounded bg-blue-50 border border-blue-100">
+									v{currentVersion || 1} (Current)
+								</span>
+							</div>
+						</div>
+					</div>
+
+					{/* Previous versions */}
+					{history.map((entry, index) => {
+						const revVersion = entry.version || (history.length - index);
+						return (
+							<div key={entry._id || index} className="relative">
+								<span className="absolute -left-[22px] top-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-gray-300 ring-4 ring-white" />
+								<div className="flex flex-col gap-1 text-sm text-gray-600">
+									<div className="flex flex-wrap items-center gap-2">
+										<span className="font-bold text-gray-800 text-xs uppercase px-2 py-0.5 rounded bg-gray-100 border border-gray-200">
+											v{revVersion}
+										</span>
+										<span className="text-xs text-gray-400">
+											{entry.updatedAt ? new Date(entry.updatedAt).toLocaleDateString() : "Unknown Date"}
+										</span>
+									</div>
+									{entry.changeReason && (
+										<p className="mt-1 text-gray-700 bg-slate-50 border border-slate-100 rounded-lg p-2.5 italic text-xs leading-relaxed max-w-2xl">
+											&ldquo;{entry.changeReason}&rdquo;
+										</p>
+									)}
+									{entry.changes && Object.keys(entry.changes).length > 0 && (
+										<div className="mt-1 text-xs text-gray-400">
+											Modified: {Object.keys(entry.changes).join(", ")}
+										</div>
+									)}
+								</div>
+							</div>
+						);
+					})}
+				</div>
+			)}
+		</section>
+	);
+}
+
+function ReportModal({ isOpen, onClose, materialId, materialTitle }) {
+	const [reason, setReason] = useState("");
+	const [description, setDescription] = useState("");
+	const [submitting, setSubmitting] = useState(false);
+	const [submitted, setSubmitted] = useState(false);
+	const [error, setError] = useState("");
+
+	if (!isOpen) return null;
+
+	const reasons = [
+		"Inappropriate content",
+		"Copyright violation",
+		"Low quality / Unreadable",
+		"Spam / Advertising",
+		"Incorrect information",
+		"Other"
+	];
+
+	const handleSubmit = async (e) => {
+		e.preventDefault();
+		if (!reason) {
+			setError("Please select a reason for reporting.");
+			return;
+		}
+
+		setSubmitting(true);
+		setError("");
+
+		try {
+			const res = await fetch(`/api/materials/${materialId}/report`, {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json"
+				},
+				body: JSON.stringify({ reason, description })
+			});
+
+			const data = await res.json();
+			if (!res.ok) {
+				throw new Error(data.error || "Failed to submit report");
+			}
+
+			setSubmitted(true);
+		} catch (err) {
+			setError(err instanceof Error ? err.message : "Something went wrong. Please try again.");
+		} finally {
+			setSubmitting(false);
+		}
+	};
+
+	return (
+		<div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 p-4">
+			<div className="bg-white rounded-3xl p-6 max-w-md w-full shadow-xl border border-gray-100">
+				{submitted ? (
+					<div className="text-center py-6 space-y-4">
+						<div className="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-green-100 text-green-600">
+							<FaCheckCircle className="h-6 w-6" />
+						</div>
+						<h3 className="text-lg font-bold text-gray-900">Report Submitted</h3>
+						<p className="text-sm text-gray-500 leading-relaxed">
+							Thank you for your report. The listing has been flagged and is currently under admin review. We will investigate the issue.
+						</p>
+						<div className="mt-4 bg-slate-50 rounded-xl p-3 border border-slate-100 text-left">
+							<span className="text-[10px] uppercase font-bold tracking-wider text-slate-400 block">Moderation Queue</span>
+							<p className="text-xs text-slate-600 mt-1">
+								Status: <span className="font-semibold text-amber-600">Pending Review</span>
+							</p>
+							<p className="text-[11px] text-slate-500 mt-0.5">
+								Placeholder: Admin review will process this flag shortly.
+							</p>
+						</div>
+						<button
+							onClick={() => {
+								setSubmitted(false);
+								setReason("");
+								setDescription("");
+								onClose();
+							}}
+							className="mt-6 w-full py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold rounded-xl transition"
+						>
+							Close
+						</button>
+					</div>
+				) : (
+					<form onSubmit={handleSubmit} className="space-y-4">
+						<div className="flex items-center justify-between border-b border-gray-100 pb-3">
+							<h3 className="text-lg font-bold text-gray-950">Report Resource</h3>
+							<button
+								type="button"
+								onClick={onClose}
+								className="text-gray-400 hover:text-gray-600 font-semibold text-lg"
+							>
+								&times;
+							</button>
+						</div>
+						
+						<p className="text-xs text-gray-500">
+							Help us keep EduVault clean and reliable. Please tell us why you are flagging this listing:
+						</p>
+
+						<div className="space-y-2">
+							<label className="block text-xs font-bold text-gray-700 uppercase tracking-wider">
+								Reason for Flagging
+							</label>
+							<select
+								value={reason}
+								onChange={(e) => setReason(e.target.value)}
+								className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-800"
+								required
+							>
+								<option value="">Select a reason...</option>
+								{reasons.map((r) => (
+									<option key={r} value={r}>
+										{r}
+									</option>
+								))}
+							</select>
+						</div>
+
+						<div className="space-y-2">
+							<label className="block text-xs font-bold text-gray-700 uppercase tracking-wider">
+								Additional Information
+							</label>
+							<textarea
+								value={description}
+								onChange={(e) => setDescription(e.target.value)}
+								placeholder="Please provide details about the issue..."
+								rows={4}
+								className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-800"
+							/>
+						</div>
+
+						{error && <p className="text-xs text-red-600 font-medium">{error}</p>}
+
+						<div className="flex items-center gap-3 pt-2">
+							<button
+								type="button"
+								onClick={onClose}
+								className="flex-1 py-2 border border-gray-200 text-gray-600 hover:bg-gray-50 font-semibold rounded-xl transition"
+							>
+								Cancel
+							</button>
+							<button
+								type="submit"
+								disabled={submitting}
+								className="flex-1 py-2 bg-red-600 hover:bg-red-700 text-white font-semibold rounded-xl transition disabled:opacity-60"
+							>
+								{submitting ? "Submitting..." : "Submit Report"}
+							</button>
+						</div>
+					</form>
+				)}
+			</div>
+		</div>
 	);
 }
 
@@ -326,11 +556,26 @@ export default function MaterialDetailsPage() {
 	const params = useParams();
 	const id = String(params.id);
 	const [showBuyModal, setShowBuyModal] = useState(false);
+	const [showReportModal, setShowReportModal] = useState(false);
+	const [history, setHistory] = useState([]);
 	const materialQuery = useMaterialDetail(id);
 	const entitlementQuery = useEntitlement(id);
 	const { address } = useAccount();
 	const [downloadError, setDownloadError] = useState(null);
 	const [isDownloading, setIsDownloading] = useState(false);
+
+	useEffect(() => {
+		if (id) {
+			fetch(`/api/materials/history?id=${id}`)
+				.then((res) => res.json())
+				.then((data) => {
+					if (Array.isArray(data)) {
+						setHistory(data);
+					}
+				})
+				.catch((err) => console.error("Error fetching material history:", err));
+		}
+	}, [id]);
 
 	const accessStatus = !address
 		? "wallet_required"
@@ -414,7 +659,12 @@ export default function MaterialDetailsPage() {
 									<h1 className="text-2xl sm:text-3xl lg:text-4xl font-bold text-gray-900 break-words">
 										{material.title}
 									</h1>
-									<ResourceStatusBadge material={material} className="mt-3" />
+									<div className="mt-3 flex flex-wrap items-center gap-3">
+										<ResourceStatusBadge material={material} />
+										<span className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full text-blue-700 bg-blue-50 border border-blue-200">
+											Current Revision: v{material.version || 1}
+										</span>
+									</div>
 									<p className="mt-3 text-sm sm:text-base text-gray-600 leading-relaxed max-w-3xl break-words">
 										{material.shortSummary || material.description || "Creator preview not shared yet."}
 									</p>
@@ -606,6 +856,11 @@ export default function MaterialDetailsPage() {
 											</div>
 										</div>
 
+										<RevisionHistoryPanel
+											history={history}
+											currentVersion={material.version}
+										/>
+
 										<MaterialReviewPanel
 											materialId={id}
 											initialReviews={material.reviews || material.reviewHistory || []}
@@ -628,6 +883,7 @@ export default function MaterialDetailsPage() {
 											onDownload={handleDownload}
 											onRequestAccess={() => setShowBuyModal(true)}
 											onAddToCart={() => setShowBuyModal(true)}
+											onReport={() => setShowReportModal(true)}
 										/>
 									</div>
 								</div>
@@ -664,6 +920,13 @@ export default function MaterialDetailsPage() {
 					/>
 				</Web3ErrorBoundary>
 			)}
+
+			<ReportModal
+				isOpen={showReportModal}
+				onClose={() => setShowReportModal(false)}
+				materialId={id}
+				materialTitle={materialQuery.data?.title || ""}
+			/>
 		</>
 	);
 }
