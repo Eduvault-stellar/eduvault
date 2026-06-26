@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { FaCloudUploadAlt, FaCheck, FaArrowRight, FaArrowLeft, FaFileAlt, FaTags, FaDollarSign, FaEye } from "react-icons/fa";
+import { FaCloudUploadAlt, FaCheck, FaArrowRight, FaArrowLeft, FaFileAlt, FaTags, FaDollarSign, FaEye, FaSpinner, FaExternalLinkAlt } from "react-icons/fa";
 import { useAccount, useWriteContract, useWaitForTransactionReceipt } from "wagmi";
 import { abi } from "../../../../../contracts/EduVaultAbi.js";
 import { celoSepolia } from "wagmi/chains";
@@ -49,6 +49,7 @@ export default function UploadWizard() {
   const [errorType, setErrorType] = useState(null);
   const [mintResult, setMintResult] = useState(null);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadResult, setUploadResult] = useState(null);
 
   const handleDocChange = (e) => {
     const file = e.target.files?.[0];
@@ -70,13 +71,35 @@ export default function UploadWizard() {
     switch (step) {
       case 1:
         if (!docFile) {
-          setError("Please upload a document file");
+          setError("Please upload a document file.");
           return false;
+        }
+        if (docFile.size > 10 * 1024 * 1024) {
+          setError("Document file size exceeds the 10MB limit. Please select a smaller file.");
+          return false;
+        }
+        const docExt = docFile.name.substring(docFile.name.lastIndexOf(".")).toLowerCase();
+        const ALLOWED_DOC_EXTENSIONS = [".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".txt", ".zip"];
+        if (!ALLOWED_DOC_EXTENSIONS.includes(docExt)) {
+          setError("Unsupported file format. Please upload a PDF, Word, Excel, PowerPoint, Text, or ZIP file.");
+          return false;
+        }
+        if (thumbFile) {
+          if (thumbFile.size > 5 * 1024 * 1024) {
+            setError("Thumbnail size exceeds the 5MB limit. Please select a smaller image.");
+            return false;
+          }
+          const thumbExt = thumbFile.name.substring(thumbFile.name.lastIndexOf(".")).toLowerCase();
+          const ALLOWED_THUMB_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp"];
+          if (!ALLOWED_THUMB_EXTENSIONS.includes(thumbExt)) {
+            setError("Unsupported thumbnail type. Please upload a JPG, PNG, or WEBP image.");
+            return false;
+          }
         }
         return true;
       case 2:
         if (!title.trim()) {
-          setError("Please enter a document title");
+          setError("Please enter a document title.");
           return false;
         }
         return true;
@@ -151,6 +174,7 @@ export default function UploadWizard() {
         throw new Error(uploadData?.error || "File upload failed");
       }
 
+      setUploadResult(uploadData);
       const tokenURI = uploadData.metadata;
 
       // 3️⃣ Mint NFT
@@ -164,7 +188,19 @@ export default function UploadWizard() {
       });
     } catch (err) {
       console.error("Upload Error:", err);
-      setError(err?.message || "Upload failed. Please try again.");
+      let friendlyError = err?.message || "Upload failed. Please try again.";
+      if (friendlyError.includes("exceeds the 10MB limit")) {
+        friendlyError = "The selected document exceeds the 10MB limit. Please choose a smaller file.";
+      } else if (friendlyError.includes("exceeds the 5MB limit")) {
+        friendlyError = "The selected thumbnail exceeds the 5MB limit. Please choose a smaller image.";
+      } else if (friendlyError.includes("Unsupported file type")) {
+        friendlyError = "The file type is not supported. Please upload a PDF, Word document, Excel sheet, PowerPoint presentation, text file, or ZIP archive.";
+      } else if (friendlyError.includes("Unsupported thumbnail type")) {
+        friendlyError = "The thumbnail image format is not supported. Please use JPG, PNG, or WEBP.";
+      } else if (friendlyError.includes("fetch") || friendlyError.includes("Failed to fetch")) {
+        friendlyError = "Network error: Could not reach the upload server. Please check your internet connection.";
+      }
+      setError(friendlyError);
       setErrorType("upload");
       setWorkflowState("failed");
     }
@@ -207,31 +243,52 @@ export default function UploadWizard() {
           throw new Error("Invalid token ID in receipt");
         }
 
-        const materialData = {
-          userAddress: address,
-          tokenId,
-          txHash: receipt.transactionHash,
-          chainId: celoSepolia.id,
-          metadataUrl: uploadData.metadata,
-          fileUrl: uploadData.fileUrl,
-          thumbnailUrl: uploadData.imgUrl,
-          price,
-          visibility,
+        if (!uploadResult) {
+          throw new Error("Storage metadata not available. Please try uploading again.");
+        }
+
+        const saveToDb = async () => {
+          try {
+            const response = await fetch("/api/materials", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                title,
+                description,
+                price: price ? Number(price) : 0,
+                usageRights,
+                visibility,
+                thumbnailUrl: uploadResult.image || null,
+                fileUrl: uploadResult.fileUrl,
+                tokenId,
+                txHash: receipt.transactionHash,
+              }),
+            });
+
+            if (!response.ok) {
+              const errData = await response.json();
+              throw new Error(errData?.error || "Database recording failed");
+            }
+
+            const savedData = await response.json();
+
+            setMintResult({
+              tokenId,
+              txHash: receipt.transactionHash,
+              receipt,
+              id: savedData.id || savedData._id,
+            });
+
+            setWorkflowState("success");
+          } catch (err) {
+            console.error("Database persistence error:", err);
+            setError(`NFT minted successfully but database registration failed: ${err.message}`);
+            setErrorType("database");
+            setWorkflowState("failed");
+          }
         };
 
-        fetch("/api/persist-material", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ workflowId, materialData }),
-        });
-
-        setMintResult({
-          tokenId,
-          txHash: receipt.transactionHash,
-          receipt,
-        });
-
-        setWorkflowState("success");
+        saveToDb();
       } catch (err) {
         console.error("Receipt parsing error:", err);
         setError(`Mint completed but failed to parse receipt: ${err.message}`);
@@ -243,7 +300,7 @@ export default function UploadWizard() {
       setErrorType("chain");
       setWorkflowState("failed");
     }
-  }, [isConfirmed, isFailed, receipt]);
+  }, [isConfirmed, isFailed, receipt, uploadResult]);
 
   const handleReset = () => {
     setTitle("");
@@ -268,25 +325,74 @@ export default function UploadWizard() {
   // Success State
   if (workflowState === "success" && mintResult) {
     return (
-      <div className="bg-white border border-gray-200 rounded-xl p-8 shadow-sm">
-        <div className="text-center">
-          <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
-            <FaCheck className="text-green-600 text-2xl" />
-          </div>
-          <h2 className="text-2xl font-bold mb-2">Successfully Published!</h2>
-          <p className="text-gray-600 mb-6">Your educational material has been minted and is now available on the marketplace.</p>
-          
-          <div className="bg-green-50 border border-green-200 rounded-lg p-4 mb-6 text-left">
-            <p className="text-sm text-green-800 mb-2"><strong>Token ID:</strong> {mintResult.tokenId}</p>
-            <p className="text-sm text-green-800 mb-2"><strong>Transaction:</strong></p>
-            <p className="text-xs text-green-700 font-mono break-all">{mintResult.txHash}</p>
-          </div>
+      <div className="bg-white border border-gray-200 rounded-xl p-8 shadow-sm max-w-xl mx-auto my-4 text-center">
+        <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4 animate-bounce">
+          <FaCheck className="text-green-600 text-2xl" />
+        </div>
+        <h2 className="text-2xl font-bold text-gray-900 mb-2">Successfully Published!</h2>
+        <p className="text-sm text-gray-600 mb-6">
+          Your educational material has been minted and registered in our marketplace indexer.
+        </p>
 
+        {/* Material Preview Card */}
+        <div className="border border-gray-200 rounded-xl p-4 mb-6 bg-gray-50 flex items-center gap-4 text-left">
+          {thumbPreview ? (
+            <img
+              src={thumbPreview}
+              alt="Published Material"
+              className="w-16 h-16 rounded-lg object-cover border border-gray-200"
+            />
+          ) : (
+            <div className="w-16 h-16 bg-blue-50 text-blue-500 rounded-lg flex items-center justify-center border border-gray-200">
+              <FaFileAlt className="text-2xl" />
+            </div>
+          )}
+          <div className="flex-1 min-w-0">
+            <h4 className="text-base font-semibold text-gray-800 truncate">{title}</h4>
+            <p className="text-xs text-gray-500 line-clamp-1 mt-0.5">{description || "No description provided."}</p>
+            <div className="flex gap-4 mt-2 text-xs font-semibold text-gray-700">
+              <span>Price: {price > 0 ? `${price} CELO` : "Free"}</span>
+              <span>Rights: {usageRights}</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Transaction Details */}
+        <div className="bg-green-50 border border-green-200 rounded-lg p-4 mb-8 text-left space-y-2">
+          <div className="flex justify-between items-center text-sm">
+            <span className="text-green-800 font-medium">Token ID</span>
+            <span className="font-mono bg-green-100 text-green-800 px-2 py-0.5 rounded text-xs font-semibold">#{mintResult.tokenId}</span>
+          </div>
+          <div className="text-sm">
+            <span className="text-green-800 font-medium block mb-1">Transaction Hash</span>
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs text-green-700 font-mono break-all line-clamp-1">{mintResult.txHash}</span>
+              <a
+                href={`https://sepolia.celoscan.xyz/tx/${mintResult.txHash}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-xs text-green-800 hover:text-green-900 font-semibold underline flex items-center gap-1 shrink-0"
+              >
+                Explorer
+                <FaExternalLinkAlt className="text-[10px]" />
+              </a>
+            </div>
+          </div>
+        </div>
+
+        {/* Actions */}
+        <div className="flex flex-col sm:flex-row gap-3 justify-center">
+          <a
+            href="/dashboard/my-materials"
+            className="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition font-medium text-sm text-center shadow-sm"
+          >
+            View My Materials
+          </a>
           <button
             onClick={handleReset}
-            className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition font-medium"
+            className="px-6 py-2.5 border border-gray-300 hover:bg-gray-50 text-gray-700 rounded-lg transition font-medium text-sm text-center"
           >
-            Upload Another Material
+            Upload Another
           </button>
         </div>
       </div>
@@ -348,258 +454,300 @@ export default function UploadWizard() {
       )}
 
       {/* Step Content */}
-      <div className="p-6 min-h-[400px]">
-        {/* Step 1: Upload Files */}
-        {currentStep === 1 && (
-          <div className="space-y-6">
-            <div>
-              <h3 className="text-lg font-semibold mb-2">Upload Your Document</h3>
-              <p className="text-sm text-gray-600 mb-4">
-                Upload your lecture notes, projects, or study materials. Supported formats: PDF, DOCX, PPTX, ZIP (max 10MB).
-              </p>
+      <div className={`p-6 min-h-[400px] ${isSubmitting ? 'flex flex-col justify-center items-center' : ''}`}>
+        {workflowState === "uploading" && (
+          <div className="w-full max-w-md text-center py-8 space-y-6">
+            <div className="relative flex justify-center items-center">
+              <div className="w-24 h-24 bg-blue-50 text-blue-600 rounded-full flex items-center justify-center animate-pulse mx-auto">
+                <FaCloudUploadAlt className="text-4xl animate-bounce" />
+              </div>
+              <div className="absolute inset-0 rounded-full border-4 border-blue-100 border-t-blue-600 animate-spin w-24 h-24 mx-auto"></div>
+            </div>
+            
+            <div className="space-y-2">
+              <h3 className="text-xl font-bold text-gray-900">Uploading Material</h3>
+              <p className="text-sm text-gray-600">Uploading your document and thumbnail to decentralized IPFS storage...</p>
             </div>
 
-            <div className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-blue-400 transition">
-              <input
-                type="file"
-                id="file-upload"
-                className="hidden"
-                onChange={handleDocChange}
-                accept=".pdf,.doc,.docx,.ppt,.pptx,.zip"
-              />
-              <label htmlFor="file-upload" className="cursor-pointer flex flex-col items-center">
-                <FaCloudUploadAlt className="text-5xl text-blue-500 mb-3" />
-                <p className="text-base font-medium text-gray-800 mb-1">
-                  {docFileName || "Tap to Upload Document"}
-                </p>
-                <p className="text-sm text-gray-500 mb-4">
-                  {docFileName ? "Click to change file" : ".pdf, .docx, .pptx, .zip | 10MB max"}
-                </p>
-                <button type="button" className="px-6 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700">
-                  Choose File
-                </button>
-              </label>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium mb-2">Thumbnail Image (Optional)</label>
-              <div className="flex items-center gap-4">
-                <input type="file" accept="image/*" onChange={handleThumbChange} className="text-sm" />
-                {thumbPreview && (
-                  <img src={thumbPreview} alt="Preview" className="w-16 h-16 rounded object-cover border" />
-                )}
+            {/* Progress Bar */}
+            <div className="space-y-1 w-full">
+              <div className="w-full bg-gray-100 rounded-full h-3 overflow-hidden border border-gray-200 shadow-inner">
+                <div 
+                  className="bg-gradient-to-r from-blue-500 to-indigo-600 h-full rounded-full transition-all duration-300 ease-out" 
+                  style={{ width: `${uploadProgress}%` }}
+                ></div>
+              </div>
+              <div className="flex justify-between text-xs font-semibold text-gray-500 px-1">
+                <span>Storing files...</span>
+                <span>{uploadProgress}%</span>
               </div>
             </div>
           </div>
         )}
 
-        {/* Step 2: Details */}
-        {currentStep === 2 && (
-          <div className="space-y-5">
-            <div>
-              <h3 className="text-lg font-semibold mb-2">Material Details</h3>
-              <p className="text-sm text-gray-600 mb-4">
-                Provide a clear title and description to help students discover your material.
-              </p>
+        {workflowState === "minting" && (
+          <div className="w-full max-w-md text-center py-8 space-y-6">
+            <div className="relative flex justify-center items-center">
+              <div className="w-24 h-24 bg-purple-50 text-purple-600 rounded-full flex items-center justify-center animate-pulse mx-auto">
+                <FaSpinner className="text-4xl animate-spin" />
+              </div>
+              <div className="absolute inset-0 rounded-full border-4 border-purple-100 border-t-purple-600 animate-spin w-24 h-24 mx-auto"></div>
             </div>
 
-            <div>
-              <label className="block text-sm font-medium mb-2">Document Title *</label>
-              <input
-                type="text"
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                placeholder="e.g. ECO 304 - Development Economics Lecture Notes"
-                className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-blue-100 focus:border-blue-500"
-              />
+            <div className="space-y-2">
+              <h3 className="text-xl font-bold text-gray-900">Minting NFT on Celo</h3>
+              <p className="text-sm text-gray-600">Please confirm the transaction in your connected wallet provider to finalize publishing.</p>
             </div>
 
-            <div>
-              <label className="block text-sm font-medium mb-2">Short Description</label>
-              <textarea
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                placeholder="Comprehensive lecture notes covering key development theories and examples."
-                rows={4}
-                className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm resize-none focus:ring-2 focus:ring-blue-100 focus:border-blue-500"
-              />
+            <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-purple-50 text-purple-700 rounded-full text-xs font-medium border border-purple-100">
+              <span className="w-2 h-2 rounded-full bg-purple-500 animate-ping"></span>
+              Waiting for wallet confirmation...
             </div>
           </div>
         )}
 
-        {/* Step 3: Pricing & Rights */}
-        {currentStep === 3 && (
-          <div className="space-y-5">
-            <div>
-              <h3 className="text-lg font-semibold mb-2">Pricing & Usage Rights</h3>
-              <p className="text-sm text-gray-600 mb-4">
-                Set your price and define how others can use your material.
-              </p>
-            </div>
+        {!isSubmitting && (
+          <>
+            {/* Step 1: Upload Files */}
+            {currentStep === 1 && (
+              <div className="space-y-6">
+                <div>
+                  <h3 className="text-lg font-semibold mb-2">Upload Your Document</h3>
+                  <p className="text-sm text-gray-600 mb-4">
+                    Upload your lecture notes, projects, or study materials. Supported formats: PDF, DOCX, PPTX, ZIP (max 10MB).
+                  </p>
+                </div>
 
-            <div>
-              <label className="block text-sm font-medium mb-2">Price (CELO) - Optional</label>
-              <input
-                type="number"
-                value={price}
-                onChange={(e) => setPrice(e.target.value)}
-                placeholder="0.00"
-                className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-blue-100 focus:border-blue-500"
-              />
-              <p className="text-xs text-gray-500 mt-1">Leave empty for free material</p>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium mb-2">Usage Rights</label>
-              <select
-                value={usageRights}
-                onChange={(e) => setUsageRights(e.target.value)}
-                className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-blue-100 focus:border-blue-500"
-              >
-                <option>Standard License (download only)</option>
-                <option>Creative Commons</option>
-                <option>Private Use Only</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium mb-2">Visibility</label>
-              <div className="space-y-2">
-                <label className="flex items-start gap-2 p-3 border border-gray-200 rounded-md cursor-pointer hover:bg-gray-50">
+                <div className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-blue-400 transition">
                   <input
-                    type="radio"
-                    name="visibility"
-                    checked={visibility === "public"}
-                    onChange={() => setVisibility("public")}
-                    className="accent-blue-600 mt-0.5"
+                    type="file"
+                    id="file-upload"
+                    className="hidden"
+                    onChange={handleDocChange}
+                    accept=".pdf,.doc,.docx,.ppt,.pptx,.zip"
                   />
-                  <div>
-                    <p className="text-sm font-medium">Public</p>
-                    <p className="text-xs text-gray-600">Anyone can view or download</p>
+                  <label htmlFor="file-upload" className="cursor-pointer flex flex-col items-center">
+                    <FaCloudUploadAlt className="text-5xl text-blue-500 mb-3" />
+                    <p className="text-base font-medium text-gray-800 mb-1">
+                      {docFileName || "Tap to Upload Document"}
+                    </p>
+                    <p className="text-sm text-gray-500 mb-4">
+                      {docFileName ? "Click to change file" : ".pdf, .docx, .pptx, .zip | 10MB max"}
+                    </p>
+                    <button type="button" className="px-6 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700">
+                      Choose File
+                    </button>
+                  </label>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium mb-2">Thumbnail Image (Optional)</label>
+                  <div className="flex items-center gap-4">
+                    <input type="file" accept="image/*" onChange={handleThumbChange} className="text-sm" />
+                    {thumbPreview && (
+                      <img src={thumbPreview} alt="Preview" className="w-16 h-16 rounded object-cover border" />
+                    )}
                   </div>
-                </label>
-                <label className="flex items-start gap-2 p-3 border border-gray-200 rounded-md cursor-pointer hover:bg-gray-50">
+                </div>
+              </div>
+            )}
+
+            {/* Step 2: Details */}
+            {currentStep === 2 && (
+              <div className="space-y-5">
+                <div>
+                  <h3 className="text-lg font-semibold mb-2">Material Details</h3>
+                  <p className="text-sm text-gray-600 mb-4">
+                    Provide a clear title and description to help students discover your material.
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium mb-2">Document Title *</label>
                   <input
-                    type="radio"
-                    name="visibility"
-                    checked={visibility === "private"}
-                    onChange={() => setVisibility("private")}
-                    className="accent-blue-600 mt-0.5"
+                    type="text"
+                    value={title}
+                    onChange={(e) => setTitle(e.target.value)}
+                    placeholder="e.g. ECO 304 - Development Economics Lecture Notes"
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-blue-100 focus:border-blue-500"
                   />
-                  <div>
-                    <p className="text-sm font-medium">Private</p>
-                    <p className="text-xs text-gray-600">Only you and invited users can access</p>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium mb-2">Short Description</label>
+                  <textarea
+                    value={description}
+                    onChange={(e) => setDescription(e.target.value)}
+                    placeholder="Comprehensive lecture notes covering key development theories and examples."
+                    rows={4}
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm resize-none focus:ring-2 focus:ring-blue-100 focus:border-blue-500"
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* Step 3: Pricing & Rights */}
+            {currentStep === 3 && (
+              <div className="space-y-5">
+                <div>
+                  <h3 className="text-lg font-semibold mb-2">Pricing & Usage Rights</h3>
+                  <p className="text-sm text-gray-600 mb-4">
+                    Set your price and define how others can use your material.
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium mb-2">Price (CELO) - Optional</label>
+                  <input
+                    type="number"
+                    value={price}
+                    onChange={(e) => setPrice(e.target.value)}
+                    placeholder="0.00"
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-blue-100 focus:border-blue-500"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">Leave empty for free material</p>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium mb-2">Usage Rights</label>
+                  <select
+                    value={usageRights}
+                    onChange={(e) => setUsageRights(e.target.value)}
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-blue-100 focus:border-blue-500"
+                  >
+                    <option>Standard License (download only)</option>
+                    <option>Creative Commons</option>
+                    <option>Private Use Only</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium mb-2">Visibility</label>
+                  <div className="space-y-2">
+                    <label className="flex items-start gap-2 p-3 border border-gray-200 rounded-md cursor-pointer hover:bg-gray-50">
+                      <input
+                        type="radio"
+                        name="visibility"
+                        checked={visibility === "public"}
+                        onChange={() => setVisibility("public")}
+                        className="accent-blue-600 mt-0.5"
+                      />
+                      <div>
+                        <p className="text-sm font-medium">Public</p>
+                        <p className="text-xs text-gray-600">Anyone can view or download</p>
+                      </div>
+                    </label>
+                    <label className="flex items-start gap-2 p-3 border border-gray-200 rounded-md cursor-pointer hover:bg-gray-50">
+                      <input
+                        type="radio"
+                        name="visibility"
+                        checked={visibility === "private"}
+                        onChange={() => setVisibility("private")}
+                        className="accent-blue-600 mt-0.5"
+                      />
+                      <div>
+                        <p className="text-sm font-medium">Private</p>
+                        <p className="text-xs text-gray-600">Only you and invited users can access</p>
+                      </div>
+                    </label>
                   </div>
-                </label>
+                </div>
               </div>
-            </div>
-          </div>
-        )}
+            )}
 
-        {/* Step 4: Review & Mint */}
-        {currentStep === 4 && (
-          <div className="space-y-5">
-            <div>
-              <h3 className="text-lg font-semibold mb-2">Review & Publish</h3>
-              <p className="text-sm text-gray-600 mb-4">
-                Review your material details before publishing to the blockchain.
-              </p>
-            </div>
+            {/* Step 4: Review & Mint */}
+            {currentStep === 4 && (
+              <div className="space-y-5">
+                <div>
+                  <h3 className="text-lg font-semibold mb-2">Review & Publish</h3>
+                  <p className="text-sm text-gray-600 mb-4">
+                    Review your material details before publishing to the blockchain.
+                  </p>
+                </div>
 
-            <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 space-y-3">
-              <div>
-                <p className="text-xs text-gray-500 mb-1">Document</p>
-                <p className="text-sm font-medium">{docFileName}</p>
-              </div>
-              {thumbPreview && (
-                <div>
-                  <p className="text-xs text-gray-500 mb-1">Thumbnail</p>
-                  <img src={thumbPreview} alt="Thumbnail" className="w-20 h-20 rounded object-cover" />
+                <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 space-y-3">
+                  <div>
+                    <p className="text-xs text-gray-500 mb-1">Document</p>
+                    <p className="text-sm font-medium">{docFileName}</p>
+                  </div>
+                  {thumbPreview && (
+                    <div>
+                      <p className="text-xs text-gray-500 mb-1">Thumbnail</p>
+                      <img src={thumbPreview} alt="Thumbnail" className="w-20 h-20 rounded object-cover" />
+                    </div>
+                  )}
+                  <div>
+                    <p className="text-xs text-gray-500 mb-1">Title</p>
+                    <p className="text-sm font-medium">{title}</p>
+                  </div>
+                  {description && (
+                    <div>
+                      <p className="text-xs text-gray-500 mb-1">Description</p>
+                      <p className="text-sm text-gray-700">{description}</p>
+                    </div>
+                  )}
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <p className="text-xs text-gray-500 mb-1">Price</p>
+                      <p className="text-sm font-medium">{price ? `${price} CELO` : "Free"}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-gray-500 mb-1">Usage Rights</p>
+                      <p className="text-sm font-medium">{usageRights}</p>
+                    </div>
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-500 mb-1">Visibility</p>
+                    <p className="text-sm font-medium capitalize">{visibility}</p>
+                  </div>
                 </div>
-              )}
-              <div>
-                <p className="text-xs text-gray-500 mb-1">Title</p>
-                <p className="text-sm font-medium">{title}</p>
-              </div>
-              {description && (
-                <div>
-                  <p className="text-xs text-gray-500 mb-1">Description</p>
-                  <p className="text-sm text-gray-700">{description}</p>
-                </div>
-              )}
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <p className="text-xs text-gray-500 mb-1">Price</p>
-                  <p className="text-sm font-medium">{price ? `${price} CELO` : "Free"}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-gray-500 mb-1">Usage Rights</p>
-                  <p className="text-sm font-medium">{usageRights}</p>
-                </div>
-              </div>
-              <div>
-                <p className="text-xs text-gray-500 mb-1">Visibility</p>
-                <p className="text-sm font-medium capitalize">{visibility}</p>
-              </div>
-            </div>
 
-            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-              <p className="text-sm text-blue-800">
-                <strong>Note:</strong> Publishing will mint your material as an NFT on the blockchain. A small gas fee will be charged.
-              </p>
-            </div>
-          </div>
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                  <p className="text-sm text-blue-800">
+                    <strong>Note:</strong> Publishing will mint your material as an NFT on the blockchain. A small gas fee will be charged.
+                  </p>
+                </div>
+              </div>
+            )}
+          </>
         )}
       </div>
 
       {/* Footer Navigation */}
-      <div className="border-t border-gray-200 p-6 flex justify-between">
-        <button
-          type="button"
-          onClick={handlePrevious}
-          disabled={currentStep === 1 || isSubmitting}
-          className="px-5 py-2 border border-gray-300 text-gray-700 rounded-md hover:bg-gray-50 transition text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-        >
-          <FaArrowLeft className="text-xs" />
-          Previous
-        </button>
+      {!isSubmitting && (
+        <div className="border-t border-gray-200 p-6 flex justify-between">
+          <button
+            type="button"
+            onClick={handlePrevious}
+            disabled={currentStep === 1}
+            className="px-5 py-2 border border-gray-300 text-gray-700 rounded-md hover:bg-gray-50 transition text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+          >
+            <FaArrowLeft className="text-xs" />
+            Previous
+          </button>
 
-        {currentStep < STEPS.length ? (
-          <button
-            type="button"
-            onClick={handleNext}
-            disabled={isSubmitting}
-            className="px-5 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition text-sm font-medium disabled:opacity-50 flex items-center gap-2"
-          >
-            Next
-            <FaArrowRight className="text-xs" />
-          </button>
-        ) : (
-          <button
-            type="button"
-            onClick={handleSubmit}
-            disabled={isSubmitting || !address}
-            className="px-6 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 transition text-sm font-medium disabled:opacity-50 flex items-center gap-2"
-          >
-            {workflowState === "uploading" ? (
-              <>
-                <span className="animate-spin">⏳</span>
-                Uploading... ({uploadProgress}%)
-              </>
-            ) : workflowState === "minting" ? (
-              <>
-                <span className="animate-spin">⏳</span>
-                Minting NFT...
-              </>
-            ) : (
-              <>
-                Publish & Mint NFT
-                <FaArrowRight className="text-xs" />
-              </>
-            )}
-          </button>
-        )}
-      </div>
+          {currentStep < STEPS.length ? (
+            <button
+              type="button"
+              onClick={handleNext}
+              className="px-5 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition text-sm font-medium disabled:opacity-50 flex items-center gap-2"
+            >
+              Next
+              <FaArrowRight className="text-xs" />
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={handleSubmit}
+              disabled={!address}
+              className="px-6 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 transition text-sm font-medium disabled:opacity-50 flex items-center gap-2"
+            >
+              Publish & Mint NFT
+              <FaArrowRight className="text-xs" />
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }

@@ -17,8 +17,8 @@
     "build": "next build --webpack",
     "start": "next start",
     "lint": "eslint",
-    "test": "vitest"
-    "test": "npm run test:contracts && npm run test:backend",
+    "test:frontend": "vitest run",
+    "test": "npm run test:frontend && npm run test:contracts && npm run test:backend",
     "test:contracts": "hardhat test",
     "test:backend": "node --test tests/backend/*.test.mjs",
     "indexer:stellar": "node scripts/run-stellar-indexer.mjs"
@@ -55,9 +55,8 @@
     "jest-axe": "^10.0.0",
     "jsdom": "^29.0.2",
     "tailwindcss": "^4.2.3",
-    "vitest": "^4.1.5"
+    "vitest": "^4.1.5",
     "ethers": "^6.15.0",
-    "hardhat": "^2.26.3",
-    "tailwindcss": "^4.2.3"
+    "hardhat": "^2.26.3"
   }
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import UploadForm from "./components/UploadForm";
+import UploadWizard from "./components/UploadWizard";
 
 export default function UploadPage() {
 	return (
@@ -8,7 +8,7 @@ export default function UploadPage() {
 			<div className="max-w-7xl mx-auto py-10 px-6 grid md:grid-cols-3 gap-8">
 				{/* Left side: Upload form */}
 				<div className="md:col-span-2">
-					<UploadForm />
+					<UploadWizard />
 				</div>
 
 				{/* Right side: Steps */}
