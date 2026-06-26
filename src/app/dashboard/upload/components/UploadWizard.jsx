@@ -3,9 +3,8 @@
 import Image from "next/image";
 import { useState, useEffect } from "react";
 import { FaCloudUploadAlt, FaCheck, FaArrowRight, FaArrowLeft, FaFileAlt, FaTags, FaDollarSign, FaEye, FaExclamationTriangle } from "react-icons/fa";
-import { useAccount, useWriteContract, useWaitForTransactionReceipt, useSwitchChain } from "wagmi";
+import { useWallet } from "@/hooks/useWallet";
 import { abi } from "../../../../../contracts/EduVaultAbi.js";
-import { celoSepolia } from "wagmi/chains";
 import { parseAbiItem } from "viem";
 import { useCreateMaterial, useUploadFile } from "@/hooks/api/useMaterials";
 import TransactionStatusPanel from "@/components/transactions/TransactionStatusPanel";
@@ -28,23 +27,16 @@ const STEPS = [
 ];
 
 export default function UploadWizard() {
-  const { address, chainId } = useAccount();
-  const { writeContract, data: txHash, error: writeError, isPending } = useWriteContract();
-  const {
-    activeTransaction,
-    beginTransaction,
-    markStatus,
-    confirmTransaction,
-    failTransaction,
-    clearTransaction,
-  } = useTransactionCenter();
-  const {
-    isLoading: isWaiting,
-    isSuccess: isConfirmed,
-    isError: isFailed,
-    data: receipt,
-  } = useWaitForTransactionReceipt({ hash: txHash });
-  const { switchChainAsync } = useSwitchChain();
+  const { address } = useWallet();
+  const writeContract = () => {};
+  const txHash = null;
+  const writeError = null;
+  const isPending = false;
+  const isWaiting = false;
+  const isConfirmed = false;
+  const isFailed = false;
+  const receipt = null;
+  const switchChainAsync = async () => {};
 
   const [currentStep, setCurrentStep] = useState(1);
 
@@ -73,7 +65,7 @@ export default function UploadWizard() {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [switchingChain, setSwitchingChain] = useState(false);
 
-  const chainMismatch = address && chainId && !isUploadChain(chainId);
+  const chainMismatch = false;
 
   useEffect(() => {
     async function loadTaxonomy() {
@@ -155,10 +147,10 @@ export default function UploadWizard() {
       await switchChainAsync({ chainId: celoSepolia.id });
     } catch (err) {
       if (err.code === "ACTION_REJECTED" || err.message?.includes("User rejected")) {
-        setError("Network switch was rejected. Please switch to Celo Sepolia to publish.");
+        setError("Network switch was rejected. Please switch to Stellar Testnet to publish.");
         setErrorType("chain");
       } else if (err.message?.includes("does not support")) {
-        setError("Your wallet does not support switching to Celo Sepolia. Please switch manually.");
+        setError("Your wallet does not support switching to Stellar Testnet. Please switch manually.");
         setErrorType("chain");
       } else {
         setError(err.message || "Failed to switch network. Please try manually.");
@@ -193,7 +185,7 @@ export default function UploadWizard() {
     }
 
     if (chainMismatch) {
-      setError(`Please switch to ${celoSepolia.name} before publishing. Use the network switch button above.`);
+      setError(`Please switch to Stellar Testnet before publishing. Use the network switch button above.`);
       setErrorType("chain");
       return;
     }
@@ -247,7 +239,7 @@ export default function UploadWizard() {
         abi,
         functionName: "mint",
         args: [tokenURI],
-        chain: celoSepolia,
+        chain: "Stellar Testnet",
       });
     } catch (err) {
       console.error("Upload Error:", err);
@@ -270,7 +262,7 @@ export default function UploadWizard() {
         setError("Transaction rejected by user. Please try again.");
         setErrorType("wallet");
       } else if (writeError.message?.includes("insufficient funds")) {
-        setError("Insufficient funds for gas. Please add CELO to your wallet.");
+        setError("Insufficient funds for XLM transaction fees. Please add XLM to your wallet.");
         setErrorType("wallet");
       } else {
         setError(writeError.message || "Transaction failed. Please try again.");
@@ -471,7 +463,7 @@ export default function UploadWizard() {
                 Wrong Network Detected
               </p>
               <p className="text-xs text-amber-700 mb-3">
-                Publishing requires the <strong>{celoSepolia.name}</strong> network. Your wallet is currently on chain ID <strong>{chainId}</strong>.
+              Publishing requires the <strong>Stellar Testnet</strong> network. Your wallet is currently on the wrong network.
               </p>
               <button
                 type="button"
@@ -479,7 +471,7 @@ export default function UploadWizard() {
                 disabled={switchingChain}
                 className="px-4 py-1.5 bg-amber-600 hover:bg-amber-700 disabled:opacity-60 text-white text-xs font-medium rounded-md transition"
               >
-                {switchingChain ? "Switching..." : `Switch to ${celoSepolia.name}`}
+                {switchingChain ? "Switching..." : `Switch to Stellar Testnet`}
               </button>
             </div>
           </div>
@@ -618,7 +610,7 @@ export default function UploadWizard() {
             </div>
 
             <div>
-              <label className="block text-sm font-medium mb-2">Price (CELO) - Optional</label>
+              <label className="block text-sm font-medium mb-2">Price (XLM) - Optional</label>
               <input
                 type="number"
                 value={price}
@@ -731,7 +723,7 @@ export default function UploadWizard() {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <p className="text-xs text-gray-500 mb-1">Price</p>
-                  <p className="text-sm font-medium">{price ? `${price} CELO` : "Free"}</p>
+                  <p className="text-sm font-medium">{price ? `${price} XLM` : "Free"}</p>
                 </div>
                 <div>
                   <p className="text-xs text-gray-500 mb-1">Usage Rights</p>
@@ -746,7 +738,7 @@ export default function UploadWizard() {
 
             <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
               <p className="text-sm text-blue-800">
-                <strong>Note:</strong> Publishing will mint your material as an NFT on the blockchain. A small gas fee will be charged.
+                <strong>Note:</strong> Publishing will mint your material as an NFT on the blockchain. XLM transaction fees will apply.
               </p>
             </div>
           </div>

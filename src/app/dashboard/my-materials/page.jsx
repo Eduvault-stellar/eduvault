@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useAccount } from "wagmi";
+import { useWallet } from "@/hooks/useWallet";
 import { useUserMaterials, useUpdateMaterial } from "@/hooks/api/useMaterials";
 import { FaEdit, FaSave, FaTimes, FaSpinner, FaCheckCircle, FaExclamationTriangle } from "react-icons/fa";
 import ResourceStatusBadge from "@/components/materials/ResourceStatusBadge";
@@ -176,7 +176,7 @@ function EditModal({ material, isOpen, onClose }) {
 }
 
 export default function MyMaterialsPage() {
-  const { address } = useAccount();
+  const { address } = useWallet();
   const { data: materials, isLoading, error: queryError } = useUserMaterials();
   const [editMaterial, setEditMaterial] = useState(null);
 
