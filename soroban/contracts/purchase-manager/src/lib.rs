@@ -1,7 +1,7 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contracterror, contractevent, contractimpl, contracttype, Address, BytesN, Env,
+    contract, contracterror, contractevent, contractimpl, contracttype, Address, Bytes, BytesN, Env,
     IntoVal, Symbol, Vec,
 };
 
@@ -177,6 +177,7 @@ pub struct PurchaseCompletedEvent {
     pub platform_fee: i128,
     pub seller_net_amount: i128,
     pub entitlement_active: bool,
+    pub transaction_id: Bytes,
 }
 
 /// Event: payout.distributed
@@ -192,6 +193,7 @@ pub struct PayoutDistributedEvent {
     pub role: Symbol,
     pub asset: Address,
     pub amount: i128,
+    pub transaction_id: Bytes,
 }
 
 /// Event: admin.asset_policy_updated
@@ -407,6 +409,7 @@ impl PurchaseManager {
         material_id: BytesN<32>,
         asset: Address,
         expected_amount: i128,
+        transaction_id: Bytes,
     ) -> Result<u64, PurchaseError> {
         buyer.require_auth();
 
@@ -479,6 +482,7 @@ impl PurchaseManager {
                 role: Symbol::new(&env, "platform_fee"),
                 asset: asset.clone(),
                 amount: platform_fee,
+                transaction_id: transaction_id.clone(),
             }
             .publish(&env);
         }
@@ -492,6 +496,7 @@ impl PurchaseManager {
             &material.payout_shares,
             &asset,
             seller_net,
+            &transaction_id,
         )?;
 
         // 3. Record entitlement
@@ -518,6 +523,7 @@ impl PurchaseManager {
             platform_fee,
             seller_net_amount: seller_net,
             entitlement_active: true,
+            transaction_id,
         }
         .publish(&env);
 
@@ -962,6 +968,7 @@ fn distribute_payout_shares(
     payout_shares: &Vec<PayoutShare>,
     asset: &Address,
     seller_net: i128,
+    transaction_id: &Bytes,
 ) -> Result<(), PurchaseError> {
     let mut total_distributed: i128 = 0;
     let share_count = payout_shares.len();
@@ -992,6 +999,7 @@ fn distribute_payout_shares(
                 role: creator_share_role.clone(),
                 asset: asset.clone(),
                 amount: share_amount,
+                transaction_id: transaction_id.clone(),
             }
             .publish(env);
         }
