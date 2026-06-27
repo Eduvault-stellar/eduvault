@@ -24,7 +24,7 @@ vi.mock('@stellar/stellar-sdk', () => ({
   },
 }));
 
-import { withFailover, loadAccount, submitTransaction, fetchFeeStats, getConfiguredEndpoints } from '../horizonClient';
+import { withFailover, loadAccount, submitTransaction, fetchFeeStats, getConfiguredEndpoints, checkBuyerTrustline } from '../horizonClient';
 
 beforeEach(() => vi.clearAllMocks());
 
@@ -88,5 +88,76 @@ describe('loadAccount / submitTransaction / fetchFeeStats wrappers', () => {
     mockFeeStats.mockResolvedValue({ fee_charged: { p95: '200' } });
     const stats = await fetchFeeStats();
     expect(stats.fee_charged.p95).toBe('200');
+  });
+});
+
+describe('checkBuyerTrustline', () => {
+  const KNOWN_ISSUER = 'GBBD47IF6LWK7P7MDEVSCWRZDPOVPOFWLYERWFBN4JSE3OUQTISLV5EX';
+
+  beforeEach(() => vi.clearAllMocks());
+
+  it('returns hasTrustline=true when account holds the asset', async () => {
+    mockLoadAccount.mockResolvedValue({
+      balances: [
+        { asset_type: 'native', balance: '100.00' },
+        { asset_type: 'credit_alphanum4', asset_code: 'USDC', asset_issuer: KNOWN_ISSUER, balance: '50.00' },
+      ],
+    });
+
+    const result = await checkBuyerTrustline('GABC123', 'USDC');
+    expect(result.hasTrustline).toBe(true);
+    expect(result.balance).toBe('50.00');
+    expect(result.issuer).toBe(KNOWN_ISSUER);
+  });
+
+  it('returns hasTrustline=false with instructions when asset is missing', async () => {
+    mockLoadAccount.mockResolvedValue({
+      balances: [
+        { asset_type: 'native', balance: '100.00' },
+      ],
+    });
+
+    const result = await checkBuyerTrustline('GABC123', 'USDC');
+    expect(result.hasTrustline).toBe(false);
+    expect(result.instructions).toBeDefined();
+    expect(result.instructions.message).toContain('trustline');
+    expect(result.instructions.steps).toBeInstanceOf(Array);
+    expect(result.instructions.steps.length).toBeGreaterThan(0);
+  });
+
+  it('uses explicit issuer when provided', async () => {
+    const customIssuer = 'GCUSTOM123';
+    mockLoadAccount.mockResolvedValue({
+      balances: [
+        { asset_type: 'native', balance: '100.00' },
+        { asset_type: 'credit_alphanum4', asset_code: 'USDC', asset_issuer: KNOWN_ISSUER, balance: '50.00' },
+      ],
+    });
+
+    const result = await checkBuyerTrustline('GABC123', 'USDC', customIssuer);
+    expect(result.hasTrustline).toBe(false);
+    expect(result.issuer).toBe(customIssuer);
+  });
+
+  it('does not match trustlines with wrong asset code', async () => {
+    mockLoadAccount.mockResolvedValue({
+      balances: [
+        { asset_type: 'credit_alphanum4', asset_code: 'EURC', asset_issuer: KNOWN_ISSUER, balance: '30.00' },
+      ],
+    });
+
+    const result = await checkBuyerTrustline('GABC123', 'USDC');
+    expect(result.hasTrustline).toBe(false);
+  });
+
+  it('does not match native balance as trustline', async () => {
+    mockLoadAccount.mockResolvedValue({
+      balances: [
+        { asset_type: 'native', balance: '1000.00' },
+      ],
+    });
+
+    const result = await checkBuyerTrustline('GABC123', 'XLM');
+    expect(result.hasTrustline).toBe(false);
   });
 });

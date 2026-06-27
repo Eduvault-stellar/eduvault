@@ -4,6 +4,7 @@ import { NextResponse } from 'next/server';
 import { getUserFromCookie } from "@/lib/api/auth";
 import { applyTaxToCheckout } from '@/lib/checkout/taxEstimator';
 import { getDb } from '@/lib/mongodb';
+import { checkBuyerTrustline } from '@/lib/stellar/horizonClient';
 
 /**
  * POST /api/checkout/initiate
@@ -32,6 +33,21 @@ export async function POST(req) {
       return NextResponse.json({ error: 'Missing asset' }, { status: 400 });
     }
 
+    const buyerAddress = user.walletAddress || user.address || user.id;
+
+    // Verify buyer holds an active trustline for the payment asset
+    const assetCode = typeof asset === 'string' ? asset : asset.code || asset;
+    const issuerAddress = typeof asset === 'object' ? asset.issuer : undefined;
+    const trustlineCheck = await checkBuyerTrustline(buyerAddress, assetCode, issuerAddress);
+
+    if (!trustlineCheck.hasTrustline) {
+      return NextResponse.json({
+        error: 'missing_trustline',
+        message: trustlineCheck.instructions.message,
+        instructions: trustlineCheck.instructions,
+      }, { status: 400 });
+    }
+
     // Get buyer IP from request if not provided
     const ipAddress = buyerIp || req.headers.get('x-forwarded-for')?.split(',')[0] || req.headers.get('x-real-ip') || null;
 
@@ -42,14 +58,14 @@ export async function POST(req) {
       asset,
       buyerIp: ipAddress,
       buyerCountry,
-      buyerAddress: user.walletAddress || user.address || user.id,
+      buyerAddress,
     });
 
     // Store checkout intent in database for later processing
     const db = await getDb();
     const checkoutIntent = {
       materialId,
-      buyerAddress: user.walletAddress || user.address || user.id,
+      buyerAddress,
       originalAmount: amount,
       taxAmount: checkoutWithTax.taxAmount,
       taxRateBps: checkoutWithTax.taxRateBps,

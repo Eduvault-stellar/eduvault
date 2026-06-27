@@ -203,3 +203,51 @@ export async function fetchFeeStats() {
 export function getConfiguredEndpoints() {
   return [...ALL_ENDPOINTS];
 }
+
+const KNOWN_USDC_ISSUERS = {
+  testnet: 'GBBD47IF6LWK7P7MDEVSCWRZDPOVPOFWLYERWFBN4JSE3OUQTISLV5EX',
+  mainnet: 'GA5ZSEJYB37JDD5G3LYVYF77RD7QFGHSXPJNKXJFUMIVYQ33HE6IGM4Y',
+};
+
+/**
+ * Check whether an account holds an active trustline for the specified asset.
+ * Returns { hasTrustline, balance?, issuer? } on success.
+ *
+ * @param {string} publicKey  – Stellar G… address
+ * @param {string} assetCode  – e.g. 'USDC'
+ * @param {string} [issuerAddress] – asset issuer; resolved from env if omitted
+ * @returns {Promise<{ hasTrustline: boolean, balance?: string, issuer?: string }>}
+ */
+export async function checkBuyerTrustline(publicKey, assetCode, issuerAddress) {
+  const issuer = issuerAddress || process.env.NEXT_PUBLIC_USDC_ISSUER
+    || KNOWN_USDC_ISSUERS[isMainnet ? 'mainnet' : 'testnet'];
+
+  const account = await loadAccount(publicKey);
+  const trustline = account.balances.find(
+    (b) => b.asset_type !== 'native' && b.asset_code === assetCode && b.asset_issuer === issuer,
+  );
+
+  if (!trustline) {
+    logger.info(
+      { publicKey, assetCode, issuer },
+      'Buyer missing trustline for asset'
+    );
+    return {
+      hasTrustline: false,
+      issuer,
+      instructions: {
+        message: `Your wallet does not have an active trustline for ${assetCode}.`,
+        steps: [
+          `Use the Stellar Laboratory or your wallet to establish a trustline for ${assetCode} issued by ${issuer}.`,
+          'Or run the following in the Stellar CLI:',
+          `  stellar-cli asset add-Trust ${issuer}:${assetCode}`,
+          `Trustline URL: ${isMainnet
+            ? 'https://accountviewer.stellar.org/'
+            : 'https://laboratory.stellar.org/'}`,
+        ],
+      },
+    };
+  }
+
+  return { hasTrustline: true, balance: trustline.balance, issuer };
+}
