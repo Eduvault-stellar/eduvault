@@ -12,10 +12,12 @@ import TransactionStatusPanel from "@/components/transactions/TransactionStatusP
 import DragDropUpload from "@/components/DragDropUpload";
 import { useTransactionCenter } from "@/providers/TransactionProvider";
 import { TransactionStatus } from "@/lib/transactions/transaction";
+import PayoutSplits from "@/components/PayoutSplits";
 
 export default function UploadForm() {
   const { state } = useWallet();
-  const address = state.status === WalletStatus.Connected ? state.session.address : null;
+  const address =
+    state.status === WalletStatus.Connected ? state.session.address : null;
   const uploadFileMutation = useUploadFile();
   const createMaterialMutation = useCreateMaterial();
   const {
@@ -30,7 +32,9 @@ export default function UploadForm() {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [price, setPrice] = useState("");
-  const [usageRights, setUsageRights] = useState("Standard License (download only)");
+  const [usageRights, setUsageRights] = useState(
+    "Standard License (download only)",
+  );
   const [visibility, setVisibility] = useState("public");
   const [level, setLevel] = useState("");
 
@@ -48,6 +52,8 @@ export default function UploadForm() {
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(null);
   const [fieldErrors, setFieldErrors] = useState({});
+  const [payoutSplits, setPayoutSplits] = useState(null);
+  const [payoutSplitsValid, setPayoutSplitsValid] = useState(true);
 
   const handleDocChange = (e) => {
     const file = e.target.files?.[0];
@@ -111,6 +117,10 @@ export default function UploadForm() {
       }
     }
 
+    if (!payoutSplitsValid) {
+      errors.payoutSplits = "Payout splits must be valid and total 100%.";
+    }
+
     if (Object.keys(errors).length > 0) {
       setFieldErrors(errors);
       failTransaction(new Error(Object.values(errors).join(" ")), {
@@ -129,11 +139,14 @@ export default function UploadForm() {
 
     if (!address) {
       setError("Please connect your wallet to upload a material.");
-      failTransaction(new Error("Please connect your wallet to upload a material."), {
-        title: "Wallet required",
-        message: "Connect your wallet before publishing this material.",
-        retryable: true,
-      });
+      failTransaction(
+        new Error("Please connect your wallet to upload a material."),
+        {
+          title: "Wallet required",
+          message: "Connect your wallet before publishing this material.",
+          retryable: true,
+        },
+      );
       return;
     }
 
@@ -153,7 +166,11 @@ export default function UploadForm() {
             croppedPixels,
             thumbFile.type || "image/jpeg",
           );
-          formData.append("thumbnail", croppedBlob, `thumb-cropped.${thumbFile.type?.split("/")[1] || "jpg"}`);
+          formData.append(
+            "thumbnail",
+            croppedBlob,
+            `thumb-cropped.${thumbFile.type?.split("/")[1] || "jpg"}`,
+          );
         } else if (thumbFile) {
           formData.append("thumbnail", thumbFile);
         }
@@ -190,6 +207,7 @@ export default function UploadForm() {
         thumbnail: uploadData.image,
         metadataUrl: uploadData.metadata,
         creator: address,
+        payoutSplits: payoutSplits || undefined,
       });
 
       confirmTransaction({
@@ -197,9 +215,7 @@ export default function UploadForm() {
         message: "Your material is now available in the marketplace.",
       });
 
-      setSuccess(
-        "Document uploaded successfully and record created!"
-      );
+      setSuccess("Document uploaded successfully and record created!");
       // Reset form
       setTitle("");
       setDescription("");
@@ -225,7 +241,8 @@ export default function UploadForm() {
     }
   };
 
-  const submitting = uploadFileMutation.isPending || createMaterialMutation.isPending;
+  const submitting =
+    uploadFileMutation.isPending || createMaterialMutation.isPending;
 
   return (
     <form
@@ -234,7 +251,9 @@ export default function UploadForm() {
     >
       <h2 className="text-xl font-bold mb-6">Create a New Study Resource</h2>
       <p className="text-sm text-gray-600 mb-8">
-        Upload lecture notes, projects, or past questions. The active chain layer is moving to Soroban, so this form handles file storage and cataloging.
+        Upload lecture notes, projects, or past questions. The active chain
+        layer is moving to Soroban, so this form handles file storage and
+        cataloging.
       </p>
 
       <div className="mb-5">
@@ -250,12 +269,16 @@ export default function UploadForm() {
           aria-describedby={fieldErrors.title ? "title-error" : undefined}
         />
         {fieldErrors.title && (
-          <p id="title-error" className="text-red-600 text-xs mt-1">{fieldErrors.title}</p>
+          <p id="title-error" className="text-red-600 text-xs mt-1">
+            {fieldErrors.title}
+          </p>
         )}
       </div>
 
       <div className="mb-5">
-        <label className="block text-sm font-medium mb-2">Short Description</label>
+        <label className="block text-sm font-medium mb-2">
+          Short Description
+        </label>
         <textarea
           value={description}
           onChange={(e) => setDescription(e.target.value)}
@@ -263,10 +286,14 @@ export default function UploadForm() {
           rows={3}
           maxLength={5000}
           className={`w-full border rounded-md px-3 py-2 text-sm resize-none focus:ring-2 focus:ring-blue-100 focus:border-blue-500 ${fieldErrors.description ? "border-red-500" : "border-gray-300"}`}
-          aria-describedby={fieldErrors.description ? "description-error" : undefined}
+          aria-describedby={
+            fieldErrors.description ? "description-error" : undefined
+          }
         />
         {fieldErrors.description && (
-          <p id="description-error" className="text-red-600 text-xs mt-1">{fieldErrors.description}</p>
+          <p id="description-error" className="text-red-600 text-xs mt-1">
+            {fieldErrors.description}
+          </p>
         )}
       </div>
 
@@ -275,12 +302,16 @@ export default function UploadForm() {
         <div className="flex flex-col gap-4">
           {!thumbPreview && (
             <DragDropUpload
-              onFileSelect={(file) => handleThumbChange({ target: { files: [file] } })}
+              onFileSelect={(file) =>
+                handleThumbChange({ target: { files: [file] } })
+              }
               error={fieldErrors.thumb}
             />
           )}
           {fieldErrors.thumb && (
-            <p id="thumb-error" className="text-red-600 text-xs mt-1">{fieldErrors.thumb}</p>
+            <p id="thumb-error" className="text-red-600 text-xs mt-1">
+              {fieldErrors.thumb}
+            </p>
           )}
           {thumbPreview && showCropper && (
             <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
@@ -353,11 +384,15 @@ export default function UploadForm() {
       </div>
 
       <div className="mb-5">
-        <label className="block text-sm font-medium mb-2">Upload Your File</label>
+        <label className="block text-sm font-medium mb-2">
+          Upload Your File
+        </label>
         <p className="text-xs text-gray-500 mb-2">
           Max file size: 50MB. Accepted types: PDF, ZIP, EPUB, MP4.
         </p>
-        <div className={`border-2 border-dashed rounded-lg p-6 text-center transition ${fieldErrors.file ? "border-red-500 hover:border-red-600 bg-red-50" : "border-gray-300 hover:border-blue-400"}`}>
+        <div
+          className={`border-2 border-dashed rounded-lg p-6 text-center transition ${fieldErrors.file ? "border-red-500 hover:border-red-600 bg-red-50" : "border-gray-300 hover:border-blue-400"}`}
+        >
           <input
             type="file"
             id="file-upload"
@@ -384,21 +419,23 @@ export default function UploadForm() {
                 </>
               )}
             </p>
-            <div
-              className="px-4 py-2 text-sm bg-blue-600 text-white rounded-md hover:bg-blue-700"
-            >
+            <div className="px-4 py-2 text-sm bg-blue-600 text-white rounded-md hover:bg-blue-700">
               Choose File
             </div>
           </label>
         </div>
         {fieldErrors.file && (
-          <p id="file-error" className="text-red-600 text-xs mt-1">{fieldErrors.file}</p>
+          <p id="file-error" className="text-red-600 text-xs mt-1">
+            {fieldErrors.file}
+          </p>
         )}
       </div>
 
       <div className="grid sm:grid-cols-3 gap-4 mb-5">
         <div>
-          <label className="block text-sm font-medium mb-2">Set Your Price (optional)</label>
+          <label className="block text-sm font-medium mb-2">
+            Set Your Price (optional)
+          </label>
           <input
             type="number"
             value={price}
@@ -410,7 +447,9 @@ export default function UploadForm() {
             aria-describedby={fieldErrors.price ? "price-error" : undefined}
           />
           {fieldErrors.price && (
-            <p id="price-error" className="text-red-600 text-xs mt-1">{fieldErrors.price}</p>
+            <p id="price-error" className="text-red-600 text-xs mt-1">
+              {fieldErrors.price}
+            </p>
           )}
         </div>
         <div>
@@ -467,6 +506,21 @@ export default function UploadForm() {
             Private - Only you and invited users can access.
           </label>
         </div>
+      </div>
+
+      <div className="mb-6">
+        <PayoutSplits
+          onChange={(splits, isValid) => {
+            setPayoutSplits(splits);
+            setPayoutSplitsValid(isValid);
+          }}
+          initialSplits={payoutSplits || []}
+        />
+        {fieldErrors.payoutSplits && (
+          <p className="text-red-600 text-xs mt-2">
+            {fieldErrors.payoutSplits}
+          </p>
+        )}
       </div>
 
       {error && <p className="text-red-600 text-sm mb-4">{error}</p>}
