@@ -46,6 +46,7 @@ export const REQUIRED_INDEXES = {
   progress: [
     { keys: { userId: 1, materialId: 1 }, options: { unique: true } },
     { keys: { completedAt: -1 } },
+  ],
   dead_letter_events: [
     { keys: { _id: 1 }, options: { unique: true } },
     { keys: { status: 1 } },

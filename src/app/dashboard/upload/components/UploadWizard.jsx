@@ -2,9 +2,19 @@
 
 import Image from "next/image";
 import { useState, useEffect } from "react";
-import { FaCloudUploadAlt, FaCheck, FaArrowRight, FaArrowLeft, FaFileAlt, FaTags, FaDollarSign, FaEye, FaSpinner, FaExternalLinkAlt } from "react-icons/fa";
-import { useAccount, useWriteContract, useWaitForTransactionReceipt } from "wagmi";
-import { FaCloudUploadAlt, FaCheck, FaArrowRight, FaArrowLeft, FaFileAlt, FaTags, FaDollarSign, FaEye, FaExclamationTriangle } from "react-icons/fa";
+import { 
+  FaCloudUploadAlt, 
+  FaCheck, 
+  FaArrowRight, 
+  FaArrowLeft, 
+  FaFileAlt, 
+  FaTags, 
+  FaDollarSign, 
+  FaEye, 
+  FaSpinner, 
+  FaExternalLinkAlt, 
+  FaExclamationTriangle 
+} from "react-icons/fa";
 import { useAccount, useWriteContract, useWaitForTransactionReceipt, useSwitchChain } from "wagmi";
 import { abi } from "../../../../../contracts/EduVaultAbi.js";
 import { celoSepolia } from "wagmi/chains";
@@ -13,10 +23,9 @@ import { useCreateMaterial, useUploadFile } from "@/hooks/api/useMaterials";
 import TransactionStatusPanel from "@/components/transactions/TransactionStatusPanel";
 import { useTransactionCenter } from "@/providers/TransactionProvider";
 import { TransactionStatus } from "@/lib/transactions/transaction";
-import { isUploadChain, SUPPORTED_CHAINS } from "@/lib/web3/chains";
+import { isUploadChain } from "@/lib/web3/chains";
 
 const contractAddress = process.env.NEXT_PUBLIC_UPLOAD_CONTRACT_ADDRESS ?? "0x3f48520ca0d8d51345b416b5a3e083dac8790f55";
-
 
 const TRANSFER_EVENT = parseAbiItem(
   "event Transfer(address indexed from, address indexed to, uint256 indexed tokenId)"
@@ -76,6 +85,9 @@ export default function UploadWizard() {
   const [uploadResult, setUploadResult] = useState(null);
   const [switchingChain, setSwitchingChain] = useState(false);
 
+  const uploadFileMutation = useUploadFile();
+  const createMaterialMutation = useCreateMaterial();
+
   const chainMismatch = address && chainId && !isUploadChain(chainId);
 
   useEffect(() => {
@@ -107,6 +119,17 @@ export default function UploadWizard() {
     if (file) {
       setThumbFile(file);
       setThumbPreview(URL.createObjectURL(file));
+    }
+  };
+
+  const handleSwitchChain = async () => {
+    try {
+      setSwitchingChain(true);
+      await switchChainAsync({ chainId: celoSepolia.id });
+    } catch (err) {
+      console.error("Failed to switch chain:", err);
+    } finally {
+      setSwitchingChain(false);
     }
   };
 
@@ -173,60 +196,27 @@ export default function UploadWizard() {
     }
   };
 
-  const handleSwitchChain = async () => {
-    setError(null);
-    setSwitchingChain(true);
-    try {
-      await switchChainAsync({ chainId: celoSepolia.id });
-    } catch (err) {
-      if (err.code === "ACTION_REJECTED" || err.message?.includes("User rejected")) {
-        setError("Network switch was rejected. Please switch to Celo Sepolia to publish.");
-        setErrorType("chain");
-      } else if (err.message?.includes("does not support")) {
-        setError("Your wallet does not support switching to Celo Sepolia. Please switch manually.");
-        setErrorType("chain");
-      } else {
-        setError(err.message || "Failed to switch network. Please try manually.");
-        setErrorType("chain");
-      }
-    } finally {
-      setSwitchingChain(false);
-    }
-  };
-
-  const uploadFileMutation = useUploadFile();
-  const createMaterialMutation = useCreateMaterial();
-
   const handleSubmit = async () => {
     setError(null);
     setErrorType(null);
-    beginTransaction({
-      scope: "publish",
-      title: "Publishing material",
-      message: "Prepare the upload and approve the mint in your wallet.",
-    });
 
     if (!address) {
       setError("Please connect your wallet to mint an NFT.");
       setErrorType("wallet");
-      failTransaction(new Error("Please connect your wallet to mint an NFT."), {
-        title: "Wallet required",
-        message: "Connect your wallet before publishing this material.",
-        retryable: true,
-      });
       return;
     }
 
     if (chainMismatch) {
-      setError(`Please switch to ${celoSepolia.name} before publishing. Use the network switch button above.`);
+      setError("Please switch your network to Celo Sepolia.");
       setErrorType("chain");
       return;
     }
 
     setWorkflowState("uploading");
     setUploadProgress(0);
-    markStatus(TransactionStatus.Submitting, {
-      title: "Uploading material",
+    beginTransaction({
+      scope: "publish",
+      title: "Publishing material",
       message: "Uploading files and preparing the mint request.",
     });
 
@@ -280,6 +270,7 @@ export default function UploadWizard() {
 
       clearInterval(progressInterval);
       setUploadProgress(100);
+
       setUploadResult(uploadData);
       const tokenURI = uploadData.metadata;
 
@@ -317,35 +308,36 @@ export default function UploadWizard() {
       setWorkflowState("failed");
       failTransaction(err instanceof Error ? err : new Error(String(err)), {
         title: "Publish failed",
-        message: err?.message || "Upload failed. Please try again.",
+        message: friendlyError,
         retryable: true,
       });
     }
   };
 
-
   // Handle write errors
   useEffect(() => {
     if (writeError) {
+      let friendlyError = writeError.message || "Transaction failed. Please try again.";
       if (writeError.code === "ACTION_REJECTED" || writeError.message?.includes("User rejected")) {
-        setError("Transaction rejected by user. Please try again.");
+        friendlyError = "Transaction rejected by user. Please try again.";
         setErrorType("wallet");
       } else if (writeError.message?.includes("insufficient funds")) {
-        setError("Insufficient funds for gas. Please add CELO to your wallet.");
+        friendlyError = "Insufficient funds for gas. Please add CELO to your wallet.";
         setErrorType("wallet");
       } else {
-        setError(writeError.message || "Transaction failed. Please try again.");
         setErrorType("chain");
       }
+      setError(friendlyError);
       setWorkflowState("failed");
-      failTransaction(writeError instanceof Error ? writeError : new Error(String(writeError)), {
-        title: "Publish failed",
-        message: writeError?.message || "Transaction failed. Please try again.",
+      failTransaction(writeError, {
+        title: "Transaction failed",
+        message: friendlyError,
         retryable: true,
       });
     }
-  }, [failTransaction, writeError]);
+  }, [writeError, failTransaction]);
 
+  // Track transaction confirmation progress
   useEffect(() => {
     if (txHash && !isConfirmed) {
       markStatus(TransactionStatus.PendingConfirmation, {
@@ -382,28 +374,19 @@ export default function UploadWizard() {
 
         const saveToDb = async () => {
           try {
-            const response = await fetch("/api/materials", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                title,
-                description,
-                price: price ? Number(price) : 0,
-                usageRights,
-                visibility,
-                thumbnailUrl: uploadResult.image || null,
-                fileUrl: uploadResult.fileUrl,
-                tokenId,
-                txHash: receipt.transactionHash,
-              }),
+            const savedData = await createMaterialMutation.mutateAsync({
+              title,
+              description,
+              price: price ? Number(price) : 0,
+              usageRights,
+              visibility,
+              storageKey: uploadResult.storageKey,
+              thumbnail: uploadResult.image || null,
+              metadataUrl: uploadResult.metadata,
+              creator: address,
+              txHash: receipt.transactionHash,
+              tokenId,
             });
-
-            if (!response.ok) {
-              const errData = await response.json();
-              throw new Error(errData?.error || "Database recording failed");
-            }
-
-            const savedData = await response.json();
 
             setMintResult({
               tokenId,
@@ -413,21 +396,25 @@ export default function UploadWizard() {
             });
 
             setWorkflowState("success");
+            confirmTransaction({
+              txHash: receipt.transactionHash,
+              title: "Material published",
+              message: "Your material is now available in the marketplace.",
+            });
           } catch (err) {
             console.error("Database persistence error:", err);
             setError(`NFT minted successfully but database registration failed: ${err.message}`);
             setErrorType("database");
             setWorkflowState("failed");
+            failTransaction(err instanceof Error ? err : new Error(String(err)), {
+              title: "Database sync failed",
+              message: err?.message || "Mint completed but database sync failed.",
+              retryable: true,
+            });
           }
         };
 
         saveToDb();
-        setWorkflowState("success");
-        confirmTransaction({
-          txHash: receipt.transactionHash,
-          title: "Material published",
-          message: "Your material is now available in the marketplace.",
-        });
       } catch (err) {
         console.error("Receipt parsing error:", err);
         setError(`Mint completed but failed to parse receipt: ${err.message}`);
@@ -449,8 +436,7 @@ export default function UploadWizard() {
         retryable: true,
       });
     }
-  }, [isConfirmed, isFailed, receipt, uploadResult]);
-  }, [confirmTransaction, failTransaction, isConfirmed, isFailed, receipt]);
+  }, [confirmTransaction, failTransaction, isConfirmed, isFailed, receipt, uploadResult, createMaterialMutation, title, description, price, usageRights, visibility, address]);
 
   const handleReset = () => {
     setTitle("");
@@ -490,10 +476,13 @@ export default function UploadWizard() {
         {/* Material Preview Card */}
         <div className="border border-gray-200 rounded-xl p-4 mb-6 bg-gray-50 flex items-center gap-4 text-left">
           {thumbPreview ? (
-            <img
+            <Image
               src={thumbPreview}
               alt="Published Material"
-              className="w-16 h-16 rounded-lg object-cover border border-gray-200"
+              width={64}
+              height={64}
+              unoptimized
+              className="rounded-lg object-cover border border-gray-200"
             />
           ) : (
             <div className="w-16 h-16 bg-blue-50 text-blue-500 rounded-lg flex items-center justify-center border border-gray-200">
@@ -664,20 +653,6 @@ export default function UploadWizard() {
               <div className="flex justify-between text-xs font-semibold text-gray-500 px-1">
                 <span>Storing files...</span>
                 <span>{uploadProgress}%</span>
-            <div>
-              <label className="block text-sm font-medium mb-2">Thumbnail Image (Optional)</label>
-              <div className="flex items-center gap-4">
-                <input type="file" accept="image/*" onChange={handleThumbChange} className="text-sm" />
-              {thumbPreview && (
-                  <Image
-                    src={thumbPreview}
-                    alt="Preview"
-                    width={64}
-                    height={64}
-                    unoptimized
-                    className="rounded object-cover border"
-                  />
-                )}
               </div>
             </div>
           </div>
@@ -700,40 +675,6 @@ export default function UploadWizard() {
             <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-purple-50 text-purple-700 rounded-full text-xs font-medium border border-purple-100">
               <span className="w-2 h-2 rounded-full bg-purple-500 animate-ping"></span>
               Waiting for wallet confirmation...
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium mb-2">Category</label>
-              <select
-                value={category}
-                onChange={(e) => { setCategory(e.target.value); setSubject(""); }}
-                className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-blue-100 focus:border-blue-500"
-              >
-                <option value="">Select a category</option>
-                {categories.map((cat) => (
-                  <option key={cat.id} value={cat.id}>{cat.label}</option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium mb-2">Subject</label>
-              <select
-                value={subject}
-                onChange={(e) => setSubject(e.target.value)}
-                disabled={!category}
-                className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-blue-100 focus:border-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <option value="">Select a subject</option>
-                {taxonomySubjects
-                  .filter((s) => !category || s.categoryId === category)
-                  .map((s) => (
-                    <option key={s.id} value={s.label}>{s.label}</option>
-                  ))}
-              </select>
-              {!category && (
-                <p className="text-xs text-gray-400 mt-1">Select a category first</p>
-              )}
             </div>
           </div>
         )}
@@ -777,7 +718,14 @@ export default function UploadWizard() {
                   <div className="flex items-center gap-4">
                     <input type="file" accept="image/*" onChange={handleThumbChange} className="text-sm" />
                     {thumbPreview && (
-                      <img src={thumbPreview} alt="Preview" className="w-16 h-16 rounded object-cover border" />
+                      <Image
+                        src={thumbPreview}
+                        alt="Preview"
+                        width={64}
+                        height={64}
+                        unoptimized
+                        className="rounded object-cover border"
+                      />
                     )}
                   </div>
                 </div>
@@ -813,15 +761,41 @@ export default function UploadWizard() {
                     placeholder="Comprehensive lecture notes covering key development theories and examples."
                     rows={4}
                     className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm resize-none focus:ring-2 focus:ring-blue-100 focus:border-blue-500"
-                  <p className="text-xs text-gray-500 mb-1">Thumbnail</p>
-                  <Image
-                    src={thumbPreview}
-                    alt="Thumbnail"
-                    width={80}
-                    height={80}
-                    unoptimized
-                    className="rounded object-cover"
                   />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium mb-2">Category</label>
+                  <select
+                    value={category}
+                    onChange={(e) => { setCategory(e.target.value); setSubject(""); }}
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-blue-100 focus:border-blue-500"
+                  >
+                    <option value="">Select a category</option>
+                    {categories.map((cat) => (
+                      <option key={cat.id} value={cat.id}>{cat.label}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium mb-2">Subject</label>
+                  <select
+                    value={subject}
+                    onChange={(e) => setSubject(e.target.value)}
+                    disabled={!category}
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-blue-100 focus:border-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <option value="">Select a subject</option>
+                    {taxonomySubjects
+                      .filter((s) => !category || s.categoryId === category)
+                      .map((s) => (
+                        <option key={s.id} value={s.label}>{s.label}</option>
+                      ))}
+                  </select>
+                  {!category && (
+                    <p className="text-xs text-gray-400 mt-1">Select a category first</p>
+                  )}
                 </div>
               </div>
             )}
@@ -836,45 +810,31 @@ export default function UploadWizard() {
                   </p>
                 </div>
 
-              )}
-              {category && (
-                <div>
-                  <p className="text-xs text-gray-500 mb-1">Category</p>
-                  <p className="text-sm font-medium">
-                    {categories.find((c) => c.id === category)?.label || category}
-                  </p>
-                </div>
-              )}
-              {subject && (
-                <div>
-                  <p className="text-xs text-gray-500 mb-1">Subject</p>
-                  <p className="text-sm font-medium">{subject}</p>
-                </div>
-              )}
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-sm font-medium mb-2">Price (CELO) - Optional</label>
-                  <input
-                    type="number"
-                    value={price}
-                    onChange={(e) => setPrice(e.target.value)}
-                    placeholder="0.00"
-                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-blue-100 focus:border-blue-500"
-                  />
-                  <p className="text-xs text-gray-500 mt-1">Leave empty for free material</p>
-                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-sm font-medium mb-2">Price (CELO) - Optional</label>
+                    <input
+                      type="number"
+                      value={price}
+                      onChange={(e) => setPrice(e.target.value)}
+                      placeholder="0.00"
+                      className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-blue-100 focus:border-blue-500"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">Leave empty for free material</p>
+                  </div>
 
-                <div>
-                  <label className="block text-sm font-medium mb-2">Usage Rights</label>
-                  <select
-                    value={usageRights}
-                    onChange={(e) => setUsageRights(e.target.value)}
-                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-blue-100 focus:border-blue-500"
-                  >
-                    <option>Standard License (download only)</option>
-                    <option>Creative Commons</option>
-                    <option>Private Use Only</option>
-                  </select>
+                  <div>
+                    <label className="block text-sm font-medium mb-2">Usage Rights</label>
+                    <select
+                      value={usageRights}
+                      onChange={(e) => setUsageRights(e.target.value)}
+                      className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-blue-100 focus:border-blue-500"
+                    >
+                      <option>Standard License (download only)</option>
+                      <option>Creative Commons</option>
+                      <option>Private Use Only</option>
+                    </select>
+                  </div>
                 </div>
 
                 <div>
@@ -929,7 +889,28 @@ export default function UploadWizard() {
                   {thumbPreview && (
                     <div>
                       <p className="text-xs text-gray-500 mb-1">Thumbnail</p>
-                      <img src={thumbPreview} alt="Thumbnail" className="w-20 h-20 rounded object-cover" />
+                      <Image
+                        src={thumbPreview}
+                        alt="Thumbnail"
+                        width={80}
+                        height={80}
+                        unoptimized
+                        className="rounded object-cover"
+                      />
+                    </div>
+                  )}
+                  {category && (
+                    <div>
+                      <p className="text-xs text-gray-500 mb-1">Category</p>
+                      <p className="text-sm font-medium">
+                        {categories.find((c) => c.id === category)?.label || category}
+                      </p>
+                    </div>
+                  )}
+                  {subject && (
+                    <div>
+                      <p className="text-xs text-gray-500 mb-1">Subject</p>
+                      <p className="text-sm font-medium">{subject}</p>
                     </div>
                   )}
                   <div>
@@ -980,36 +961,6 @@ export default function UploadWizard() {
           >
             <FaArrowLeft className="text-xs" />
             Previous
-            onClick={handleSubmit}
-            disabled={isSubmitting || !address || chainMismatch}
-            className="px-6 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 transition text-sm font-medium disabled:opacity-50 flex items-center gap-2"
-          >
-            {workflowState === "uploading" ? (
-              <>
-                <span className="animate-spin">⏳</span>
-                Uploading... ({uploadProgress}%)
-              </>
-            ) : workflowState === "minting" && isPending ? (
-              <>
-                <span className="animate-spin">⏳</span>
-                Opening wallet...
-              </>
-            ) : workflowState === "minting" && isWaiting ? (
-              <>
-                <span className="animate-spin">⏳</span>
-                Awaiting confirmation...
-              </>
-            ) : workflowState === "minting" ? (
-              <>
-                <span className="animate-spin">⏳</span>
-                Minting NFT...
-              </>
-            ) : (
-              <>
-                Publish & Mint NFT
-                <FaArrowRight className="text-xs" />
-              </>
-            )}
           </button>
 
           {currentStep < STEPS.length ? (
@@ -1025,7 +976,7 @@ export default function UploadWizard() {
             <button
               type="button"
               onClick={handleSubmit}
-              disabled={!address}
+              disabled={isSubmitting || !address || chainMismatch}
               className="px-6 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 transition text-sm font-medium disabled:opacity-50 flex items-center gap-2"
             >
               Publish & Mint NFT

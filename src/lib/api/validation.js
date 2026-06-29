@@ -185,7 +185,6 @@ export function validateMaterialPayload(body) {
     visibility,
     coverImageUrl: sanitizeString(body?.coverImageUrl, { maxLength: 2048 }) || null,
     thumbnailUrl: sanitizeString(body?.thumbnailUrl, { maxLength: 2048 }) || null,
-    fileUrl,
     tokenId: sanitizeString(body?.tokenId, { maxLength: 80 }) || null,
     txHash: sanitizeString(body?.txHash, { maxLength: 100 }) || null,
     category,
