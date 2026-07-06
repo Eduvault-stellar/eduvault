@@ -114,3 +114,36 @@ export function verifyWalletAddressMatch({ sessionAddress, payloadAddress, sessi
   sessionState.addressMismatchWarnings = 0;
   return { valid: true };
 }
+
+/**
+ * Validate that a wallet has enough XLM to cover the total price and estimated gas fee.
+ * 
+ * @param {object} params
+ * @param {string} params.walletAddress - Stellar G-address of the buyer
+ * @param {number} params.totalPrice - Total price of the checkout items (in XLM)
+ * @param {number} params.estimatedGas - Estimated gas fee (in XLM)
+ * @returns {Promise<{ hasEnough: boolean, balance: number, required: number, remainingBalance: number }>}
+ */
+export async function validateCheckoutBalance({ walletAddress, totalPrice, estimatedGas }) {
+  try {
+    const { loadAccount } = await import('./horizonClient');
+    const account = await loadAccount(walletAddress);
+    const nativeBalanceObj = account.balances.find(b => b.asset_type === 'native');
+    const nativeBalance = nativeBalanceObj ? parseFloat(nativeBalanceObj.balance) : 0;
+    const required = totalPrice + estimatedGas;
+    
+    // In Stellar, the account minimum balance is 1 XLM. Let's subtract the required amount.
+    const remainingBalance = nativeBalance - required;
+    const hasEnough = remainingBalance >= 0;
+
+    return {
+      hasEnough,
+      balance: nativeBalance,
+      required,
+      remainingBalance
+    };
+  } catch (err) {
+    // If account not found (e.g., 404)
+    return { hasEnough: false, balance: 0, required: totalPrice + estimatedGas, remainingBalance: -(totalPrice + estimatedGas) };
+  }
+}
