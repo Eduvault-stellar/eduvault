@@ -26,7 +26,7 @@ const heartbeatFrequencyMS = parseInt(
 
 const globalForMongo = globalThis;
 
-function getClientPromise() {
+export function getClientPromise() {
   if (!uri) {
     const errorMsg = "MONGODB_URI is not set in environment variables";
     console.error(`[Database Error]: ${errorMsg}`);
