@@ -6,10 +6,40 @@ use super::*;
 use soroban_sdk::testutils::{Address as _, Events as _};
 use soroban_sdk::{vec, Event};
 
-fn install_contract(env: &Env) -> (Address, MaterialRegistryClient<'_>) {
+fn install_and_init_contract(
+    env: &Env,
+) -> (
+    Address,
+    MaterialRegistryClient<'_>,
+    Address,
+    Address,
+    Address,
+) {
     let contract_id = env.register(MaterialRegistry, ());
     let client = MaterialRegistryClient::new(env, &contract_id);
-    (contract_id, client)
+    let admin = Address::generate(env);
+    let xlm = Address::generate(env);
+    let usdc = Address::generate(env);
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .persistent()
+            .set(&DataKey::UpgradeAdmin, &admin);
+        env.storage().persistent().set(
+            &DataKey::AllowedAsset(xlm.clone()),
+            &AllowedAssetInfo {
+                kind: AssetKind::Native,
+                enabled: true,
+            },
+        );
+        env.storage().persistent().set(
+            &DataKey::AllowedAsset(usdc.clone()),
+            &AllowedAssetInfo {
+                kind: AssetKind::Token,
+                enabled: true,
+            },
+        );
+    });
+    (contract_id, client, admin, xlm, usdc)
 }
 
 fn bytes32(env: &Env, value: u8) -> BytesN<32> {
@@ -20,28 +50,25 @@ fn metadata_uri(env: &Env) -> String {
     String::from_str(env, "ipfs://eduvault/material/intro-to-soroban")
 }
 
-fn default_quotes(env: &Env) -> Vec<AssetQuote> {
-    let xlm = Address::generate(env);
-    let usdc = Address::generate(env);
+fn default_quotes(env: &Env, xlm: &Address, usdc: &Address) -> Vec<AssetQuote> {
     vec![
         env,
         AssetQuote {
-            asset: xlm,
+            asset: xlm.clone(),
             amount: 2_000_000,
         },
         AssetQuote {
-            asset: usdc,
+            asset: usdc.clone(),
             amount: 5_000_000,
         },
     ]
 }
 
-fn replacement_quotes(env: &Env) -> Vec<AssetQuote> {
-    let usdc = Address::generate(env);
+fn replacement_quotes(env: &Env, usdc: &Address) -> Vec<AssetQuote> {
     vec![
         env,
         AssetQuote {
-            asset: usdc,
+            asset: usdc.clone(),
             amount: 7_500_000,
         },
     ]
@@ -79,6 +106,8 @@ fn seed_material(
     contract_id: &Address,
     creator: &Address,
     material_id: &BytesN<32>,
+    xlm: &Address,
+    usdc: &Address,
 ) -> MaterialRecord {
     let record = MaterialRecord {
         material_id: material_id.clone(),
@@ -88,7 +117,7 @@ fn seed_material(
         rights_hash: bytes32(env, 2),
         paused: false,
         status: MaterialStatus::Active,
-        quotes: default_quotes(env),
+        quotes: default_quotes(env, xlm, usdc),
         payout_shares: default_payout_shares(env),
         created_ledger: env.ledger().sequence(),
         updated_ledger: env.ledger().sequence(),
@@ -98,16 +127,38 @@ fn seed_material(
 }
 
 #[test]
+fn initializes_successfully() {
+    let env = Env::default();
+    let contract_id = env.register(MaterialRegistry, ());
+    let client = MaterialRegistryClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let asset = Address::generate(&env);
+    let initial_assets = vec![
+        &env,
+        InitialAsset {
+            asset: asset.clone(),
+            kind: AssetKind::Token,
+        },
+    ];
+
+    env.mock_all_auths();
+    client.initialize(&admin, &initial_assets);
+
+    assert_eq!(client.get_upgrade_admin(), Some(admin));
+    assert!(client.is_asset_allowed(&asset));
+}
+
+#[test]
 fn registers_material_and_emits_registered_event() {
     let env = Env::default();
-    let (contract_id, client) = install_contract(&env);
+    let (contract_id, client, admin, xlm, usdc) = install_and_init_contract(&env);
     env.mock_all_auths();
 
     let creator = Address::generate(&env);
     let metadata_uri = metadata_uri(&env);
     let metadata_hash = bytes32(&env, 11);
     let rights_hash = bytes32(&env, 22);
-    let quotes = default_quotes(&env);
+    let quotes = default_quotes(&env, &xlm, &usdc);
     let payout_shares = default_payout_shares(&env);
 
     let material_id = client.register_material(
@@ -142,7 +193,7 @@ fn registers_material_and_emits_registered_event() {
 #[test]
 fn rejects_duplicate_quote_assets() {
     let env = Env::default();
-    let (_contract_id, client) = install_contract(&env);
+    let (_contract_id, client, admin, xlm, usdc) = install_and_init_contract(&env);
     env.mock_all_auths();
 
     let creator = Address::generate(&env);
@@ -171,7 +222,7 @@ fn rejects_duplicate_quote_assets() {
 #[test]
 fn rejects_empty_payout_shares() {
     let env = Env::default();
-    let (_contract_id, client) = install_contract(&env);
+    let (_contract_id, client, admin, xlm, usdc) = install_and_init_contract(&env);
     env.mock_all_auths();
 
     let creator = Address::generate(&env);
@@ -181,7 +232,7 @@ fn rejects_empty_payout_shares() {
         &metadata_uri(&env),
         &bytes32(&env, 1),
         &bytes32(&env, 2),
-        &default_quotes(&env),
+        &default_quotes(&env, &xlm, &usdc),
         &empty_payouts,
     );
 
@@ -191,7 +242,7 @@ fn rejects_empty_payout_shares() {
 #[test]
 fn rejects_too_many_payout_shares() {
     let env = Env::default();
-    let (_contract_id, client) = install_contract(&env);
+    let (_contract_id, client, admin, xlm, usdc) = install_and_init_contract(&env);
     env.mock_all_auths();
 
     let creator = Address::generate(&env);
@@ -227,7 +278,7 @@ fn rejects_too_many_payout_shares() {
         &metadata_uri(&env),
         &bytes32(&env, 1),
         &bytes32(&env, 2),
-        &default_quotes(&env),
+        &default_quotes(&env, &xlm, &usdc),
         &invalid_payouts,
     );
 
@@ -237,7 +288,7 @@ fn rejects_too_many_payout_shares() {
 #[test]
 fn rejects_duplicate_payout_recipient() {
     let env = Env::default();
-    let (_contract_id, client) = install_contract(&env);
+    let (_contract_id, client, admin, xlm, usdc) = install_and_init_contract(&env);
     env.mock_all_auths();
 
     let creator = Address::generate(&env);
@@ -258,7 +309,7 @@ fn rejects_duplicate_payout_recipient() {
         &metadata_uri(&env),
         &bytes32(&env, 1),
         &bytes32(&env, 2),
-        &default_quotes(&env),
+        &default_quotes(&env, &xlm, &usdc),
         &invalid_payouts,
     );
 
@@ -268,7 +319,7 @@ fn rejects_duplicate_payout_recipient() {
 #[test]
 fn rejects_zero_payout_share() {
     let env = Env::default();
-    let (_contract_id, client) = install_contract(&env);
+    let (_contract_id, client, admin, xlm, usdc) = install_and_init_contract(&env);
     env.mock_all_auths();
 
     let creator = Address::generate(&env);
@@ -288,7 +339,7 @@ fn rejects_zero_payout_share() {
         &metadata_uri(&env),
         &bytes32(&env, 1),
         &bytes32(&env, 2),
-        &default_quotes(&env),
+        &default_quotes(&env, &xlm, &usdc),
         &invalid_payouts,
     );
 
@@ -298,7 +349,7 @@ fn rejects_zero_payout_share() {
 #[test]
 fn rejects_payout_share_over_basis_points_without_overflow() {
     let env = Env::default();
-    let (_contract_id, client) = install_contract(&env);
+    let (_contract_id, client, admin, xlm, usdc) = install_and_init_contract(&env);
     env.mock_all_auths();
 
     let creator = Address::generate(&env);
@@ -318,7 +369,7 @@ fn rejects_payout_share_over_basis_points_without_overflow() {
         &metadata_uri(&env),
         &bytes32(&env, 1),
         &bytes32(&env, 2),
-        &default_quotes(&env),
+        &default_quotes(&env, &xlm, &usdc),
         &invalid_payouts,
     );
 
@@ -328,7 +379,7 @@ fn rejects_payout_share_over_basis_points_without_overflow() {
 #[test]
 fn rejects_payout_share_sum_below_basis_points() {
     let env = Env::default();
-    let (_contract_id, client) = install_contract(&env);
+    let (_contract_id, client, admin, xlm, usdc) = install_and_init_contract(&env);
     env.mock_all_auths();
 
     let creator = Address::generate(&env);
@@ -348,7 +399,7 @@ fn rejects_payout_share_sum_below_basis_points() {
         &metadata_uri(&env),
         &bytes32(&env, 1),
         &bytes32(&env, 2),
-        &default_quotes(&env),
+        &default_quotes(&env, &xlm, &usdc),
         &invalid_payouts,
     );
 
@@ -358,7 +409,7 @@ fn rejects_payout_share_sum_below_basis_points() {
 #[test]
 fn rejects_payout_share_sum_above_basis_points() {
     let env = Env::default();
-    let (_contract_id, client) = install_contract(&env);
+    let (_contract_id, client, admin, xlm, usdc) = install_and_init_contract(&env);
     env.mock_all_auths();
 
     let creator = Address::generate(&env);
@@ -378,7 +429,7 @@ fn rejects_payout_share_sum_above_basis_points() {
         &metadata_uri(&env),
         &bytes32(&env, 1),
         &bytes32(&env, 2),
-        &default_quotes(&env),
+        &default_quotes(&env, &xlm, &usdc),
         &invalid_payouts,
     );
 
@@ -388,19 +439,19 @@ fn rejects_payout_share_sum_above_basis_points() {
 #[test]
 fn rejects_duplicate_material_id_collisions() {
     let env = Env::default();
-    let (contract_id, client) = install_contract(&env);
+    let (contract_id, client, admin, xlm, usdc) = install_and_init_contract(&env);
     env.mock_all_auths();
 
     let creator = Address::generate(&env);
     let duplicate_id = derive_material_id(&env, &creator, 0);
-    seed_material(&env, &contract_id, &creator, &duplicate_id);
+    seed_material(&env, &contract_id, &creator, &duplicate_id, &xlm, &usdc);
 
     let result = client.try_register_material(
         &creator,
         &metadata_uri(&env),
         &bytes32(&env, 7),
         &bytes32(&env, 8),
-        &default_quotes(&env),
+        &default_quotes(&env, &xlm, &usdc),
         &default_payout_shares(&env),
     );
 
@@ -410,15 +461,15 @@ fn rejects_duplicate_material_id_collisions() {
 #[test]
 fn requires_creator_auth_for_updates() {
     let env = Env::default();
-    let (contract_id, client) = install_contract(&env);
+    let (contract_id, client, admin, xlm, usdc) = install_and_init_contract(&env);
 
     let creator = Address::generate(&env);
     let material_id = bytes32(&env, 99);
-    seed_material(&env, &contract_id, &creator, &material_id);
+    seed_material(&env, &contract_id, &creator, &material_id, &xlm, &usdc);
 
     let result = client.try_update_sale_terms(
         &material_id,
-        &replacement_quotes(&env),
+        &replacement_quotes(&env, &usdc),
         &replacement_payout_shares(&env),
     );
 
@@ -428,7 +479,7 @@ fn requires_creator_auth_for_updates() {
 #[test]
 fn updates_sale_terms_and_status_and_supports_quote_lookup() {
     let env = Env::default();
-    let (contract_id, client) = install_contract(&env);
+    let (contract_id, client, admin, xlm, usdc) = install_and_init_contract(&env);
     env.mock_all_auths();
 
     let creator = Address::generate(&env);
@@ -437,17 +488,16 @@ fn updates_sale_terms_and_status_and_supports_quote_lookup() {
         &metadata_uri(&env),
         &bytes32(&env, 4),
         &bytes32(&env, 5),
-        &default_quotes(&env),
+        &default_quotes(&env, &xlm, &usdc),
         &default_payout_shares(&env),
     );
 
-    let next_quotes = replacement_quotes(&env);
+    let next_quotes = replacement_quotes(&env, &usdc);
     let tracked_asset = next_quotes.get_unchecked(0).asset.clone();
     let next_payout_shares = replacement_payout_shares(&env);
 
     // Approve the replacement asset before updating sale terms.
     // The upgrade-admin is the first creator; auth is mocked for the whole test.
-    client.set_asset_allowed(&creator, &tracked_asset, &AssetKind::Token, &true);
 
     client.update_sale_terms(&material_id, &next_quotes, &next_payout_shares);
     let sale_terms_events = env.events().all();
@@ -490,29 +540,18 @@ fn updates_sale_terms_and_status_and_supports_quote_lookup() {
 }
 
 #[test]
-fn bootstraps_and_transfers_upgrade_admin() {
+fn transfers_upgrade_admin() {
     let env = Env::default();
-    let (_contract_id, client) = install_contract(&env);
+    let (_contract_id, client, admin, xlm, usdc) = install_and_init_contract(&env);
     env.mock_all_auths();
 
-    let creator = Address::generate(&env);
-    let material_id = client.register_material(
-        &creator,
-        &metadata_uri(&env),
-        &bytes32(&env, 33),
-        &bytes32(&env, 44),
-        &default_quotes(&env),
-        &default_payout_shares(&env),
-    );
-    let _ = client.get_material(&material_id);
-
-    assert_eq!(client.get_upgrade_admin(), Some(creator.clone()));
+    assert_eq!(client.get_upgrade_admin(), Some(admin.clone()));
 
     let next_admin = Address::generate(&env);
-    client.set_upgrade_admin(&creator, &next_admin);
+    client.set_upgrade_admin(&admin, &next_admin);
     assert_eq!(client.get_upgrade_admin(), Some(next_admin.clone()));
 
-    let denied = client.try_set_upgrade_admin(&creator, &Address::generate(&env));
+    let denied = client.try_set_upgrade_admin(&admin, &Address::generate(&env));
     assert_eq!(denied, Err(Ok(RegistryError::NotAuthorized)));
 }
 
@@ -521,11 +560,11 @@ fn bootstraps_and_transfers_upgrade_admin() {
 #[test]
 fn set_asset_allowed_stores_info_and_emits_event() {
     let env = Env::default();
-    let (contract_id, client) = install_contract(&env);
+    let (contract_id, client, admin, xlm, usdc) = install_and_init_contract(&env);
     env.mock_all_auths();
 
     let creator = Address::generate(&env);
-    let xlm = Address::generate(&env);
+    let new_asset = Address::generate(&env);
 
     // Bootstrap: first registration sets upgrade-admin = creator
     client.register_material(
@@ -533,18 +572,18 @@ fn set_asset_allowed_stores_info_and_emits_event() {
         &metadata_uri(&env),
         &bytes32(&env, 1),
         &bytes32(&env, 2),
-        &default_quotes(&env),
+        &default_quotes(&env, &xlm, &usdc),
         &default_payout_shares(&env),
     );
 
-    assert!(!client.is_asset_allowed(&xlm));
-    assert!(client.get_asset_info(&xlm).is_none());
+    assert!(!client.is_asset_allowed(&new_asset));
+    assert!(client.get_asset_info(&new_asset).is_none());
 
-    client.set_asset_allowed(&creator, &xlm, &AssetKind::Native, &true);
+    client.set_asset_allowed(&admin, &new_asset, &AssetKind::Native, &true);
     let asset_policy_events = env.events().all();
 
-    assert!(client.is_asset_allowed(&xlm));
-    let info = client.get_asset_info(&xlm).unwrap();
+    assert!(client.is_asset_allowed(&new_asset));
+    let info = client.get_asset_info(&new_asset).unwrap();
     assert_eq!(info.kind, AssetKind::Native);
     assert!(info.enabled);
 
@@ -554,7 +593,7 @@ fn set_asset_allowed_stores_info_and_emits_event() {
     assert_eq!(
         last,
         &AssetPolicyUpdatedEvent {
-            asset: xlm,
+            asset: new_asset.clone(),
             kind: AssetKind::Native,
             enabled: true,
         }
@@ -565,11 +604,10 @@ fn set_asset_allowed_stores_info_and_emits_event() {
 #[test]
 fn disabling_asset_blocks_quote_registration() {
     let env = Env::default();
-    let (_contract_id, client) = install_contract(&env);
+    let (_contract_id, client, admin, xlm, usdc) = install_and_init_contract(&env);
     env.mock_all_auths();
 
     let creator = Address::generate(&env);
-    let usdc = Address::generate(&env);
 
     // First registration; no admin yet so validation is skipped.
     client.register_material(
@@ -577,19 +615,19 @@ fn disabling_asset_blocks_quote_registration() {
         &metadata_uri(&env),
         &bytes32(&env, 1),
         &bytes32(&env, 2),
-        &default_quotes(&env),
+        &default_quotes(&env, &xlm, &usdc),
         &default_payout_shares(&env),
     );
 
     // Allow USDC, then immediately disable it.
-    client.set_asset_allowed(&creator, &usdc, &AssetKind::Token, &true);
-    client.set_asset_allowed(&creator, &usdc, &AssetKind::Token, &false);
+    client.set_asset_allowed(&admin, &usdc, &AssetKind::Token, &true);
+    client.set_asset_allowed(&admin, &usdc, &AssetKind::Token, &false);
 
     // Attempting to register a second material quoting the disabled asset must fail.
     let bad_quotes = vec![
         &env,
         AssetQuote {
-            asset: usdc,
+            asset: usdc.clone(),
             amount: 1_000_000,
         },
     ];
@@ -607,7 +645,7 @@ fn disabling_asset_blocks_quote_registration() {
 #[test]
 fn update_sale_terms_rejects_unapproved_asset() {
     let env = Env::default();
-    let (_contract_id, client) = install_contract(&env);
+    let (_contract_id, client, admin, xlm, usdc) = install_and_init_contract(&env);
     env.mock_all_auths();
 
     let creator = Address::generate(&env);
@@ -618,7 +656,7 @@ fn update_sale_terms_rejects_unapproved_asset() {
         &metadata_uri(&env),
         &bytes32(&env, 1),
         &bytes32(&env, 2),
-        &default_quotes(&env),
+        &default_quotes(&env, &xlm, &usdc),
         &default_payout_shares(&env),
     );
 
@@ -640,7 +678,7 @@ fn update_sale_terms_rejects_unapproved_asset() {
 #[test]
 fn non_admin_cannot_set_asset_allowed() {
     let env = Env::default();
-    let (_contract_id, client) = install_contract(&env);
+    let (_contract_id, client, admin, xlm, usdc) = install_and_init_contract(&env);
     env.mock_all_auths();
 
     let creator = Address::generate(&env);
@@ -653,32 +691,10 @@ fn non_admin_cannot_set_asset_allowed() {
         &metadata_uri(&env),
         &bytes32(&env, 1),
         &bytes32(&env, 2),
-        &default_quotes(&env),
+        &default_quotes(&env, &xlm, &usdc),
         &default_payout_shares(&env),
     );
 
     let result = client.try_set_asset_allowed(&intruder, &asset, &AssetKind::Token, &true);
     assert_eq!(result, Err(Ok(RegistryError::NotAuthorized)));
-}
-
-#[test]
-fn first_registration_skips_asset_validation() {
-    // Before any material has been registered the upgrade-admin key does not
-    // exist, so asset allowlist validation must be bypassed entirely.
-    let env = Env::default();
-    let (_contract_id, client) = install_contract(&env);
-    env.mock_all_auths();
-
-    let creator = Address::generate(&env);
-    // Use completely random, never-approved addresses for the quotes.
-    let result = client.try_register_material(
-        &creator,
-        &metadata_uri(&env),
-        &bytes32(&env, 1),
-        &bytes32(&env, 2),
-        &default_quotes(&env),
-        &default_payout_shares(&env),
-    );
-    // Should succeed even though no assets are pre-approved.
-    assert!(result.is_ok());
 }
