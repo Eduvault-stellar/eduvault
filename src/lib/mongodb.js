@@ -1,5 +1,6 @@
 import { cpus } from "node:os";
 import { MongoClient } from "mongodb";
+import { ensureChallengeIndexes } from "@/lib/auth/challenge";
 
 const uri = process.env.MONGODB_URI;
 
@@ -88,6 +89,8 @@ async function ensureIndexes(db) {
       { category: 1, price: 1, title: 1, description: 1 },
       { name: "materials_search_compound_idx", background: true },
     );
+
+    await ensureChallengeIndexes(db);
 
     console.log("MongoDB indexes ensured successfully.");
   } catch (error) {
