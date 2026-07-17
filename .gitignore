@@ -48,3 +48,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+soroban/contracts/purchase-manager/test_snapshots/test/returns_false_for_non_existent_users.1.json
+soroban/contracts/purchase-manager/test_snapshots/test/rejects_unauthorized_platform_config_change.1.json
+soroban/contracts/purchase-manager/test_snapshots/test/purchase_fails_for_invalid_material.1.json
