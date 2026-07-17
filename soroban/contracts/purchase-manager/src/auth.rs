@@ -19,6 +19,12 @@ pub fn set_admin_role(env: &Env, admin: &Address) {
         .set(&AuthDataKey::AdminRole(admin.clone()), &true);
 }
 
+pub fn remove_admin_role(env: &Env, admin: &Address) {
+    env.storage()
+        .persistent()
+        .remove(&AuthDataKey::AdminRole(admin.clone()));
+}
+
 pub fn require_admin(env: &Env, caller: &Address) -> Result<(), PurchaseError> {
     caller.require_auth();
     if !has_admin_role(env, caller) {
