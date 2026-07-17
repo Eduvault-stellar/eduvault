@@ -533,8 +533,6 @@ impl PurchaseManager {
             total_amount: gross,
             platform_fee,
             seller_net,
-            &transaction_id,
-        )?;
             payout_shares: material.payout_shares.clone(),
             purchase_ledger: current_ledger,
             claimed: false,
@@ -809,8 +807,7 @@ impl PurchaseManager {
         admin: Address,
         new_platform_fee_bps: u32,
     ) -> Result<(), PurchaseError> {
-        admin.require_auth();
-        verify_admin(&env, &admin)?;
+        auth::require_admin(&env, &admin)?;
 
         if new_platform_fee_bps > MAX_PLATFORM_FEE_BPS {
             return Err(PurchaseError::InvalidPlatformFee);
@@ -901,8 +898,7 @@ impl PurchaseManager {
         admin: Address,
         new_admin: Address,
     ) -> Result<(), PurchaseError> {
-        admin.require_auth();
-        verify_admin(&env, &admin)?;
+        auth::require_admin(&env, &admin)?;
 
         env.storage()
             .persistent()
@@ -934,9 +930,7 @@ impl PurchaseManager {
             return Err(PurchaseError::NotAuthorized);
         }
 
-        env.storage()
-            .persistent()
-            .set(&DataKey::Admin, &new_admin);
+        auth::set_admin_role(&env, &new_admin);
         env.storage()
             .persistent()
             .remove(&DataKey::PendingAdmin);
@@ -967,8 +961,7 @@ impl PurchaseManager {
         creator: Address,
         tier: CreatorTier,
     ) -> Result<(), PurchaseError> {
-        admin.require_auth();
-        verify_admin(&env, &admin)?;
+        auth::require_admin(&env, &admin)?;
 
         env.storage()
             .persistent()
@@ -1112,10 +1105,6 @@ fn get_entitlement_internal(
     env: &Env,
     material_id: &BytesN<32>,
     buyer: &Address,
-    payout_shares: &Vec<PayoutShare>,
-    asset: &Address,
-    seller_net: i128,
-    transaction_id: &Bytes,
 ) -> Option<EntitlementRecord> {
     env.storage()
         .persistent()
@@ -1178,7 +1167,7 @@ fn distribute_payout_shares_from_contract(
                 role: Symbol::new(env, "creator_share"),
                 asset: escrow.asset.clone(),
                 amount: share_amount,
-                transaction_id: transaction_id.clone(),
+                transaction_id: Bytes::new(env),
             }
             .publish(env);
         }
