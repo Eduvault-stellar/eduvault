@@ -43,6 +43,13 @@ pub struct AllowedAssetInfo {
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InitialAsset {
+    pub asset: Address,
+    pub kind: AssetKind,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AssetQuote {
     pub asset: Address,
     pub amount: i128,
@@ -100,6 +107,9 @@ pub enum RegistryError {
     NotAuthorized = 14,
     /// A quote asset is not in the registry's approved-asset allowlist.
     UnapprovedAsset = 15,
+    AlreadyInitialized = 16,
+    NotInitialized = 17,
+    DuplicateInitialAsset = 18,
 }
 
 #[contractevent(topics = ["material", "registered"], data_format = "vec")]
@@ -160,11 +170,78 @@ pub struct AssetPolicyUpdatedEvent {
     pub enabled: bool,
 }
 
+#[contractevent(topics = ["registry", "initialized"], data_format = "vec")]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RegistryInitializedEvent {
+    pub admin: Address,
+    pub initial_assets: Vec<InitialAsset>,
+}
+
 #[contract]
 pub struct MaterialRegistry;
 
 #[contractimpl]
 impl MaterialRegistry {
+    pub fn initialize(
+        env: Env,
+        admin: Address,
+        initial_assets: Vec<InitialAsset>,
+    ) -> Result<(), RegistryError> {
+        admin.require_auth();
+
+        if env.storage().persistent().has(&DataKey::UpgradeAdmin) {
+            return Err(RegistryError::AlreadyInitialized);
+        }
+
+        let len = initial_assets.len();
+        let mut index = 0;
+        while index < len {
+            let asset1 = initial_assets.get_unchecked(index);
+            let mut other = index + 1;
+            while other < len {
+                let asset2 = initial_assets.get_unchecked(other);
+                if asset1.asset == asset2.asset {
+                    return Err(RegistryError::DuplicateInitialAsset);
+                }
+                other += 1;
+            }
+            index += 1;
+        }
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::UpgradeAdmin, &admin);
+
+        let mut index = 0;
+        while index < len {
+            let asset_cfg = initial_assets.get_unchecked(index);
+            let info = AllowedAssetInfo {
+                kind: asset_cfg.kind,
+                enabled: true,
+            };
+            env.storage()
+                .persistent()
+                .set(&DataKey::AllowedAsset(asset_cfg.asset.clone()), &info);
+
+            AssetPolicyUpdatedEvent {
+                asset: asset_cfg.asset,
+                kind: asset_cfg.kind,
+                enabled: true,
+            }
+            .publish(&env);
+
+            index += 1;
+        }
+
+        RegistryInitializedEvent {
+            admin,
+            initial_assets,
+        }
+        .publish(&env);
+
+        Ok(())
+    }
+
     pub fn register_material(
         env: Env,
         creator: Address,
@@ -178,11 +255,8 @@ impl MaterialRegistry {
         validate_metadata_uri(&metadata_uri)?;
         validate_quotes(&quotes)?;
         validate_payout_shares(&payout_shares)?;
-        // Asset allowlist is enforced once the upgrade-admin has been established
-        // (i.e. after the very first material registration). This allows the
-        // initial deployer to bootstrap assets without a chicken-and-egg problem.
+        require_initialized(&env)?;
         validate_quote_assets(&env, &quotes)?;
-        initialize_upgrade_admin_if_missing(&env, &creator);
 
         let next_nonce = get_creator_nonce(&env, &creator);
         let material_id = derive_material_id(&env, &creator, next_nonce);
@@ -228,6 +302,7 @@ impl MaterialRegistry {
         quotes: Vec<AssetQuote>,
         payout_shares: Vec<PayoutShare>,
     ) -> Result<(), RegistryError> {
+        require_initialized(&env)?;
         validate_quotes(&quotes)?;
         validate_payout_shares(&payout_shares)?;
         validate_quote_assets(&env, &quotes)?;
@@ -258,6 +333,7 @@ impl MaterialRegistry {
         material_id: BytesN<32>,
         status: MaterialStatus,
     ) -> Result<(), RegistryError> {
+        require_initialized(&env)?;
         let mut record = get_material_record(&env, &material_id)?;
         require_creator_or_upgrade_admin(&env, &record.creator, &actor)?;
 
@@ -331,6 +407,7 @@ impl MaterialRegistry {
         material_id: BytesN<32>,
         deactivated: bool,
     ) -> Result<(), RegistryError> {
+        require_initialized(&env)?;
         let mut record = get_material_record(&env, &material_id)?;
         require_creator_or_upgrade_admin(&env, &record.creator, &actor)?;
         let next_status = if deactivated {
@@ -580,12 +657,11 @@ fn put_material(env: &Env, record: &MaterialRecord) {
         .set(&DataKey::Material(record.material_id.clone()), record);
 }
 
-fn initialize_upgrade_admin_if_missing(env: &Env, admin: &Address) {
+fn require_initialized(env: &Env) -> Result<(), RegistryError> {
     if !env.storage().persistent().has(&DataKey::UpgradeAdmin) {
-        env.storage()
-            .persistent()
-            .set(&DataKey::UpgradeAdmin, admin);
+        return Err(RegistryError::NotInitialized);
     }
+    Ok(())
 }
 
 fn require_upgrade_admin(env: &Env, candidate: &Address) -> Result<(), RegistryError> {
@@ -622,16 +698,7 @@ fn get_allowed_asset_info(env: &Env, asset: &Address) -> Option<AllowedAssetInfo
 
 /// Validate that every asset referenced in `quotes` is present in the
 /// allowlist and currently enabled.
-///
-/// Validation is skipped when the upgrade-admin has not yet been set (i.e.
-/// before the very first `register_material` call) to avoid a bootstrap
-/// deadlock where no admin exists to pre-approve assets.
 fn validate_quote_assets(env: &Env, quotes: &Vec<AssetQuote>) -> Result<(), RegistryError> {
-    // No allowlist enforcement until an upgrade-admin is established.
-    if !env.storage().persistent().has(&DataKey::UpgradeAdmin) {
-        return Ok(());
-    }
-
     let mut index = 0;
     while index < quotes.len() {
         let quote = quotes.get_unchecked(index);

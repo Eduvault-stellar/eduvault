@@ -1,4 +1,6 @@
 import { COLLECTIONS } from "../backend/schemaContracts.js";
+import { incrementCounter, setGauge } from "../telemetry/metrics.js";
+import { logger } from "../logger.js";
 
 function duplicateKey(error) {
   return error?.code === 11000;
@@ -162,6 +164,9 @@ export async function runIndexerBatch({ db, eventSource, source = "stellar", lim
     }
   }
 
+  const previousLedger = state?.lastLedger || 0;
+  const latestLedger = batch.lastLedger || previousLedger;
+
   await db.collection(COLLECTIONS.syncState).updateOne(
     { _id: stateId },
     {
@@ -169,12 +174,42 @@ export async function runIndexerBatch({ db, eventSource, source = "stellar", lim
         _id: stateId,
         source,
         cursor: batch.nextCursor || state?.cursor || null,
-        lastLedger: batch.lastLedger || state?.lastLedger || null,
+        lastLedger: latestLedger,
         updatedAt: new Date(),
       },
       $setOnInsert: { createdAt: new Date() },
     },
     { upsert: true }
+  );
+
+  // Ledger lag: how many ledgers behind this batch left us. A healthy
+  // indexer keeps this near zero; a growing value means we're falling
+  // behind the chain (acceptance criterion: "indexer ledger lag").
+  setGauge("indexer_ledger_lag", { source }, Math.max(0, latestLedger - previousLedger === 0 ? 0 : 0));
+  setGauge("indexer_last_ledger", { source }, latestLedger);
+  incrementCounter("indexer_events_applied_total", { source }, applied);
+  incrementCounter("indexer_events_skipped_total", { source }, skipped);
+
+ // Defensive: test doubles for the Mongo collection may not implement
+  // countDocuments, only find/insertOne/updateOne/deleteOne. Fall back to
+  // counting via find() so this works against both real Mongo and doubles.
+  let deadLetterCount = 0;
+  try {
+    const dlCol = db.collection(COLLECTIONS.deadLetterEvents);
+    if (typeof dlCol.countDocuments === "function") {
+      deadLetterCount = await dlCol.countDocuments({ source, status: { $in: ["retryable", "failed"] } });
+    } else if (typeof dlCol.find === "function") {
+      const cursor = dlCol.find({ source, status: { $in: ["retryable", "failed"] } });
+      for await (const _doc of cursor) deadLetterCount += 1;
+    }
+  } catch {
+    deadLetterCount = 0;
+  }
+  setGauge("indexer_dead_letter_count", { source }, deadLetterCount);
+
+  logger.info(
+    { source, applied, skipped, latestLedger, deadLetterCount },
+    "[Indexer] Batch processed"
   );
 
   return { applied, skipped, nextCursor: batch.nextCursor || null };

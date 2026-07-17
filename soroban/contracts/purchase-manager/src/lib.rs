@@ -1,8 +1,8 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contracterror, contractevent, contractimpl, contracttype, Address, Bytes, BytesN, Env,
-    IntoVal, Symbol, Vec,
+    contract, contracterror, contractevent, contractimpl, contracttype, Address, Bytes, BytesN,
+    Env, IntoVal, Symbol, Vec,
 };
 
 pub mod auth;
@@ -128,7 +128,16 @@ pub struct EscrowRecord {
     pub seller_net: i128,
     pub payout_shares: Vec<PayoutShare>,
     pub purchase_ledger: u32,
+    pub transaction_id: Bytes,
     pub claimed: bool,
+}
+
+/// Pending admin transfer record for two-step admin ownership handoff
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PendingAdminTransfer {
+    pub from: Address,
+    pub to: Address,
 }
 
 /// Data keys for contract storage
@@ -535,6 +544,7 @@ impl PurchaseManager {
             seller_net,
             payout_shares: material.payout_shares.clone(),
             purchase_ledger: current_ledger,
+            transaction_id: transaction_id.clone(),
             claimed: false,
         };
         set_escrow_record(&env, purchase_id, &escrow_record);
@@ -900,9 +910,13 @@ impl PurchaseManager {
     ) -> Result<(), PurchaseError> {
         auth::require_admin(&env, &admin)?;
 
+        let transfer = PendingAdminTransfer {
+            from: admin.clone(),
+            to: new_admin.clone(),
+        };
         env.storage()
             .persistent()
-            .set(&DataKey::PendingAdmin, &new_admin);
+            .set(&DataKey::PendingAdmin, &transfer);
 
         AdminTransferInitiatedEvent {
             from: admin,
@@ -917,35 +931,43 @@ impl PurchaseManager {
     ///
     /// Only the address stored as `PendingAdmin` may call this.  On success
     /// the caller becomes the sole admin and the pending slot is cleared.
-    pub fn accept_admin(env: Env, new_admin: Address) -> Result<(), PurchaseError> {
-        new_admin.require_auth();
+   pub fn accept_admin(
+    env: Env,
+    new_admin: Address,
+) -> Result<(), PurchaseError> {
+    new_admin.require_auth();
 
-        let pending: Address = env
-            .storage()
-            .persistent()
-            .get(&DataKey::PendingAdmin)
-            .ok_or(PurchaseError::NoPendingAdminTransfer)?;
+    let transfer: PendingAdminTransfer = env
+        .storage()
+        .persistent()
+        .get(&DataKey::PendingAdmin)
+        .ok_or(PurchaseError::NoPendingAdminTransfer)?;
 
-        if pending != new_admin {
-            return Err(PurchaseError::NotAuthorized);
-        }
-
-        auth::set_admin_role(&env, &new_admin);
-        env.storage()
-            .persistent()
-            .remove(&DataKey::PendingAdmin);
-
-        AdminTransferAcceptedEvent {
-            new_admin: new_admin.clone(),
-        }
-        .publish(&env);
-
-        Ok(())
+    if transfer.to != new_admin {
+        return Err(PurchaseError::NotAuthorized);
     }
+
+    auth::remove_admin_role(&env, &transfer.from);
+    auth::set_admin_role(&env, &new_admin);
+
+    env.storage()
+        .persistent()
+        .remove(&DataKey::PendingAdmin);
+
+    AdminTransferAcceptedEvent {
+        new_admin: new_admin.clone(),
+    }
+    .publish(&env);
+
+    Ok(())
+}
 
     /// Return the pending admin address, if a transfer is in progress.
     pub fn get_pending_admin(env: Env) -> Option<Address> {
-        env.storage().persistent().get(&DataKey::PendingAdmin)
+        env.storage()
+            .persistent()
+            .get::<DataKey, PendingAdminTransfer>(&DataKey::PendingAdmin)
+            .map(|t| t.to)
     }
 
     // ============== Creator Volume Tiers (#381) ==============
@@ -967,11 +989,7 @@ impl PurchaseManager {
             .persistent()
             .set(&DataKey::CreatorTier(creator.clone()), &tier);
 
-        CreatorTierUpdatedEvent {
-            creator,
-            tier,
-        }
-        .publish(&env);
+        CreatorTierUpdatedEvent { creator, tier }.publish(&env);
 
         Ok(())
     }
@@ -1012,7 +1030,6 @@ fn get_platform_config(env: &Env) -> Result<PlatformConfig, PurchaseError> {
         .get(&DataKey::PlatformConfig)
         .ok_or(PurchaseError::NotAuthorized)
 }
-
 
 fn is_asset_allowed(env: &Env, asset: &Address) -> bool {
     env.storage()
@@ -1167,7 +1184,7 @@ fn distribute_payout_shares_from_contract(
                 role: Symbol::new(env, "creator_share"),
                 asset: escrow.asset.clone(),
                 amount: share_amount,
-                transaction_id: Bytes::new(env),
+                transaction_id: escrow.transaction_id.clone(),
             }
             .publish(env);
         }
