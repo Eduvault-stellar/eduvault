@@ -1436,10 +1436,10 @@ fn migrate_config_v1_to_v2_works() {
     let admin = Address::generate(&env);
     let registry = Address::generate(&env);
     let treasury = Address::generate(&env);
-    
+
     // Install and initialize properly so admin auth works
     let (contract_id, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
-    
+
     // Simulate old storage structure
     let old_config = PlatformConfigV1 {
         registry: registry.clone(),
@@ -1448,9 +1448,11 @@ fn migrate_config_v1_to_v2_works() {
         paused: true,
         oracle: Some(Address::generate(&env)),
     };
-    
+
     env.as_contract(&contract_id, || {
-        env.storage().persistent().set(&DataKey::PlatformConfig, &old_config);
+        env.storage()
+            .persistent()
+            .set(&DataKey::PlatformConfig, &old_config);
     });
 
     // Run migration

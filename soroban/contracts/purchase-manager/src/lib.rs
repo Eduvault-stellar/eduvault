@@ -346,8 +346,6 @@ impl<'a> SacToken<'a> {
         self.env.invoke_contract::<i128>(self.address, &func, args)
     }
 }
-
-
 // ============== Registry Cross-Contract Interface ==============
 
 /// Interface for calling MaterialRegistry contract
