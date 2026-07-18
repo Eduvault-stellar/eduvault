@@ -914,30 +914,36 @@ impl PurchaseManager {
     ///
     /// Only the address stored as `PendingAdmin` may call this.  On success
     /// the caller becomes the sole admin and the pending slot is cleared.
-    pub fn accept_admin(env: Env, new_admin: Address) -> Result<(), PurchaseError> {
-        new_admin.require_auth();
+   pub fn accept_admin(
+    env: Env,
+    new_admin: Address,
+) -> Result<(), PurchaseError> {
+    new_admin.require_auth();
 
-        let transfer: PendingAdminTransfer = env
-            .storage()
-            .persistent()
-            .get(&DataKey::PendingAdmin)
-            .ok_or(PurchaseError::NoPendingAdminTransfer)?;
+    let transfer: PendingAdminTransfer = env
+        .storage()
+        .persistent()
+        .get(&DataKey::PendingAdmin)
+        .ok_or(PurchaseError::NoPendingAdminTransfer)?;
 
-        if transfer.to != new_admin {
-            return Err(PurchaseError::NotAuthorized);
-        }
-
-        auth::remove_admin_role(&env, &transfer.from);
-        auth::set_admin_role(&env, &new_admin);
-        env.storage().persistent().remove(&DataKey::PendingAdmin);
-
-        AdminTransferAcceptedEvent {
-            new_admin: new_admin.clone(),
-        }
-        .publish(&env);
-
-        Ok(())
+    if transfer.to != new_admin {
+        return Err(PurchaseError::NotAuthorized);
     }
+
+    auth::remove_admin_role(&env, &transfer.from);
+    auth::set_admin_role(&env, &new_admin);
+
+    env.storage()
+        .persistent()
+        .remove(&DataKey::PendingAdmin);
+
+    AdminTransferAcceptedEvent {
+        new_admin: new_admin.clone(),
+    }
+    .publish(&env);
+
+    Ok(())
+}
 
     /// Return the pending admin address, if a transfer is in progress.
     pub fn get_pending_admin(env: Env) -> Option<Address> {

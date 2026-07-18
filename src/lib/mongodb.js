@@ -2,88 +2,115 @@ import { cpus } from "node:os";
 import { MongoClient } from "mongodb";
 import { ensureChallengeIndexes } from "@/lib/auth/challenge";
 
-const uri = process.env.MONGODB_URI;
-
-// Scale pool size to active CPU count so connection limits grow with the host.
-// Allow env overrides for environments where auto-detection is insufficient.
-const CPU_COUNT = cpus().length;
-const maxPoolSize = parseInt(
-  process.env.MONGODB_MAX_POOL_SIZE || String(CPU_COUNT * 5),
-  10,
-);
-const minPoolSize = parseInt(
-  process.env.MONGODB_MIN_POOL_SIZE || String(CPU_COUNT),
-  10,
-);
-const serverSelectionTimeoutMS = parseInt(
-  process.env.MONGODB_TIMEOUT_MS || "5000",
-  10,
-); // Fail fast
-// How often the driver pings each server to confirm connectivity.
-const heartbeatFrequencyMS = parseInt(
-  process.env.MONGODB_HEARTBEAT_MS || "10000",
-  10,
-);
-
 const globalForMongo = globalThis;
 
-function getClientPromise() {
-  if (!uri) {
-    const errorMsg = "MONGODB_URI is not set in environment variables";
-    console.error(`[Database Error]: ${errorMsg}`);
-    throw new Error(errorMsg);
+function parsePositiveInteger(value, fallback, variableName) {
+  const parsed = Number.parseInt(value ?? String(fallback), 10);
+
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
+    throw new Error(
+      `${variableName} must be a non-negative integer; received "${value}"`,
+    );
   }
 
-  // Reuse the client across hot reloads in dev, but only connect on demand.
+  return parsed;
+}
+
+function getMongoConfiguration() {
+  const uri = process.env.MONGODB_URI;
+
+  if (!uri) {
+    throw new Error("MONGODB_URI is not set in environment variables");
+  }
+
+  const cpuCount = Math.max(cpus().length, 1);
+
+  const maxPoolSize = parsePositiveInteger(
+    process.env.MONGODB_MAX_POOL_SIZE,
+    cpuCount * 5,
+    "MONGODB_MAX_POOL_SIZE",
+  );
+
+  const minPoolSize = parsePositiveInteger(
+    process.env.MONGODB_MIN_POOL_SIZE,
+    Math.min(cpuCount, maxPoolSize),
+    "MONGODB_MIN_POOL_SIZE",
+  );
+
+  if (minPoolSize > maxPoolSize) {
+    throw new Error(
+      "MONGODB_MIN_POOL_SIZE cannot be greater than MONGODB_MAX_POOL_SIZE",
+    );
+  }
+
+  return {
+    uri,
+    dbName: process.env.MONGODB_DB || "eduvault",
+    clientOptions: {
+      maxPoolSize,
+      minPoolSize,
+      serverSelectionTimeoutMS: parsePositiveInteger(
+        process.env.MONGODB_TIMEOUT_MS,
+        5000,
+        "MONGODB_TIMEOUT_MS",
+      ),
+      heartbeatFrequencyMS: parsePositiveInteger(
+        process.env.MONGODB_HEARTBEAT_MS,
+        10000,
+        "MONGODB_HEARTBEAT_MS",
+      ),
+      maxIdleTimeMS: parsePositiveInteger(
+        process.env.MONGODB_MAX_IDLE_TIME_MS,
+        30000,
+        "MONGODB_MAX_IDLE_TIME_MS",
+      ),
+      retryReads: true,
+      retryWrites: true,
+    },
+  };
+}
+
+export function getMongoClientPromise() {
   if (!globalForMongo._mongoClientPromise) {
-    try {
-      const client = new MongoClient(uri, {
-        maxPoolSize,
-        minPoolSize,
-        serverSelectionTimeoutMS,
-        heartbeatFrequencyMS,
-        maxIdleTimeMS: 30000,
+    const { uri, clientOptions } = getMongoConfiguration();
+    const client = new MongoClient(uri, clientOptions);
+
+    globalForMongo._mongoClient = client;
+
+    globalForMongo._mongoClientPromise = client.connect().catch((error) => {
+      globalForMongo._mongoClient = null;
+      globalForMongo._mongoClientPromise = null;
+
+      console.error("[mongodb] Connection failed", {
+        name: error?.name,
+        code: error?.code,
+        codeName: error?.codeName,
+        message: error?.message,
       });
 
-      globalForMongo._mongoClientPromise = client.connect().catch((error) => {
-        console.error(
-          "[Database Connection Error]: Failed to connect to MongoDB cluster:",
-          error,
-        );
-        // Reset global cache so subsequent requests can try connecting again
-        globalForMongo._mongoClientPromise = null;
-        throw error;
-      });
-    } catch (error) {
-      console.error(
-        "[Database Initialization Error]: Failed to initialize MongoClient:",
-        error,
-      );
       throw error;
-    }
+    });
   }
 
   return globalForMongo._mongoClientPromise;
 }
 
-let indexesCreated = false;
+export async function getMongoClient() {
+  return getMongoClientPromise();
+}
 
-async function ensureIndexes(db) {
-  try {
-    const collection = db.collection("materials");
+export async function getDb() {
+  const client = await getMongoClientPromise();
+  const { dbName } = getMongoConfiguration();
 
-    // Create compound index for category and price search optimization
-    await collection.createIndex(
-      { category: 1, price: 1 },
-      { name: "materials_category_price_idx", background: true },
-    );
+  return client.db(dbName);
+}
 
-    // Create compound text index for title and description search
-    await collection.createIndex(
-      { title: "text", description: "text" },
-      { name: "materials_text_idx", background: true },
-    );
+export async function pingDatabase() {
+  const db = await getDb();
+  await db.command({ ping: 1 });
 
+  return true;
     // Create compound index for title, description, price, and category
     await collection.createIndex(
       { category: 1, price: 1, title: 1, description: 1 },
@@ -101,27 +128,13 @@ async function ensureIndexes(db) {
   }
 }
 
-export async function getDb() {
-  try {
-    const client = await getClientPromise();
-    // When DB name is in connection string, driver selects it automatically.
-    // Otherwise, fallback to "eduvault".
-    const dbName = process.env.MONGODB_DB || "eduvault";
-    const db = client.db(dbName);
+export async function closeMongoConnection() {
+  const client = globalForMongo._mongoClient;
 
-    if (!indexesCreated) {
-      indexesCreated = true;
-      ensureIndexes(db).catch((err) =>
-        console.error("[Database Index Async Error]:", err),
-      );
-    }
+  globalForMongo._mongoClient = null;
+  globalForMongo._mongoClientPromise = null;
 
-    return db;
-  } catch (error) {
-    console.error(
-      "[Database Retrieval Error]: Could not acquire database instance:",
-      error,
-    );
-    throw error;
+  if (client) {
+    await client.close();
   }
 }
