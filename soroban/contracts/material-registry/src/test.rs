@@ -151,7 +151,7 @@ fn initializes_successfully() {
 #[test]
 fn registers_material_and_emits_registered_event() {
     let env = Env::default();
-    let (contract_id, client, admin, xlm, usdc) = install_and_init_contract(&env);
+    let (contract_id, client, _admin, xlm, usdc) = install_and_init_contract(&env);
     env.mock_all_auths();
 
     let creator = Address::generate(&env);
@@ -193,7 +193,7 @@ fn registers_material_and_emits_registered_event() {
 #[test]
 fn rejects_duplicate_quote_assets() {
     let env = Env::default();
-    let (_contract_id, client, admin, xlm, usdc) = install_and_init_contract(&env);
+    let (_contract_id, client, _admin, _xlm, _usdc) = install_and_init_contract(&env);
     env.mock_all_auths();
 
     let creator = Address::generate(&env);
@@ -222,7 +222,7 @@ fn rejects_duplicate_quote_assets() {
 #[test]
 fn rejects_empty_payout_shares() {
     let env = Env::default();
-    let (_contract_id, client, admin, xlm, usdc) = install_and_init_contract(&env);
+    let (_contract_id, client, _admin, xlm, usdc) = install_and_init_contract(&env);
     env.mock_all_auths();
 
     let creator = Address::generate(&env);
@@ -242,7 +242,7 @@ fn rejects_empty_payout_shares() {
 #[test]
 fn rejects_too_many_payout_shares() {
     let env = Env::default();
-    let (_contract_id, client, admin, xlm, usdc) = install_and_init_contract(&env);
+    let (_contract_id, client, _admin, xlm, usdc) = install_and_init_contract(&env);
     env.mock_all_auths();
 
     let creator = Address::generate(&env);
@@ -288,7 +288,7 @@ fn rejects_too_many_payout_shares() {
 #[test]
 fn rejects_duplicate_payout_recipient() {
     let env = Env::default();
-    let (_contract_id, client, admin, xlm, usdc) = install_and_init_contract(&env);
+    let (_contract_id, client, _admin, xlm, usdc) = install_and_init_contract(&env);
     env.mock_all_auths();
 
     let creator = Address::generate(&env);
@@ -319,7 +319,7 @@ fn rejects_duplicate_payout_recipient() {
 #[test]
 fn rejects_zero_payout_share() {
     let env = Env::default();
-    let (_contract_id, client, admin, xlm, usdc) = install_and_init_contract(&env);
+    let (_contract_id, client, _admin, xlm, usdc) = install_and_init_contract(&env);
     env.mock_all_auths();
 
     let creator = Address::generate(&env);
@@ -349,7 +349,7 @@ fn rejects_zero_payout_share() {
 #[test]
 fn rejects_payout_share_over_basis_points_without_overflow() {
     let env = Env::default();
-    let (_contract_id, client, admin, xlm, usdc) = install_and_init_contract(&env);
+    let (_contract_id, client, _admin, xlm, usdc) = install_and_init_contract(&env);
     env.mock_all_auths();
 
     let creator = Address::generate(&env);
@@ -379,7 +379,7 @@ fn rejects_payout_share_over_basis_points_without_overflow() {
 #[test]
 fn rejects_payout_share_sum_below_basis_points() {
     let env = Env::default();
-    let (_contract_id, client, admin, xlm, usdc) = install_and_init_contract(&env);
+    let (_contract_id, client, _admin, xlm, usdc) = install_and_init_contract(&env);
     env.mock_all_auths();
 
     let creator = Address::generate(&env);
@@ -409,7 +409,7 @@ fn rejects_payout_share_sum_below_basis_points() {
 #[test]
 fn rejects_payout_share_sum_above_basis_points() {
     let env = Env::default();
-    let (_contract_id, client, admin, xlm, usdc) = install_and_init_contract(&env);
+    let (_contract_id, client, _admin, xlm, usdc) = install_and_init_contract(&env);
     env.mock_all_auths();
 
     let creator = Address::generate(&env);
@@ -439,7 +439,7 @@ fn rejects_payout_share_sum_above_basis_points() {
 #[test]
 fn rejects_duplicate_material_id_collisions() {
     let env = Env::default();
-    let (contract_id, client, admin, xlm, usdc) = install_and_init_contract(&env);
+    let (contract_id, client, _admin, xlm, usdc) = install_and_init_contract(&env);
     env.mock_all_auths();
 
     let creator = Address::generate(&env);
@@ -461,7 +461,7 @@ fn rejects_duplicate_material_id_collisions() {
 #[test]
 fn requires_creator_auth_for_updates() {
     let env = Env::default();
-    let (contract_id, client, admin, xlm, usdc) = install_and_init_contract(&env);
+    let (contract_id, client, _admin, xlm, usdc) = install_and_init_contract(&env);
 
     let creator = Address::generate(&env);
     let material_id = bytes32(&env, 99);
@@ -479,7 +479,7 @@ fn requires_creator_auth_for_updates() {
 #[test]
 fn updates_sale_terms_and_status_and_supports_quote_lookup() {
     let env = Env::default();
-    let (contract_id, client, admin, xlm, usdc) = install_and_init_contract(&env);
+    let (contract_id, client, _admin, xlm, usdc) = install_and_init_contract(&env);
     env.mock_all_auths();
 
     let creator = Address::generate(&env);
@@ -542,7 +542,7 @@ fn updates_sale_terms_and_status_and_supports_quote_lookup() {
 #[test]
 fn transfers_upgrade_admin() {
     let env = Env::default();
-    let (_contract_id, client, admin, xlm, usdc) = install_and_init_contract(&env);
+    let (_contract_id, client, admin, _xlm, _usdc) = install_and_init_contract(&env);
     env.mock_all_auths();
 
     assert_eq!(client.get_upgrade_admin(), Some(admin.clone()));
@@ -645,7 +645,7 @@ fn disabling_asset_blocks_quote_registration() {
 #[test]
 fn update_sale_terms_rejects_unapproved_asset() {
     let env = Env::default();
-    let (_contract_id, client, admin, xlm, usdc) = install_and_init_contract(&env);
+    let (_contract_id, client, _admin, xlm, usdc) = install_and_init_contract(&env);
     env.mock_all_auths();
 
     let creator = Address::generate(&env);
@@ -678,7 +678,7 @@ fn update_sale_terms_rejects_unapproved_asset() {
 #[test]
 fn non_admin_cannot_set_asset_allowed() {
     let env = Env::default();
-    let (_contract_id, client, admin, xlm, usdc) = install_and_init_contract(&env);
+    let (_contract_id, client, _admin, xlm, usdc) = install_and_init_contract(&env);
     env.mock_all_auths();
 
     let creator = Address::generate(&env);

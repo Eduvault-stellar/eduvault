@@ -89,6 +89,17 @@ pub struct MaterialRecord {
     pub payout_shares: Vec<PayoutShare>,
 }
 
+/// Legacy platform configuration stored in PurchaseManager (v1)
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PlatformConfigV1 {
+    pub registry: Address,
+    pub treasury: Address,
+    pub platform_fee_bps: u32,
+    pub paused: bool,
+    pub oracle: Option<Address>,
+}
+
 /// Platform configuration stored in PurchaseManager
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -97,10 +108,6 @@ pub struct PlatformConfig {
     pub treasury: Address,
     pub platform_fee_bps: u32,
     pub paused: bool,
-    /// Optional price-oracle address for future cross-asset conversion support.
-    /// When `None`, no oracle is configured and all prices must be quoted in
-    /// the exact accepted asset (no conversion).
-    pub oracle: Option<Address>,
 }
 
 /// Entitlement record for a successful purchase
@@ -339,35 +346,6 @@ impl<'a> SacToken<'a> {
         self.env.invoke_contract::<i128>(self.address, &func, args)
     }
 }
-
-// ============== Price Oracle Stub ==============
-
-/// Stub for a future price-oracle integration (e.g. Reflector Oracle / SEP-40).
-///
-/// Returns `None` for every query until a concrete oracle is integrated.
-/// The `oracle` field in `PlatformConfig` holds the oracle contract address
-/// once deployed.
-pub struct PriceOracle<'a> {
-    env: &'a Env,
-    address: &'a Address,
-}
-
-impl<'a> PriceOracle<'a> {
-    pub fn new(env: &'a Env, address: &'a Address) -> Self {
-        PriceOracle { env, address }
-    }
-
-    /// Returns the last price of `base` denominated in `quote` as
-    /// `Some((price, decimals))`, or `None` when the oracle is unavailable.
-    ///
-    /// TODO: implement Reflector Oracle or equivalent SEP-40 feed when an
-    ///       on-chain price source is available on the target network.
-    pub fn last_price(&self, _base: &Address, _quote: &Address) -> Option<(i128, u32)> {
-        let _ = (self.env, self.address);
-        None
-    }
-}
-
 // ============== Registry Cross-Contract Interface ==============
 
 /// Interface for calling MaterialRegistry contract
@@ -429,7 +407,6 @@ impl PurchaseManager {
             treasury: treasury.clone(),
             platform_fee_bps,
             paused: false,
-            oracle: None,
         };
 
         auth::set_admin_role(&env, &admin);
@@ -749,8 +726,6 @@ impl PurchaseManager {
             treasury: treasury.clone(),
             platform_fee_bps,
             paused,
-            // Preserve the existing oracle; use set_oracle() to change it.
-            oracle: current_config.oracle,
         };
 
         env.storage()
@@ -775,20 +750,28 @@ impl PurchaseManager {
             .get(&DataKey::AllowedAsset(asset))
     }
 
-    /// Configure the price-oracle address used for future cross-asset
-    /// conversion (admin only). Pass `None` to clear the oracle.
-    pub fn set_oracle(
-        env: Env,
-        admin: Address,
-        oracle: Option<Address>,
-    ) -> Result<(), PurchaseError> {
+    /// Migrate PlatformConfig from V1 (with oracle) to V2 (without oracle).
+    /// This should be called once by the admin after upgrading the contract
+    /// from a version that used `PlatformConfigV1` schema.
+    pub fn migrate_config_v1_to_v2(env: Env, admin: Address) -> Result<(), PurchaseError> {
         auth::require_admin(&env, &admin)?;
 
-        let mut config = get_platform_config(&env)?;
-        config.oracle = oracle;
+        let old_config: PlatformConfigV1 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PlatformConfig)
+            .ok_or(PurchaseError::NotAuthorized)?;
+
+        let new_config = PlatformConfig {
+            registry: old_config.registry,
+            treasury: old_config.treasury,
+            platform_fee_bps: old_config.platform_fee_bps,
+            paused: old_config.paused,
+        };
+
         env.storage()
             .persistent()
-            .set(&DataKey::PlatformConfig, &config);
+            .set(&DataKey::PlatformConfig, &new_config);
 
         Ok(())
     }
