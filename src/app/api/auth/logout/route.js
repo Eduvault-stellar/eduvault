@@ -23,7 +23,7 @@ export async function POST(request) {
       // Optional: if there's a refresh tokens DB, we delete it here.
       // (Assuming `refreshTokens` collection exists based on issue description)
       const db = await getDb();
-      await db.collection('refreshTokens').deleteMany({
+      await db.collection('refresh_tokens').deleteMany({
         userId: String(user._id || user.id || user.walletAddress)
       });
       
