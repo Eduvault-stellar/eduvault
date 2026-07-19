@@ -1,6 +1,7 @@
 import { cpus } from "node:os";
 import { MongoClient } from "mongodb";
 import { ensureChallengeIndexes } from "@/lib/auth/challenge";
+import { updatePressureSignal } from "@/lib/capacity/shed";
 
 const globalForMongo = globalThis;
 
@@ -77,9 +78,28 @@ export function getMongoClientPromise() {
 
     globalForMongo._mongoClient = client;
 
+    // Monitor connection pool for capacity pressure signals
+    try {
+      client.on('connectionPoolCreated', () => {
+        updatePressureSignal('mongoPoolCreated', true);
+      });
+
+      client.on('connectionCheckedOut', (event) => {
+        const pool = event?.address;
+        // Track checkout pressure via topology events
+      });
+
+      client.on('connectionPoolClosed', () => {
+        updatePressureSignal('mongoPoolExhausted', false);
+      });
+    } catch {
+      // Event monitoring not available in all driver versions
+    }
+
     globalForMongo._mongoClientPromise = client.connect().catch((error) => {
       globalForMongo._mongoClient = null;
       globalForMongo._mongoClientPromise = null;
+      updatePressureSignal('mongoPoolExhausted', true);
 
       console.error("[mongodb] Connection failed", {
         name: error?.name,

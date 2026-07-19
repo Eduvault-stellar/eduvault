@@ -6,6 +6,10 @@ import { captureException } from "@/lib/sentry";
 import { runWithContext, currentTraceparent, currentCorrelationId } from "@/lib/telemetry/context";
 import { withSpan } from "@/lib/telemetry/tracing";
 import { incrementCounter, recordHistogram } from "@/lib/telemetry/metrics";
+import { acquireSlot } from "@/lib/capacity/concurrency";
+import { preRequestShed } from "@/lib/capacity/shed";
+import { getRouteBudget } from "@/lib/capacity/budgets";
+import { createDisconnectSignal } from "@/lib/capacity/backpressure";
 
 function clientKey(request) {
   const forwardedFor = request.headers.get("x-forwarded-for");
@@ -15,6 +19,7 @@ function clientKey(request) {
 export async function withApiHardening(request, options, handler) {
   const route = options.route;
   const method = request.method || "GET";
+  const budget = getRouteBudget(method, route);
 
   return runWithContext(
     {
@@ -23,6 +28,34 @@ export async function withApiHardening(request, options, handler) {
       route,
     },
     async () => {
+      // ── Load shedding check ────────────────────────────────────────
+      const { shed, response: shedResponse } = preRequestShed(method, route);
+      if (shed && shedResponse) {
+        auditLog({ event: "load_shed", route, method, status: shedResponse.status });
+        incrementCounter("http_requests_total", { route, method, outcome: "load_shed" });
+        const res = NextResponse.json(shedResponse.body, {
+          status: shedResponse.status,
+          headers: { ...shedResponse.headers, "x-correlation-id": currentCorrelationId() },
+        });
+        return res;
+      }
+
+      // ── Payload size check ─────────────────────────────────────────
+      if (budget.maxPayloadBytes > 0 && method !== "GET" && method !== "HEAD") {
+        const contentLength = Number(request.headers.get("content-length") || 0);
+        if (contentLength > budget.maxPayloadBytes) {
+          const sizeMB = (contentLength / (1024 * 1024)).toFixed(2);
+          const limitMB = (budget.maxPayloadBytes / (1024 * 1024)).toFixed(2);
+          auditLog({ event: "payload_too_large", route, method, status: 413 });
+          incrementCounter("http_requests_total", { route, method, outcome: "payload_too_large" });
+          return NextResponse.json(
+            { error: `Payload too large: ${sizeMB}MB exceeds limit of ${limitMB}MB` },
+            { status: 413, headers: { "x-correlation-id": currentCorrelationId() } }
+          );
+        }
+      }
+
+      // ── Rate limiting ──────────────────────────────────────────────
       const rateLimit = checkRateLimit(`${route}:${method}:${clientKey(request)}`, options.rateLimit);
 
       if (!rateLimit.allowed) {
@@ -37,11 +70,27 @@ export async function withApiHardening(request, options, handler) {
         );
       }
 
+      // ── Concurrency admission ──────────────────────────────────────
+      const { acquired, release, overload } = await acquireSlot(method, route);
+
+      if (!acquired && overload) {
+        auditLog({ event: "concurrency_rejected", route, method, status: overload.status });
+        incrementCounter("http_requests_total", { route, method, outcome: "concurrency_rejected" });
+        const res = NextResponse.json(overload.body, {
+          status: overload.status,
+          headers: { ...overload.headers, "x-correlation-id": currentCorrelationId() },
+        });
+        return res;
+      }
+
+      // ── Client disconnect signal ───────────────────────────────────
+      const { signal: disconnectSignal, cleanup: cleanupDisconnect } = createDisconnectSignal(request);
+
       const startedAt = Date.now();
 
       try {
         const response = await withSpan("http.request", { route, method }, async (span) => {
-          const result = await handler();
+          const result = await handler({ disconnectSignal });
           span.setAttribute("http.status_code", result?.status || 200);
           return result;
         });
@@ -49,11 +98,9 @@ export async function withApiHardening(request, options, handler) {
         recordHistogram("http_request_duration_ms", { route, method }, Date.now() - startedAt);
         incrementCounter("http_requests_total", { route, method, outcome: "success" });
 
-        // Propagate correlation id back to the caller so it can be logged
-        // client-side too, and carried forward if the caller calls another
-        // EduVault service (acceptance criterion: crosses HTTP boundary).
         response.headers.set("x-correlation-id", currentCorrelationId());
         response.headers.set("traceparent", currentTraceparent());
+        response.headers.set("x-capacity-inflight", "ok");
         return response;
       } catch (error) {
         recordHistogram("http_request_duration_ms", { route, method }, Date.now() - startedAt);
@@ -69,6 +116,9 @@ export async function withApiHardening(request, options, handler) {
         incrementCounter("http_requests_total", { route, method, outcome: "error" });
         captureException(error, { route, method, correlationId: currentCorrelationId() });
         throw error;
+      } finally {
+        release();
+        cleanupDisconnect();
       }
     }
   );
