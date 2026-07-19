@@ -698,3 +698,485 @@ fn non_admin_cannot_set_asset_allowed() {
     let result = client.try_set_asset_allowed(&intruder, &asset, &AssetKind::Token, &true);
     assert_eq!(result, Err(Ok(RegistryError::NotAuthorized)));
 }
+
+// ============== Version Anchoring Tests ==============
+
+fn version_manifest_digest(env: &Env, value: u8) -> BytesN<32> {
+    BytesN::from_array(env, &[value; 32])
+}
+
+fn version_file_cid(env: &Env, version: u32) -> String {
+    String::from_str(env, &format!("QmVersion{}", version))
+}
+
+#[test]
+fn publishes_version_and_emits_event() {
+    let env = Env::default();
+    let (contract_id, client, _admin, xlm, usdc) = install_and_init_contract(&env);
+    env.mock_all_auths();
+
+    let creator = Address::generate(&env);
+    let material_id = client.register_material(
+        &creator,
+        &metadata_uri(&env),
+        &bytes32(&env, 1),
+        &bytes32(&env, 2),
+        &default_quotes(&env, &xlm, &usdc),
+        &default_payout_shares(&env),
+    );
+
+    let digest = version_manifest_digest(&env, 11);
+    let file_cid = version_file_cid(&env, 1);
+    let file_hash = version_manifest_digest(&env, 21);
+
+    client.publish_version(
+        &material_id,
+        &1,
+        &digest,
+        &file_cid,
+        &file_hash,
+        &None,
+    );
+
+    let record = client.get_version(&material_id, &1);
+    assert_eq!(record.material_id, material_id);
+    assert_eq!(record.version, 1);
+    assert_eq!(record.manifest_digest, digest);
+    assert_eq!(record.file_cid, file_cid);
+    assert_eq!(record.file_hash, file_hash);
+    assert_eq!(record.previous_version_digest, None);
+    assert_eq!(record.creator, creator);
+    assert!(!record.withdrawn);
+
+    let events = env.events().all();
+    assert_eq!(events.events().len(), 1);
+}
+
+#[test]
+fn publishes_chained_versions() {
+    let env = Env::default();
+    let (contract_id, client, _admin, xlm, usdc) = install_and_init_contract(&env);
+    env.mock_all_auths();
+
+    let creator = Address::generate(&env);
+    let material_id = client.register_material(
+        &creator,
+        &metadata_uri(&env),
+        &bytes32(&env, 1),
+        &bytes32(&env, 2),
+        &default_quotes(&env, &xlm, &usdc),
+        &default_payout_shares(&env),
+    );
+
+    let digest_v1 = version_manifest_digest(&env, 11);
+    let cid_v1 = version_file_cid(&env, 1);
+    let hash_v1 = version_manifest_digest(&env, 21);
+
+    client.publish_version(&material_id, &1, &digest_v1, &cid_v1, &hash_v1, &None);
+
+    let digest_v2 = version_manifest_digest(&env, 12);
+    let cid_v2 = version_file_cid(&env, 2);
+    let hash_v2 = version_manifest_digest(&env, 22);
+
+    client.publish_version(
+        &material_id,
+        &2,
+        &digest_v2,
+        &cid_v2,
+        &hash_v2,
+        &Some(digest_v1.clone()),
+    );
+
+    let latest = client.get_latest_version(&material_id);
+    assert_eq!(latest, 2);
+
+    let v1 = client.get_version(&material_id, &1);
+    let v2 = client.get_version(&material_id, &2);
+    assert_eq!(v2.previous_version_digest, Some(digest_v1));
+    assert_eq!(v1.previous_version_digest, None);
+}
+
+#[test]
+fn rejects_duplicate_version() {
+    let env = Env::default();
+    let (_contract_id, client, _admin, xlm, usdc) = install_and_init_contract(&env);
+    env.mock_all_auths();
+
+    let creator = Address::generate(&env);
+    let material_id = client.register_material(
+        &creator,
+        &metadata_uri(&env),
+        &bytes32(&env, 1),
+        &bytes32(&env, 2),
+        &default_quotes(&env, &xlm, &usdc),
+        &default_payout_shares(&env),
+    );
+
+    let digest = version_manifest_digest(&env, 11);
+    let file_cid = version_file_cid(&env, 1);
+    let file_hash = version_manifest_digest(&env, 21);
+
+    client.publish_version(&material_id, &1, &digest, &file_cid, &file_hash, &None);
+
+    let result = client.try_publish_version(
+        &material_id,
+        &1,
+        &version_manifest_digest(&env, 99),
+        &version_file_cid(&env, 99),
+        &version_manifest_digest(&env, 99),
+        &None,
+    );
+    assert_eq!(result, Err(Ok(RegistryError::VersionAlreadyPublished)));
+}
+
+#[test]
+fn rejects_version_zero_and_out_of_range() {
+    let env = Env::default();
+    let (_contract_id, client, _admin, xlm, usdc) = install_and_init_contract(&env);
+    env.mock_all_auths();
+
+    let creator = Address::generate(&env);
+    let material_id = client.register_material(
+        &creator,
+        &metadata_uri(&env),
+        &bytes32(&env, 1),
+        &bytes32(&env, 2),
+        &default_quotes(&env, &xlm, &usdc),
+        &default_payout_shares(&env),
+    );
+
+    let digest = version_manifest_digest(&env, 11);
+    let file_cid = version_file_cid(&env, 1);
+    let file_hash = version_manifest_digest(&env, 21);
+
+    let result = client.try_publish_version(
+        &material_id,
+        &0,
+        &digest,
+        &file_cid,
+        &file_hash,
+        &None,
+    );
+    assert_eq!(result, Err(Ok(RegistryError::InvalidVersionNumber)));
+
+    let result = client.try_publish_version(
+        &material_id,
+        &10001,
+        &digest,
+        &file_cid,
+        &file_hash,
+        &None,
+    );
+    assert_eq!(result, Err(Ok(RegistryError::InvalidVersionNumber)));
+}
+
+#[test]
+fn rejects_empty_file_cid() {
+    let env = Env::default();
+    let (_contract_id, client, _admin, xlm, usdc) = install_and_init_contract(&env);
+    env.mock_all_auths();
+
+    let creator = Address::generate(&env);
+    let material_id = client.register_material(
+        &creator,
+        &metadata_uri(&env),
+        &bytes32(&env, 1),
+        &bytes32(&env, 2),
+        &default_quotes(&env, &xlm, &usdc),
+        &default_payout_shares(&env),
+    );
+
+    let digest = version_manifest_digest(&env, 11);
+    let empty_cid = String::from_str(&env, "");
+    let file_hash = version_manifest_digest(&env, 21);
+
+    let result = client.try_publish_version(
+        &material_id,
+        &1,
+        &digest,
+        &empty_cid,
+        &file_hash,
+        &None,
+    );
+    assert_eq!(result, Err(Ok(RegistryError::InvalidFileCid)));
+}
+
+#[test]
+fn rejects_version_chain_break() {
+    let env = Env::default();
+    let (_contract_id, client, _admin, xlm, usdc) = install_and_init_contract(&env);
+    env.mock_all_auths();
+
+    let creator = Address::generate(&env);
+    let material_id = client.register_material(
+        &creator,
+        &metadata_uri(&env),
+        &bytes32(&env, 1),
+        &bytes32(&env, 2),
+        &default_quotes(&env, &xlm, &usdc),
+        &default_payout_shares(&env),
+    );
+
+    let digest_v1 = version_manifest_digest(&env, 11);
+    let cid_v1 = version_file_cid(&env, 1);
+    let hash_v1 = version_manifest_digest(&env, 21);
+
+    client.publish_version(&material_id, &1, &digest_v1, &cid_v1, &hash_v1, &None);
+
+    // V2 with wrong previous digest
+    let digest_v2 = version_manifest_digest(&env, 12);
+    let cid_v2 = version_file_cid(&env, 2);
+    let hash_v2 = version_manifest_digest(&env, 22);
+    let wrong_digest = version_manifest_digest(&env, 99);
+
+    let result = client.try_publish_version(
+        &material_id,
+        &2,
+        &digest_v2,
+        &cid_v2,
+        &hash_v2,
+        &Some(wrong_digest),
+    );
+    assert_eq!(result, Err(Ok(RegistryError::VersionChainBroken)));
+}
+
+#[test]
+fn rejects_v2_without_previous_digest() {
+    let env = Env::default();
+    let (_contract_id, client, _admin, xlm, usdc) = install_and_init_contract(&env);
+    env.mock_all_auths();
+
+    let creator = Address::generate(&env);
+    let material_id = client.register_material(
+        &creator,
+        &metadata_uri(&env),
+        &bytes32(&env, 1),
+        &bytes32(&env, 2),
+        &default_quotes(&env, &xlm, &usdc),
+        &default_payout_shares(&env),
+    );
+
+    let digest_v1 = version_manifest_digest(&env, 11);
+    let cid_v1 = version_file_cid(&env, 1);
+    let hash_v1 = version_manifest_digest(&env, 21);
+
+    client.publish_version(&material_id, &1, &digest_v1, &cid_v1, &hash_v1, &None);
+
+    let digest_v2 = version_manifest_digest(&env, 12);
+    let cid_v2 = version_file_cid(&env, 2);
+    let hash_v2 = version_manifest_digest(&env, 22);
+
+    let result = client.try_publish_version(
+        &material_id,
+        &2,
+        &digest_v2,
+        &cid_v2,
+        &hash_v2,
+        &None,
+    );
+    assert_eq!(result, Err(Ok(RegistryError::VersionChainBroken)));
+}
+
+#[test]
+fn rejects_v1_with_previous_digest() {
+    let env = Env::default();
+    let (_contract_id, client, _admin, xlm, usdc) = install_and_init_contract(&env);
+    env.mock_all_auths();
+
+    let creator = Address::generate(&env);
+    let material_id = client.register_material(
+        &creator,
+        &metadata_uri(&env),
+        &bytes32(&env, 1),
+        &bytes32(&env, 2),
+        &default_quotes(&env, &xlm, &usdc),
+        &default_payout_shares(&env),
+    );
+
+    let digest = version_manifest_digest(&env, 11);
+    let file_cid = version_file_cid(&env, 1);
+    let file_hash = version_manifest_digest(&env, 21);
+    let fake_digest = version_manifest_digest(&env, 99);
+
+    let result = client.try_publish_version(
+        &material_id,
+        &1,
+        &digest,
+        &file_cid,
+        &file_hash,
+        &Some(fake_digest),
+    );
+    assert_eq!(result, Err(Ok(RegistryError::VersionChainBroken)));
+}
+
+#[test]
+fn withdraw_version_blocks_subsequent_versions() {
+    let env = Env::default();
+    let (_contract_id, client, _admin, xlm, usdc) = install_and_init_contract(&env);
+    env.mock_all_auths();
+
+    let creator = Address::generate(&env);
+    let material_id = client.register_material(
+        &creator,
+        &metadata_uri(&env),
+        &bytes32(&env, 1),
+        &bytes32(&env, 2),
+        &default_quotes(&env, &xlm, &usdc),
+        &default_payout_shares(&env),
+    );
+
+    let digest_v1 = version_manifest_digest(&env, 11);
+    let cid_v1 = version_file_cid(&env, 1);
+    let hash_v1 = version_manifest_digest(&env, 21);
+
+    client.publish_version(&material_id, &1, &digest_v1, &cid_v1, &hash_v1, &None);
+
+    client.withdraw_version(
+        &creator,
+        &material_id,
+        &1,
+        &String::from_str(&env, "security recall"),
+    );
+
+    let v1 = client.get_version(&material_id, &1);
+    assert!(v1.withdrawn);
+    assert_eq!(v1.withdrawal_reason, String::from_str(&env, "security recall"));
+
+    // Cannot publish v2 chaining from withdrawn v1
+    let digest_v2 = version_manifest_digest(&env, 12);
+    let cid_v2 = version_file_cid(&env, 2);
+    let hash_v2 = version_manifest_digest(&env, 22);
+
+    let result = client.try_publish_version(
+        &material_id,
+        &2,
+        &digest_v2,
+        &cid_v2,
+        &hash_v2,
+        &Some(digest_v1),
+    );
+    assert_eq!(result, Err(Ok(RegistryError::VersionChainBroken)));
+}
+
+#[test]
+fn cannot_withdraw_already_withdrawn_version() {
+    let env = Env::default();
+    let (_contract_id, client, _admin, xlm, usdc) = install_and_init_contract(&env);
+    env.mock_all_auths();
+
+    let creator = Address::generate(&env);
+    let material_id = client.register_material(
+        &creator,
+        &metadata_uri(&env),
+        &bytes32(&env, 1),
+        &bytes32(&env, 2),
+        &default_quotes(&env, &xlm, &usdc),
+        &default_payout_shares(&env),
+    );
+
+    let digest = version_manifest_digest(&env, 11);
+    let file_cid = version_file_cid(&env, 1);
+    let file_hash = version_manifest_digest(&env, 21);
+
+    client.publish_version(&material_id, &1, &digest, &file_cid, &file_hash, &None);
+
+    client.withdraw_version(
+        &creator,
+        &material_id,
+        &1,
+        &String::from_str(&env, "first recall"),
+    );
+
+    let result = client.try_withdraw_version(
+        &creator,
+        &material_id,
+        &1,
+        &String::from_str(&env, "second recall"),
+    );
+    assert_eq!(result, Err(Ok(RegistryError::VersionAlreadyWithdrawn)));
+}
+
+#[test]
+fn verify_version_digest_works() {
+    let env = Env::default();
+    let (_contract_id, client, _admin, xlm, usdc) = install_and_init_contract(&env);
+    env.mock_all_auths();
+
+    let creator = Address::generate(&env);
+    let material_id = client.register_material(
+        &creator,
+        &metadata_uri(&env),
+        &bytes32(&env, 1),
+        &bytes32(&env, 2),
+        &default_quotes(&env, &xlm, &usdc),
+        &default_payout_shares(&env),
+    );
+
+    let digest = version_manifest_digest(&env, 11);
+    let file_cid = version_file_cid(&env, 1);
+    let file_hash = version_manifest_digest(&env, 21);
+
+    client.publish_version(&material_id, &1, &digest, &file_cid, &file_hash, &None);
+
+    assert!(client.verify_version_digest(&material_id, &1, &digest));
+    assert!(!client.verify_version_digest(&material_id, &1, &version_manifest_digest(&env, 99)));
+
+    // Non-existent version
+    let result = client.try_verify_version_digest(
+        &material_id,
+        &2,
+        &digest,
+    );
+    assert_eq!(result, Err(Ok(RegistryError::VersionNotFound)));
+}
+
+#[test]
+fn non_creator_cannot_publish_version() {
+    let env = Env::default();
+    let (_contract_id, client, _admin, xlm, usdc) = install_and_init_contract(&env);
+    env.mock_all_auths();
+
+    let creator = Address::generate(&env);
+    let material_id = client.register_material(
+        &creator,
+        &metadata_uri(&env),
+        &bytes32(&env, 1),
+        &bytes32(&env, 2),
+        &default_quotes(&env, &xlm, &usdc),
+        &default_payout_shares(&env),
+    );
+
+    let intruder = Address::generate(&env);
+    let digest = version_manifest_digest(&env, 11);
+    let file_cid = version_file_cid(&env, 1);
+    let file_hash = version_manifest_digest(&env, 21);
+
+    // Only intruder is auth'd — creator is not mocked
+    env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+        address: &intruder,
+        invoke: &soroban_sdk::testutils::MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "publish_version",
+            args: (
+                &material_id,
+                &1u32,
+                &digest,
+                &file_cid,
+                &file_hash,
+                &None::<BytesN<32>>,
+            )
+                .into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+
+    let result = client.try_publish_version(
+        &material_id,
+        &1,
+        &digest,
+        &file_cid,
+        &file_hash,
+        &None,
+    );
+    assert!(result.is_err());
+}

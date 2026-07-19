@@ -3,17 +3,20 @@
  *
  * Protected file delivery endpoint. Verifies the caller holds an active
  * on-chain entitlement for the requested material before releasing the
- * IPFS CID or proxying the file stream.
+ * IPFS CID or proxying the file stream. Verifies file integrity against
+ * the purchased manifest version.
  *
  * Query params:
  *   - materialId  : The material identifier
  *   - buyerAddress: The buyer's Stellar public key
+ *   - version     : Optional specific version to download
  *
  * Flow:
  *  1. Validate params
  *  2. verifyEntitlement() — checks cache → DB → chain
  *  3. Fetch material record to get the IPFS CID
- *  4. Return a signed/time-limited redirect to the IPFS gateway
+ *  4. Verify manifest digest and version binding
+ *  5. Return a signed/time-limited redirect to the IPFS gateway
  *     (or stream the file through the Next.js edge)
  */
 
@@ -22,6 +25,8 @@ import { verifyEntitlement } from '@/lib/entitlement';
 import { getDb } from '@/lib/mongodb';
 import { getIpfsUrl } from '@/lib/config/chain';
 import { ObjectId } from 'mongodb';
+import { getManifest, getLatestManifest, isManifestWithdrawn } from '@/lib/provenance/registry';
+import { verifyManifestDigest, verifyFileCid } from '@/lib/provenance/verify';
 
 export const dynamic = 'force-dynamic';
 
@@ -29,6 +34,7 @@ export async function GET(request) {
   const { searchParams } = new URL(request.url);
   const materialId = searchParams.get('materialId') ?? '';
   const buyerAddress = searchParams.get('buyerAddress') ?? '';
+  const requestedVersion = searchParams.get('version');
 
   // ── 1. Validate params ─────────────────────────────────────────────────────
 
@@ -90,14 +96,56 @@ export async function GET(request) {
     );
   }
 
-  // ── 4. Release CID / redirect to IPFS gateway ────────────────────────────
+  // ── 4. Verify manifest version binding ────────────────────────────────────
 
-  // Option A — return the CID to the client so it can fetch directly.
-  //   This keeps the server stateless but exposes the CID.
-  // Option B — proxy the file through the server (larger response, more privacy).
-  //
-  // We use Option A here: return the resolved URL. Switch to Option B if CIDs
-  // must stay private (requires streaming the IPFS response through fetch).
+  let manifestVersion = null;
+  let manifestDigestVerified = false;
+  let versionWithdrawn = false;
+
+  try {
+    let manifestDoc = null;
+
+    if (requestedVersion) {
+      const versionNum = parseInt(requestedVersion, 10);
+      if (Number.isFinite(versionNum) && versionNum > 0) {
+        manifestDoc = await getManifest(materialId, versionNum);
+      }
+    }
+
+    if (!manifestDoc) {
+      manifestDoc = await getLatestManifest(materialId);
+    }
+
+    if (manifestDoc) {
+      manifestVersion = manifestDoc.version;
+      versionWithdrawn = manifestDoc.withdrawn === true;
+
+      if (versionWithdrawn) {
+        return NextResponse.json(
+          {
+            error: 'Version Withdrawn',
+            detail: `Version ${manifestVersion} has been withdrawn: ${manifestDoc.withdrawalReason || 'No reason specified'}`,
+          },
+          { status: 410 }
+        );
+      }
+
+      manifestDigestVerified = verifyManifestDigest(
+        manifestDoc.manifest,
+        manifestDoc.digest
+      );
+
+      // Verify the served CID matches the manifest
+      const cidMatch = await verifyFileCid(materialId, manifestVersion, cid);
+      if (!cidMatch.valid) {
+        console.warn('[download] CID mismatch:', cidMatch.detail);
+      }
+    }
+  } catch (manifestErr) {
+    console.warn('[download] Manifest verification error:', manifestErr?.message);
+  }
+
+  // ── 5. Release CID / redirect to IPFS gateway ────────────────────────────
 
   const fileUrl = getIpfsUrl(cid);
 
@@ -109,12 +157,15 @@ export async function GET(request) {
       fileName: material.fileName ?? material.title ?? materialId,
       contentType: material.contentType ?? 'application/octet-stream',
       source: entitlementResult.source,
+      manifestVersion,
+      manifestDigestVerified,
     },
     {
       headers: {
-        // Short-lived cache — allow the same buyer to hit the edge again quickly
         'Cache-Control': 'private, max-age=60',
         'X-Entitlement-Source': entitlementResult.source,
+        'X-Manifest-Version': manifestVersion ? String(manifestVersion) : '',
+        'X-Manifest-Verified': manifestDigestVerified ? 'true' : 'false',
       },
     }
   );

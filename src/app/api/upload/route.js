@@ -15,6 +15,8 @@ import {
 } from "@/lib/api/storage";
 import { getDb } from "@/lib/mongodb";
 import { pinata } from "@/lib/pinata";
+import { storeManifest } from "@/lib/provenance/registry";
+import { hashFileBytes } from "@/lib/provenance/manifest";
 
 export const dynamic = "force-dynamic";
 
@@ -368,6 +370,11 @@ export async function POST(request) {
             label: "document",
           });
 
+        const fileBuffer = Buffer.from(
+          await file.arrayBuffer(),
+        );
+        const fileHash = hashFileBytes(fileBuffer);
+
         let uploadedThumbnail = null;
 
         if (image) {
@@ -477,6 +484,35 @@ export async function POST(request) {
           status: 200,
         });
 
+        let manifestDigest = null;
+        try {
+          const { digest } = await storeManifest({
+            materialId: uploadedDocument.cid,
+            version: 1,
+            previousVersionDigest: null,
+            creator: otherFields.userAddress || otherFields.creatorAddress || null,
+            file: {
+              cid: uploadedDocument.cid,
+              hash: fileHash,
+              size: file.size,
+              type: file.type || "application/octet-stream",
+            },
+            preview: uploadedThumbnail ? {
+              thumbnailCid: uploadedThumbnail.cid,
+            } : null,
+            metadata: {
+              title: metadataPayload.title,
+              description: metadataPayload.description,
+            },
+            rights: metadataPayload.usageRights ? {
+              usageRights: metadataPayload.usageRights,
+            } : null,
+          });
+          manifestDigest = digest;
+        } catch (manifestErr) {
+          console.warn("[Upload] Manifest generation failed:", manifestErr?.message);
+        }
+
         return NextResponse.json({
           success: true,
           storageKey:
@@ -486,6 +522,8 @@ export async function POST(request) {
           image: imageUrl || "",
           metadata:
             uploadedMetadata.url,
+          manifestDigest,
+          fileHash,
         });
       } catch (error) {
         console.error(

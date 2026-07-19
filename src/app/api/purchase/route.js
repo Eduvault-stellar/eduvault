@@ -10,6 +10,7 @@ import {
   normalizeBuyerAddress,
 } from "@/lib/purchases/access";
 import { broadcastPurchaseEvent } from '@/lib/webhooks/sender';
+import { getLatestManifest } from "@/lib/provenance/registry";
 
 export async function GET(req) {
   try {
@@ -80,6 +81,23 @@ export async function POST(req) {
       }
 
       const now = new Date();
+
+      let versionBinding = null;
+      try {
+        const latestManifest = await getLatestManifest(materialId);
+        if (latestManifest) {
+          versionBinding = {
+            version: latestManifest.version,
+            manifestDigest: latestManifest.digest,
+            fileCid: latestManifest.manifest?.file?.cid || null,
+            fileHash: latestManifest.manifest?.file?.hash || null,
+            boundAt: now.toISOString(),
+          };
+        }
+      } catch (bindingErr) {
+        console.warn("[purchase] Failed to resolve version binding:", bindingErr?.message);
+      }
+
       await db.collection('purchases').updateOne(
         { _id: existing._id },
         {
@@ -90,6 +108,8 @@ export async function POST(req) {
             amount: amount ?? existing.amount ?? null,
             asset: asset || existing.asset || null,
             userEmail: email || existing.userEmail || null,
+            purchasedVersion: versionBinding?.version || existing.purchasedVersion || null,
+            versionBinding: versionBinding || existing.versionBinding || null,
             purchasedAt: existing.purchasedAt || now,
             confirmedAt: now,
             updatedAt: now,
@@ -118,6 +138,22 @@ export async function POST(req) {
 
     const now = new Date();
 
+    let versionBinding = null;
+    try {
+      const latestManifest = await getLatestManifest(materialId);
+      if (latestManifest) {
+        versionBinding = {
+          version: latestManifest.version,
+          manifestDigest: latestManifest.digest,
+          fileCid: latestManifest.manifest?.file?.cid || null,
+          fileHash: latestManifest.manifest?.file?.hash || null,
+          boundAt: now.toISOString(),
+        };
+      }
+    } catch (bindingErr) {
+      console.warn("[purchase] Failed to resolve version binding:", bindingErr?.message);
+    }
+
     const purchaseRecord = {
       materialId,
       buyerAddress,
@@ -127,6 +163,8 @@ export async function POST(req) {
       signedXdr: signedXdr || null,
       amount: amount ?? null,
       asset: asset || null,
+      purchasedVersion: versionBinding?.version || null,
+      versionBinding,
       purchasedAt: paymentCompleted ? now : null,
       confirmedAt: paymentCompleted ? now : null,
       createdAt: now,
