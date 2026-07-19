@@ -6,6 +6,7 @@ import { normalizeWalletAddress } from "@/lib/api/validation";
 import { withApiHardening } from "@/lib/api/hardening";
 import { getDb } from "@/lib/mongodb";
 import { auditLog } from "@/lib/api/audit";
+import crypto from "crypto";
 import { generateAccessToken, generateRefreshToken, storeRefreshToken } from "@/lib/auth/tokenService";
 import { errorResponse } from "@/lib/utils/errorResponse";
 
@@ -62,12 +63,18 @@ export async function POST(request) {
         }
 
         const userId = user?._id?.toString() ?? address;
+        const sessionId = crypto.randomUUID();
+
         const tokenPayload = {
           sub: userId,
+          jti: sessionId,
           email: user?.email ?? "",
           name: user?.fullName ?? "",
           walletAddress: address,
         };
+
+        // Invalidate all existing refresh tokens for this user (session rotation)
+        await db.collection("refresh_tokens").deleteMany({ userId });
 
         const accessToken = generateAccessToken(tokenPayload);
         const refreshToken = generateRefreshToken();
@@ -85,7 +92,7 @@ export async function POST(request) {
           secure: isProduction,
           sameSite: "strict",
           path: "/",
-          maxAge: 15 * 60, // 15 minutes
+          maxAge: 15 * 60,
         });
 
         response.cookies.set("refresh_token", refreshToken, {
@@ -93,7 +100,7 @@ export async function POST(request) {
           secure: isProduction,
           sameSite: "strict",
           path: "/api/auth/refresh",
-          maxAge: 7 * 24 * 60 * 60, // 7 days
+          maxAge: 7 * 24 * 60 * 60,
         });
 
         auditLog({
@@ -102,6 +109,7 @@ export async function POST(request) {
           method: "POST",
           status: 200,
           address,
+          sessionId,
         });
 
         return response;
