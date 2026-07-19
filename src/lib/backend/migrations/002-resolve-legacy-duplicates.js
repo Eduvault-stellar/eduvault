@@ -593,6 +593,7 @@ const migration = {
       "[migration:002] Archived duplicates restored",
       {
         restored,
+      }
     );
   },
 };
