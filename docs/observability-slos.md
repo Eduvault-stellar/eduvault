@@ -1,7 +1,7 @@
 # Observability: SLIs, SLOs, Alerts & Runbooks
 
-Companion doc to issue #20. Defines what we measure, the targets we hold
-ourselves to, and what to do when an alert fires.
+Companion doc to issues #20 and #63. Defines what we measure, the targets we
+hold ourselves to, and what to do when an alert fires.
 
 ## Correlation model
 
@@ -75,6 +75,8 @@ beyond the cap are dropped rather than growing memory unbounded.
 | `indexer_events_applied_total` / `indexer_events_skipped_total` | counter | source | Indexer throughput |
 | `indexer_ledger_lag` | gauge | source | How far the indexer is behind |
 | `indexer_dead_letter_count` | gauge | source | Unresolved failed events |
+| `stellar_sync_batches_total` | counter | source, outcome | Stellar sync batch outcomes |
+| `stellar_sync_events_total` | counter | source, outcome | Stellar event apply outcomes |
 | `dependency_up` | gauge | dependency | 1/0 per dependency from `/api/ready` |
 
 ## Alerts & runbooks
@@ -130,6 +132,20 @@ point a scraper at that endpoint. Suggested first dashboard panels:
 purchase success rate (last 1h/24h), purchase latency p50/p95/p99,
 indexer ledger lag over time, dead-letter backlog over time, HTTP error
 rate by route.
+
+## Audit events
+
+Issue #63 adds an allow-listed audit stream for API and operational actions.
+Each JSON event has a timestamp and, when it runs in a request or worker, the
+`correlationId` and `traceId`. Audit records intentionally contain only
+operation metadata: no request body, file bytes, secrets, or credentials.
+
+- Uploads record success, validation/storage failures, queued fallbacks, and
+  quarantine decisions. Resumable uploads also record session creation,
+  reads, part/complete/cancel updates, and conflicts.
+- Stellar sync records batch completion, fetch failures, and each event that
+  enters the dead-letter path. Search by `eventId` or `correlationId` to
+  connect an operational record to its trace.
 
 ## Health vs readiness
 

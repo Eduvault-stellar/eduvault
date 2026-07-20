@@ -351,6 +351,16 @@ export async function POST(request) {
           metadata: { title: form.get("title") || form.get("name") },
         });
         if (quarantined.status !== "approved") {
+          auditLog({
+            event: "upload_quarantined",
+            action: "scan",
+            resource: "upload",
+            route: "upload",
+            method: "POST",
+            status: 202,
+            outcome: quarantined.status,
+            uploadId: String(quarantined._id),
+          });
           return NextResponse.json(
             { success: true, uploadId: String(quarantined._id), status: quarantined.status },
             { status: 202, headers: { "Cache-Control": "no-store" } },
