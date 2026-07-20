@@ -3,8 +3,8 @@
 extern crate std;
 
 use super::*;
-use soroban_sdk::testutils::{Address as _, Events as _, Ledger};
-use soroban_sdk::{contract, contractimpl, contracttype};
+use soroban_sdk::testutils::{Address as _, Events as _, Ledger, MockAuth, MockAuthInvoke};
+use soroban_sdk::{contract, contractimpl, contracttype, IntoVal};
 use soroban_sdk::{vec, Event, Symbol};
 
 #[contracttype]
@@ -1974,4 +1974,81 @@ fn is_escrow_releasable_returns_true_after_lock_period() {
     env.ledger().set_sequence_number(36_000);
 
     assert!(client.is_escrow_releasable(&purchase_id));
+}
+
+#[test]
+fn sac_purchase_uses_real_balances_and_explicit_buyer_authorization() {
+    use soroban_sdk::token::{Client as TokenClient, StellarAssetClient};
+
+    let env = Env::default();
+    let admin = Address::generate(&env);
+    let issuer = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let creator = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let registry = env.register(MockRegistry, ());
+    let sac = env.register_stellar_asset_contract_v2(issuer.clone());
+    let asset = sac.address();
+    let token = TokenClient::new(&env, &asset);
+    let token_admin = StellarAssetClient::new(&env, &asset);
+    let material_id = bytes32(&env, 31);
+    let transaction_id = sample_transaction_id(&env);
+
+    // Fixture administration is mocked; the critical purchase invocation
+    // below replaces it with the exact buyer authorization tree.
+    env.mock_all_auths();
+    token_admin.mint(&buyer, &1_000_000);
+    MockRegistryClient::new(&env, &registry).set_material(
+        &material_id,
+        &MaterialRecord {
+            material_id: material_id.clone(),
+            creator: creator.clone(),
+            paused: false,
+            status: MaterialStatus::Active,
+            quotes: vec![
+                &env,
+                AssetQuote {
+                    asset: asset.clone(),
+                    amount: 1_000_000,
+                },
+            ],
+            payout_shares: vec![
+                &env,
+                PayoutShare {
+                    recipient: creator,
+                    share_bps: 10_000,
+                },
+            ],
+        },
+    );
+    let (contract_id, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
+    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
+
+    let fee_transfer = MockAuthInvoke {
+        contract: &asset,
+        fn_name: "transfer",
+        args: (&buyer, &treasury, 50_000i128).into_val(&env),
+        sub_invokes: &[],
+    };
+    let escrow_transfer = MockAuthInvoke {
+        contract: &asset,
+        fn_name: "transfer",
+        args: (&buyer, &contract_id, 950_000i128).into_val(&env),
+        sub_invokes: &[],
+    };
+    env.mock_auths(&[MockAuth {
+        address: &buyer,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "purchase",
+            args: (&buyer, &material_id, &asset, 1_000_000i128, &transaction_id).into_val(&env),
+            sub_invokes: &[fee_transfer, escrow_transfer],
+        },
+    }]);
+
+    client.purchase(&buyer, &material_id, &asset, &1_000_000, &transaction_id);
+    assert_eq!(token.balance(&buyer), 0);
+    assert_eq!(token.balance(&treasury), 50_000);
+    assert_eq!(token.balance(&contract_id), 950_000);
+    assert!(client.has_entitlement(&material_id, &buyer));
 }
