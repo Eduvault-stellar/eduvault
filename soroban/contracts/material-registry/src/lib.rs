@@ -10,6 +10,7 @@ const BASIS_POINTS: u32 = 10_000;
 const MAX_METADATA_URI_LEN: u32 = 256;
 const MAX_QUOTES_PER_MATERIAL: u32 = 4;
 const MAX_PAYOUT_RECIPIENTS: u32 = 5;
+const MAX_VERSION: u32 = 10_000;
 
 #[contracttype]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -78,6 +79,25 @@ pub struct MaterialRecord {
     pub updated_ledger: u32,
 }
 
+/// An immutable version record anchoring a content manifest digest on-chain.
+/// Each record binds a specific version number to its manifest digest,
+/// file CID, file hash, and optionally a previous version digest forming
+/// a tamper-evident version chain.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MaterialVersionRecord {
+    pub material_id: BytesN<32>,
+    pub version: u32,
+    pub manifest_digest: BytesN<32>,
+    pub file_cid: String,
+    pub file_hash: BytesN<32>,
+    pub previous_version_digest: Option<BytesN<32>>,
+    pub creator: Address,
+    pub published_ledger: u32,
+    pub withdrawn: bool,
+    pub withdrawal_reason: String,
+}
+
 #[contracttype]
 #[derive(Clone)]
 enum DataKey {
@@ -85,6 +105,8 @@ enum DataKey {
     CreatorNonce(Address),
     Material(BytesN<32>),
     AllowedAsset(Address),
+    MaterialVersion(BytesN<32>, u32),
+    MaterialVersionCount(BytesN<32>),
 }
 
 #[contracterror]
@@ -110,6 +132,13 @@ pub enum RegistryError {
     AlreadyInitialized = 16,
     NotInitialized = 17,
     DuplicateInitialAsset = 18,
+    VersionNotFound = 19,
+    InvalidVersionNumber = 20,
+    InvalidManifestDigest = 21,
+    InvalidFileCid = 22,
+    VersionAlreadyPublished = 23,
+    VersionAlreadyWithdrawn = 24,
+    VersionChainBroken = 25,
 }
 
 #[contractevent(topics = ["material", "registered"], data_format = "vec")]
@@ -168,6 +197,32 @@ pub struct AssetPolicyUpdatedEvent {
     pub asset: Address,
     pub kind: AssetKind,
     pub enabled: bool,
+}
+
+/// Emitted when a new material version is published with its manifest digest anchored on-chain.
+#[contractevent(topics = ["material", "version_published"], data_format = "vec")]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VersionPublishedEvent {
+    #[topic]
+    pub material_id: BytesN<32>,
+    #[topic]
+    pub version: u32,
+    pub manifest_digest: BytesN<32>,
+    pub file_cid: String,
+    pub file_hash: BytesN<32>,
+    pub creator: Address,
+}
+
+/// Emitted when a material version is withdrawn (security recall or creator withdrawal).
+#[contractevent(topics = ["material", "version_withdrawn"], data_format = "vec")]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VersionWithdrawnEvent {
+    #[topic]
+    pub material_id: BytesN<32>,
+    #[topic]
+    pub version: u32,
+    pub reason: String,
+    pub actor: Address,
 }
 
 #[contractevent(topics = ["registry", "initialized"], data_format = "vec")]
@@ -456,6 +511,193 @@ impl MaterialRegistry {
         }
 
         Ok(None)
+    }
+
+    // ============== Version Anchoring ==============
+
+    /// Publish a new version of a material, anchoring its manifest digest on-chain.
+    /// The creator must authorize this call. Version numbers must be sequential
+    /// starting from 1. Each version's previous_version_digest must match the
+    /// digest of the immediately preceding version (or None for v1).
+    pub fn publish_version(
+        env: Env,
+        material_id: BytesN<32>,
+        version: u32,
+        manifest_digest: BytesN<32>,
+        file_cid: String,
+        file_hash: BytesN<32>,
+        previous_version_digest: Option<BytesN<32>>,
+    ) -> Result<(), RegistryError> {
+        require_initialized(&env)?;
+        let record = get_material_record(&env, &material_id)?;
+        record.creator.require_auth();
+
+        if version == 0 || version > MAX_VERSION {
+            return Err(RegistryError::InvalidVersionNumber);
+        }
+        if file_cid.to_bytes().is_empty() {
+            return Err(RegistryError::InvalidFileCid);
+        }
+        if manifest_digest == BytesN::from_array(&env, &[0u8; 32]) {
+            return Err(RegistryError::InvalidManifestDigest);
+        }
+
+        let version_key = DataKey::MaterialVersion(material_id.clone(), version);
+        if env.storage().persistent().has(&version_key) {
+            return Err(RegistryError::VersionAlreadyPublished);
+        }
+
+        if version > 1 {
+            let prev_version = version - 1;
+            let prev_key = DataKey::MaterialVersion(material_id.clone(), prev_version);
+            let prev_record: MaterialVersionRecord = env
+                .storage()
+                .persistent()
+                .get(&prev_key)
+                .ok_or(RegistryError::VersionNotFound)?;
+
+            if prev_record.withdrawn {
+                return Err(RegistryError::VersionChainBroken);
+            }
+
+            let expected_digest = match &previous_version_digest {
+                Some(d) => d.clone(),
+                None => return Err(RegistryError::VersionChainBroken),
+            };
+            if expected_digest != prev_record.manifest_digest {
+                return Err(RegistryError::VersionChainBroken);
+            }
+        } else if previous_version_digest.is_some() {
+            return Err(RegistryError::VersionChainBroken);
+        }
+
+        let current_ledger = env.ledger().sequence();
+        let version_record = MaterialVersionRecord {
+            material_id: material_id.clone(),
+            version,
+            manifest_digest: manifest_digest.clone(),
+            file_cid: file_cid.clone(),
+            file_hash: file_hash.clone(),
+            previous_version_digest,
+            creator: record.creator.clone(),
+            published_ledger: current_ledger,
+            withdrawn: false,
+            withdrawal_reason: String::from_str(&env, ""),
+        };
+
+        env.storage()
+            .persistent()
+            .set(&version_key, &version_record);
+
+        let count_key = DataKey::MaterialVersionCount(material_id.clone());
+        let current_count: u32 = env
+            .storage()
+            .persistent()
+            .get(&count_key)
+            .unwrap_or(0);
+        env.storage()
+            .persistent()
+            .set(&count_key, &(current_count.max(version)));
+
+        VersionPublishedEvent {
+            material_id,
+            version,
+            manifest_digest,
+            file_cid,
+            file_hash,
+            creator: record.creator,
+        }
+        .publish(&env);
+
+        Ok(())
+    }
+
+    /// Withdraw a material version (security recall or creator-initiated withdrawal).
+    /// Only the creator or upgrade-admin can withdraw a version. Once withdrawn,
+    /// the version cannot be re-published.
+    pub fn withdraw_version(
+        env: Env,
+        actor: Address,
+        material_id: BytesN<32>,
+        version: u32,
+        reason: String,
+    ) -> Result<(), RegistryError> {
+        require_initialized(&env)?;
+        let record = get_material_record(&env, &material_id)?;
+        require_creator_or_upgrade_admin(&env, &record.creator, &actor)?;
+
+        let version_key = DataKey::MaterialVersion(material_id.clone(), version);
+        let mut version_record: MaterialVersionRecord = env
+            .storage()
+            .persistent()
+            .get(&version_key)
+            .ok_or(RegistryError::VersionNotFound)?;
+
+        if version_record.withdrawn {
+            return Err(RegistryError::VersionAlreadyWithdrawn);
+        }
+
+        version_record.withdrawn = true;
+        version_record.withdrawal_reason = reason.clone();
+        env.storage()
+            .persistent()
+            .set(&version_key, &version_record);
+
+        VersionWithdrawnEvent {
+            material_id,
+            version,
+            reason,
+            actor,
+        }
+        .publish(&env);
+
+        Ok(())
+    }
+
+    /// Retrieve a specific version record.
+    pub fn get_version(
+        env: Env,
+        material_id: BytesN<32>,
+        version: u32,
+    ) -> Result<MaterialVersionRecord, RegistryError> {
+        let version_key = DataKey::MaterialVersion(material_id.clone(), version);
+        env.storage()
+            .persistent()
+            .get(&version_key)
+            .ok_or(RegistryError::VersionNotFound)
+    }
+
+    /// Get the latest published version number for a material.
+    pub fn get_latest_version(
+        env: Env,
+        material_id: BytesN<32>,
+    ) -> Result<u32, RegistryError> {
+        let count_key = DataKey::MaterialVersionCount(material_id);
+        let count: u32 = env
+            .storage()
+            .persistent()
+            .get(&count_key)
+            .unwrap_or(0);
+        if count == 0 {
+            return Err(RegistryError::VersionNotFound);
+        }
+        Ok(count)
+    }
+
+    /// Verify that a manifest digest matches the anchored on-chain record.
+    pub fn verify_version_digest(
+        env: Env,
+        material_id: BytesN<32>,
+        version: u32,
+        expected_digest: BytesN<32>,
+    ) -> Result<bool, RegistryError> {
+        let version_key = DataKey::MaterialVersion(material_id, version);
+        let record: MaterialVersionRecord = env
+            .storage()
+            .persistent()
+            .get(&version_key)
+            .ok_or(RegistryError::VersionNotFound)?;
+        Ok(record.manifest_digest == expected_digest && !record.withdrawn)
     }
 
     // ============== Asset Allowlist (SAC / Multi-Asset Support) ==============
