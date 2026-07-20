@@ -1,10 +1,12 @@
+import assert from "node:assert/strict";
 import { test, describe, before, after, beforeEach } from "node:test";
-import assert from "node:assert";
-import { MongoClient, ObjectId } from "mongodb";
-import { config } from "dotenv";
+import { MongoClient } from "mongodb";
+import { MongoMemoryServer } from "mongodb-memory-server";
+import * as dotenv from "dotenv";
 
-config({ path: ".env.local" });
-config({ path: ".env" });
+// For tests, load .env.local if present, else .env
+dotenv.config({ path: ".env.local" });
+dotenv.config({ path: ".env" });
 
 import { insertOutboxEvent, pollOutbox, completeOutboxEvent, failOutboxEvent, OUTBOX_STATUS, OUTBOX_EVENT_TYPES } from "../../src/lib/outbox.js";
 import { processOutboxEvents } from "../../src/lib/backend/outboxWorker.js";
@@ -12,23 +14,29 @@ import { PURCHASE_STATES, canTransition } from "../../src/lib/purchases/stateMac
 // We use a mock webhook sender in tests
 import * as webhookSender from "../../src/lib/webhooks/sender.js";
 
-const uri = process.env.MONGODB_URI || "mongodb://localhost:27017";
+const TEST_DB = "eduvault_test_outbox";
+
+let mongoServer;
+let client;
+let db;
 
 describe("Purchase Outbox & State Machine", () => {
-  let client;
-  let db;
-
   before(async () => {
+    mongoServer = await MongoMemoryServer.create();
+    const uri = mongoServer.getUri();
+    // Override env var so outboxWorker uses the in-memory db
+    process.env.MONGODB_URI = uri;
+    process.env.MONGODB_DB = TEST_DB;
+
     client = new MongoClient(uri);
     await client.connect();
-    db = client.db("eduvault_test");
+    db = client.db(TEST_DB);
   });
 
   after(async () => {
-    if (client) {
-      await db.dropDatabase();
-      await client.close();
-    }
+    if (db) await db.dropDatabase();
+    if (client) await client.close();
+    if (mongoServer) await mongoServer.stop();
   });
 
   beforeEach(async () => {

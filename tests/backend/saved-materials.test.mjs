@@ -1,15 +1,18 @@
 import assert from "node:assert/strict";
 import { test, describe, before, after } from "node:test";
 import { MongoClient } from "mongodb";
+import { MongoMemoryServer } from "mongodb-memory-server";
 
 const TEST_DB = "eduvault_test_saved";
-const TEST_URI = process.env.MONGODB_URI || "mongodb://localhost:27017";
 
+let mongoServer;
 let client;
 let db;
 
 before(async () => {
-  client = new MongoClient(TEST_URI);
+  mongoServer = await MongoMemoryServer.create();
+  const uri = mongoServer.getUri();
+  client = new MongoClient(uri);
   await client.connect();
   db = client.db(TEST_DB);
 });
@@ -17,6 +20,7 @@ before(async () => {
 after(async () => {
   if (db) await db.dropDatabase();
   if (client) await client.close();
+  if (mongoServer) await mongoServer.stop();
 });
 
 describe("Saved Materials Collection", () => {

@@ -1,6 +1,6 @@
-import { getDb } from "@/lib/mongodb";
-import { pollOutbox, completeOutboxEvent, failOutboxEvent, OUTBOX_EVENT_TYPES } from "@/lib/outbox";
-import { broadcastPurchaseEvent } from "@/lib/webhooks/sender";
+import { getDb } from "../mongodb.js";
+import { pollOutbox, completeOutboxEvent, failOutboxEvent, OUTBOX_EVENT_TYPES } from "../outbox.js";
+import { broadcastPurchaseEvent } from "../webhooks/sender.js";
 
 export async function processOutboxEvents() {
   const db = await getDb();

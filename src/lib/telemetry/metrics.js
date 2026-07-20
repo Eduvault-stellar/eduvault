@@ -107,6 +107,12 @@ export function toPrometheusFormat() {
       lines.push(key ? `${name}{${key}} ${value}` : `${name} ${value}`);
     }
   }
+  for (const [name, series] of counters.entries()) {
+    lines.push(`# TYPE ${name} counter`);
+    for (const [key, value] of series.entries()) {
+      lines.push(key ? `${name}{${key}} ${value}` : `${name} ${value}`);
+    }
+  }
   for (const [name, series] of histograms.entries()) {
     lines.push(`# TYPE ${name} summary`);
     for (const [key, values] of series.entries()) {

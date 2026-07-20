@@ -22,7 +22,14 @@ import { logger } from "../logger.js";
 
 let _otelPromise = null;
 
+let _testDisableOtel = false;
+
+export function disableOtelForTesting() {
+  _testDisableOtel = true;
+}
+
 async function getOtel() {
+  if (_testDisableOtel) return null;
   if (_otelPromise) return _otelPromise;
   _otelPromise = import(/* webpackIgnore: true */ /* @vite-ignore */ "@opentelemetry/api").catch(
     () => null

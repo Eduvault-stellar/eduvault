@@ -1,7 +1,7 @@
-import { getDb } from '@/lib/mongodb';
-import { logger } from '@/lib/logger';
-import { COLLECTIONS } from '@/lib/backend/schemaContracts';
-import { generateEventId, createWebhookPayload } from '@/lib/webhooks/signature';
+import { getDb } from '../mongodb.js';
+import { logger } from '../logger.js';
+import { COLLECTIONS } from '../backend/schemaContracts.js';
+import { generateEventId, createWebhookPayload } from './signature.js';
 import crypto from 'node:crypto';
 
 export async function getDailyStats(db) {
