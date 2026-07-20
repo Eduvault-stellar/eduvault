@@ -79,10 +79,16 @@ export async function POST(request) {
         maxAge: 7 * 24 * 60 * 60, // 7 days
       });
 
-      auditLog({ event: "token_refresh_success", route: "auth/refresh", method: "POST", status: 200, actor: rotation.userId });
+      auditLog({
+        event: "token_refresh_success",
+        route: "auth/refresh",
+        method: "POST",
+        status: 200,
+        actor: rotation.userId
+      });
 
       // Opportunistically clean up expired tokens
-      cleanupExpiredRefreshTokens().catch(() => {});
+      cleanupExpiredRefreshTokens().catch((err) => console.error(err));
 
       return authResponse;
     }

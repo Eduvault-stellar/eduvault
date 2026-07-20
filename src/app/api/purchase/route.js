@@ -91,7 +91,7 @@ export async function POST(req) {
           return;
         }
 
-        const now = new Date();
+        const confirmNow = new Date();
         await db.collection('purchases').updateOne(
           { _id: existing._id },
           {
@@ -102,9 +102,9 @@ export async function POST(req) {
               amount: amount ?? existing.amount ?? null,
               asset: asset || existing.asset || null,
               userEmail: email || existing.userEmail || null,
-              purchasedAt: existing.purchasedAt || now,
-              confirmedAt: now,
-              updatedAt: now,
+              purchasedAt: existing.purchasedAt || confirmNow,
+              confirmedAt: confirmNow,
+              updatedAt: confirmNow,
             },
           },
           { session }
