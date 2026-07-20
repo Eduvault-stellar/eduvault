@@ -60,7 +60,7 @@ describe('withFailover', () => {
     );
     await expect(
       withFailover((server) => server.loadAccount('G123'), { retries: 1 })
-    ).rejects.toThrow(/All Horizon endpoints failed/);
+    ).rejects.toThrow(/All Horizon requests failed/);
   });
 
   it('does not retry on non-transient errors (e.g. 404)', async () => {
