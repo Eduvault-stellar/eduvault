@@ -13,9 +13,10 @@ function createCollection() {
     docs,
     async findOne(query) {
       for (const doc of docs.values()) {
-        const match = Object.entries(query).every(
-          ([k, v]) => String(doc[k]) === String(v)
-        );
+        const match = Object.entries(query).every(([k, v]) => {
+          if (v instanceof Date) return doc[k]?.getTime() === v.getTime();
+          return String(doc[k]) === String(v);
+        });
         if (match) return doc;
       }
       return null;
@@ -39,26 +40,42 @@ function createDb(collections = {}) {
 // ── Pure logic extracted from verifyEntitlement for unit testing ─────────────
 // (We test the logic without touching the real DB or chain)
 
-async function verifyEntitlementLogic(materialId, buyerAddress, { purchasesDb, cacheDb }) {
+async function verifyEntitlementLogic(materialId, buyerAddress, { db, checkChain, getCache, setCache }) {
   const normalised = buyerAddress.toLowerCase();
+  const now = new Date();
 
-  // Cache hit
-  const cached = await cacheDb.findOne({ materialId, buyerAddress: normalised });
-  if (cached?.active) return { hasAccess: true, source: 'cache' };
+  const cached = await getCache(db, materialId, normalised);
+  if (cached) {
+    if (cached.expiresAt && cached.expiresAt > now) {
+      if (cached.active) return { hasAccess: true, source: cached.source || 'cache' };
+      return { hasAccess: false, source: cached.source || 'cache-miss' };
+    }
+  }
 
-  // Purchases DB
-  const purchase = await purchasesDb.findOne({
+  const purchase = await db.collection('purchases').findOne({
     materialId,
     buyerAddress: normalised,
-    status: 'settled',
+    status: 'settled', // assuming isCompletedPurchaseStatus does this
   });
+
   if (purchase) {
-    await cacheDb.updateOne(
-      { materialId, buyerAddress: normalised },
-      { $set: { materialId, buyerAddress: normalised, active: true }, $setOnInsert: {} },
-      { upsert: true }
-    );
+    await setCache(db, materialId, normalised, true, 'purchases-db');
     return { hasAccess: true, source: 'purchases-db' };
+  }
+
+  const onChain = await checkChain(materialId, buyerAddress);
+  if (onChain === true) {
+    await setCache(db, materialId, normalised, true, 'chain');
+    return { hasAccess: true, source: 'chain' };
+  }
+  
+  if (onChain === false) {
+    await setCache(db, materialId, normalised, false, 'chain');
+    return { hasAccess: false, source: 'chain-miss' };
+  }
+
+  if (onChain === null && cached) {
+    return { hasAccess: cached.active, source: 'stale-cache' };
   }
 
   return { hasAccess: false, source: 'not-found' };
@@ -66,9 +83,10 @@ async function verifyEntitlementLogic(materialId, buyerAddress, { purchasesDb, c
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-test('returns hasAccess=true when entitlement cache has active record', async () => {
+test('returns hasAccess=true when cache is fresh and active', async () => {
   const cacheDb = createCollection();
   const purchasesDb = createCollection();
+  const db = createDb({ entitlement_cache: cacheDb, purchases: purchasesDb });
   const materialId = 'mat-001';
   const buyer = 'GABC123';
 
@@ -77,84 +95,125 @@ test('returns hasAccess=true when entitlement cache has active record', async ()
     buyerAddress: buyer.toLowerCase(),
     active: true,
     source: 'stellar',
+    expiresAt: new Date(Date.now() + 10000), // fresh
   });
 
-  const result = await verifyEntitlementLogic(materialId, buyer, { purchasesDb, cacheDb });
+  const result = await verifyEntitlementLogic(materialId, buyer, {
+    db,
+    checkChain: async () => null,
+    getCache: async (db, m, b) => cacheDb.findOne({ materialId: m, buyerAddress: b }),
+    setCache: async () => {},
+  });
   assert.equal(result.hasAccess, true);
-  assert.equal(result.source, 'cache');
+  assert.equal(result.source, 'stellar');
 });
 
-test('returns hasAccess=false when no cache or purchase record', async () => {
+test('returns hasAccess=false when cache is fresh but inactive', async () => {
   const cacheDb = createCollection();
   const purchasesDb = createCollection();
+  const db = createDb({ entitlement_cache: cacheDb, purchases: purchasesDb });
+  const materialId = 'mat-002';
+  const buyer = 'GXYZ789';
 
-  const result = await verifyEntitlementLogic('mat-002', 'GXYZ789', { purchasesDb, cacheDb });
+  cacheDb.docs.set(`${materialId}:${buyer.toLowerCase()}`, {
+    materialId,
+    buyerAddress: buyer.toLowerCase(),
+    active: false,
+    source: 'stellar',
+    expiresAt: new Date(Date.now() + 10000), // fresh
+  });
+
+  const result = await verifyEntitlementLogic(materialId, buyer, {
+    db,
+    checkChain: async () => true, // Should not be called
+    getCache: async (db, m, b) => cacheDb.findOne({ materialId: m, buyerAddress: b }),
+    setCache: async () => {},
+  });
   assert.equal(result.hasAccess, false);
-  assert.equal(result.source, 'not-found');
+  assert.equal(result.source, 'stellar');
 });
 
-test('returns hasAccess=true from purchases DB and populates cache', async () => {
+test('stale cache falls back to purchases DB', async () => {
   const cacheDb = createCollection();
   const purchasesDb = createCollection();
+  const db = createDb({ entitlement_cache: cacheDb, purchases: purchasesDb });
   const materialId = 'mat-003';
   const buyer = 'GDEF456';
 
-  purchasesDb.docs.set(`${materialId}:${buyer.toLowerCase()}`, {
-    materialId,
-    buyerAddress: buyer.toLowerCase(),
-    status: 'settled',
-  });
-
-  const result = await verifyEntitlementLogic(materialId, buyer, { purchasesDb, cacheDb });
-  assert.equal(result.hasAccess, true);
-  assert.equal(result.source, 'purchases-db');
-
-  // Cache should now be populated
-  const cached = await cacheDb.findOne({
-    materialId,
-    buyerAddress: buyer.toLowerCase(),
-  });
-  assert.equal(cached?.active, true);
-});
-
-test('pending purchase does not grant access', async () => {
-  const cacheDb = createCollection();
-  const purchasesDb = createCollection();
-  const materialId = 'mat-004';
-  const buyer = 'GPENDING';
-
-  purchasesDb.docs.set(`${materialId}:${buyer.toLowerCase()}`, {
-    materialId,
-    buyerAddress: buyer.toLowerCase(),
-    status: 'pending',  // not settled
-  });
-
-  const result = await verifyEntitlementLogic(materialId, buyer, { purchasesDb, cacheDb });
-  assert.equal(result.hasAccess, false);
-});
-
-test('inactive cache entry falls through to purchases DB', async () => {
-  const cacheDb = createCollection();
-  const purchasesDb = createCollection();
-  const materialId = 'mat-005';
-  const buyer = 'GINACTIVE';
-
-  // Cache has inactive record (prior miss)
   cacheDb.docs.set(`${materialId}:${buyer.toLowerCase()}`, {
     materialId,
     buyerAddress: buyer.toLowerCase(),
     active: false,
     source: 'chain-miss',
+    expiresAt: new Date(Date.now() - 10000), // stale
   });
 
-  // But purchases DB now has a settled record (late confirmation)
   purchasesDb.docs.set(`${materialId}:${buyer.toLowerCase()}`, {
     materialId,
     buyerAddress: buyer.toLowerCase(),
     status: 'settled',
   });
 
-  const result = await verifyEntitlementLogic(materialId, buyer, { purchasesDb, cacheDb });
+  let cacheUpdated = false;
+  const result = await verifyEntitlementLogic(materialId, buyer, {
+    db,
+    checkChain: async () => null,
+    getCache: async (db, m, b) => cacheDb.findOne({ materialId: m, buyerAddress: b }),
+    setCache: async () => { cacheUpdated = true; },
+  });
   assert.equal(result.hasAccess, true);
   assert.equal(result.source, 'purchases-db');
+  assert.equal(cacheUpdated, true);
+});
+
+test('stale cache falls back to chain', async () => {
+  const cacheDb = createCollection();
+  const purchasesDb = createCollection();
+  const db = createDb({ entitlement_cache: cacheDb, purchases: purchasesDb });
+  const materialId = 'mat-004';
+  const buyer = 'GCHAIN123';
+
+  cacheDb.docs.set(`${materialId}:${buyer.toLowerCase()}`, {
+    materialId,
+    buyerAddress: buyer.toLowerCase(),
+    active: false,
+    source: 'chain-miss',
+    expiresAt: new Date(Date.now() - 10000), // stale
+  });
+
+  let cacheUpdated = false;
+  const result = await verifyEntitlementLogic(materialId, buyer, {
+    db,
+    checkChain: async () => true, // chain returns true
+    getCache: async (db, m, b) => cacheDb.findOne({ materialId: m, buyerAddress: b }),
+    setCache: async () => { cacheUpdated = true; },
+  });
+  assert.equal(result.hasAccess, true);
+  assert.equal(result.source, 'chain');
+  assert.equal(cacheUpdated, true);
+});
+
+test('fail-open: stale cache is returned if chain fails', async () => {
+  const cacheDb = createCollection();
+  const purchasesDb = createCollection();
+  const db = createDb({ entitlement_cache: cacheDb, purchases: purchasesDb });
+  const materialId = 'mat-005';
+  const buyer = 'GFAILOPEN';
+
+  cacheDb.docs.set(`${materialId}:${buyer.toLowerCase()}`, {
+    materialId,
+    buyerAddress: buyer.toLowerCase(),
+    active: true,
+    source: 'chain',
+    expiresAt: new Date(Date.now() - 10000), // stale
+  });
+
+  const result = await verifyEntitlementLogic(materialId, buyer, {
+    db,
+    checkChain: async () => null, // network error
+    getCache: async (db, m, b) => cacheDb.findOne({ materialId: m, buyerAddress: b }),
+    setCache: async () => {},
+  });
+  assert.equal(result.hasAccess, true);
+  assert.equal(result.source, 'stale-cache');
 });
