@@ -61,9 +61,9 @@ export async function POST(request) {
       const accessToken = generateAccessToken(tokenPayload);
 
       const isProduction = process.env.NODE_ENV === "production";
-      const response = NextResponse.json({ success: true });
+      const authResponse = NextResponse.json({ success: true });
 
-      response.cookies.set("auth_token", accessToken, {
+      authResponse.cookies.set("auth_token", accessToken, {
         httpOnly: true,
         secure: isProduction,
         sameSite: "strict",
@@ -71,7 +71,7 @@ export async function POST(request) {
         maxAge: 15 * 60, // 15 minutes
       });
 
-      response.cookies.set("refresh_token", rotation.refreshToken, {
+      authResponse.cookies.set("refresh_token", rotation.refreshToken, {
         httpOnly: true,
         secure: isProduction,
         sameSite: "strict",
@@ -84,7 +84,7 @@ export async function POST(request) {
       // Opportunistically clean up expired tokens
       cleanupExpiredRefreshTokens().catch(() => {});
 
-      return response;
+      return authResponse;
     }
   );
 }

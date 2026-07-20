@@ -141,7 +141,7 @@ export async function POST(req) {
         return;
       }
 
-      const now = new Date();
+      const purchaseNow = new Date();
 
       const purchaseRecord = {
         materialId,
@@ -152,10 +152,10 @@ export async function POST(req) {
         signedXdr: signedXdr || null,
         amount: amount ?? null,
         asset: asset || null,
-        purchasedAt: paymentCompleted ? now : null,
-        confirmedAt: paymentCompleted ? now : null,
-        createdAt: now,
-        updatedAt: now,
+        purchasedAt: paymentCompleted ? purchaseNow : null,
+        confirmedAt: paymentCompleted ? purchaseNow : null,
+        createdAt: purchaseNow,
+        updatedAt: purchaseNow,
       };
 
       const result = await db.collection('purchases').insertOne(purchaseRecord, { session });

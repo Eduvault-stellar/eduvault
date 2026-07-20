@@ -50,6 +50,7 @@ async function createIndexes(db, collectionName, indexDefinitions) {
   await db.collection(collectionName).createIndexes(models);
 }
 
+// eslint-disable-next-line import/no-anonymous-default-export
 export default {
   version: 1,
   name: "initialize-documented-schema",

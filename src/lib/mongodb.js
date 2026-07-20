@@ -112,21 +112,6 @@ export async function pingDatabase() {
   await db.command({ ping: 1 });
 
   return true;
-    // Create compound index for title, description, price, and category
-    await collection.createIndex(
-      { category: 1, price: 1, title: 1, description: 1 },
-      { name: "materials_search_compound_idx", background: true },
-    );
-
-    await ensureChallengeIndexes(db);
-
-    console.log("MongoDB indexes ensured successfully.");
-  } catch (error) {
-    console.error(
-      "[Database Index Error]: Failed to create MongoDB indexes:",
-      error,
-    );
-  }
 }
 
 export async function closeMongoConnection() {
