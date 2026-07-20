@@ -17,6 +17,8 @@ import { getDb } from "@/lib/mongodb";
 import { pinata } from "@/lib/pinata";
 import { storeManifest } from "@/lib/provenance/registry";
 import { hashFileBytes } from "@/lib/provenance/manifest";
+import { validateUploadedFile } from "@/lib/ipfs/uploadValidator";
+import { quarantineUpload } from "@/lib/uploads/quarantine";
 
 export const dynamic = "force-dynamic";
 
@@ -337,6 +339,24 @@ export async function POST(request) {
           });
         }
 
+        const byteValidation = await validateUploadedFile(file, ALLOWED_FILE_TYPES);
+        if (!byteValidation.valid) {
+          return createUploadErrorResponse({ error: byteValidation.reason, status: 415, reason: "content_type_mismatch" });
+        }
+
+        const fileBuffer = Buffer.from(await file.arrayBuffer());
+        const db = await getDb();
+        const quarantined = await quarantineUpload(db, {
+          bytes: fileBuffer, fileName: file.name, mimeType: file.type,
+          metadata: { title: form.get("title") || form.get("name") },
+        });
+        if (quarantined.status !== "approved") {
+          return NextResponse.json(
+            { success: true, uploadId: String(quarantined._id), status: quarantined.status },
+            { status: 202, headers: { "Cache-Control": "no-store" } },
+          );
+        }
+
         const metadataPayload = {
           title:
             form.get("title") ||
@@ -370,9 +390,7 @@ export async function POST(request) {
             label: "document",
           });
 
-        const fileBuffer = Buffer.from(
-          await file.arrayBuffer(),
-        );
+        // Publication is performed by the scan worker only after approval.
         const fileHash = hashFileBytes(fileBuffer);
 
         let uploadedThumbnail = null;
