@@ -1,14 +1,22 @@
-export const dynamic = "force-dynamic";
-
+import crypto from "crypto";
 import { NextResponse } from "next/server";
 import { verifyChallenge, cleanupExpiredChallenges } from "@/lib/auth/challenge";
 import { normalizeWalletAddress } from "@/lib/api/validation";
 import { withApiHardening } from "@/lib/api/hardening";
 import { getDb } from "@/lib/mongodb";
 import { auditLog } from "@/lib/api/audit";
-import crypto from "crypto";
 import { generateAccessToken, generateRefreshToken, storeRefreshToken } from "@/lib/auth/tokenService";
 import { errorResponse } from "@/lib/utils/errorResponse";
+
+export const dynamic = "force-dynamic";
+
+function getClientIp(request) {
+  return (
+    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+    request.headers.get("x-real-ip") ||
+    "unknown"
+  );
+}
 
 export async function POST(request) {
   return withApiHardening(
@@ -73,12 +81,15 @@ export async function POST(request) {
           walletAddress: address,
         };
 
-        // Invalidate all existing refresh tokens for this user (session rotation)
-        await db.collection("refresh_tokens").deleteMany({ userId });
-
         const accessToken = generateAccessToken(tokenPayload);
         const refreshToken = generateRefreshToken();
-        await storeRefreshToken(userId, refreshToken);
+        await storeRefreshToken(userId, refreshToken, {
+          deviceInfo: {
+            ip: getClientIp(request),
+            userAgent: request.headers.get("user-agent") || "unknown",
+            origin: request.headers.get("origin") || null,
+          },
+        });
 
         const isProduction = process.env.NODE_ENV === "production";
         const response = NextResponse.json({
