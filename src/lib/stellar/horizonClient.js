@@ -244,7 +244,7 @@ export async function withFailover(
     .join(" | ");
 
   throw new Error(
-    `All Horizon requests failed after ${totalAttempts} attempts. Errors: ${summary}`,
+    `All Horizon endpoints failed after ${totalAttempts} attempts. Errors: ${summary}`,
   );
 }
 

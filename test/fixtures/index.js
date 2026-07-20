@@ -1,13 +1,13 @@
 export const users = {
     creator: {
         _id: "user_creator_1",
-        walletAddress: "GBBD47IF6LWK7P7MDEVSCWRZDPOVPOFWLYERWFBN4JSE3OUQTISLV5EX",
+        walletAddress: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
         email: "creator@eduvault.test",
         fullName: "Alice Educator",
     },
     buyer: {
         _id: "user_buyer_1",
-        walletAddress: "GA5ZSEJYB37JDD5G3LYVYF77RD7QFGHSXPJNKXJFUMIVYQ33HE6IGM4Y",
+        walletAddress: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
         email: "buyer@eduvault.test",
         fullName: "Bob Student",
     }

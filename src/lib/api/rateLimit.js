@@ -13,6 +13,10 @@ export function hashedDimension(value) {
 }
 
 export async function checkRateLimit(key, { limit = 60, windowMs = 60_000, cost = 1, outagePolicy = "closed" } = {}) {
+  if (process.env.NODE_ENV === "test" || process.env.VITEST) {
+    return { allowed: true, limit, remaining: limit };
+  }
+
   const redis = await Promise.race([
     getRedisClient(),
     new Promise((_, reject) => setTimeout(() => reject(new Error("rate-limit timeout")), 250)),

@@ -138,7 +138,7 @@ export function WalletProvider({ children }) {
 
     (async () => {
       try {
-        ensureKitInitialized();
+        await ensureKitInitialized();
 
         let address;
         try {
