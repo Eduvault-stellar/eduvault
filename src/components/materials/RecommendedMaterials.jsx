@@ -3,34 +3,60 @@
 import { useMarketplaceMaterials } from "@/hooks/api/useMaterials";
 import Link from "next/link";
 import Image from "next/image";
-import { FaHeart, FaFilePdf } from "react-icons/fa";
+import { FaHeart } from "react-icons/fa";
 
 function getPreviewImage(material) {
   return material.coverImageUrl || material.thumbnailUrl || material.image || "/images/image1.jpg";
 }
 
-export default function RecommendedMaterials({ currentId, subject, category, creator }) {
+export default function RecommendedMaterials({ currentId, subject, category, level, creator }) {
   const { data, isLoading } = useMarketplaceMaterials({
     subject: subject || undefined,
     category: category || undefined,
-    pageSize: 5,
+    pageSize: 12,
   });
 
-  const recommendations = (data?.items || []).filter(
-    (item) => (item._id || item.id) !== currentId
-  ).slice(0, 4);
+  const { data: fallbackData, isLoading: fallbackLoading } = useMarketplaceMaterials({
+    sortBy: "popular",
+    pageSize: 8,
+  });
 
-  if (!isLoading && recommendations.length === 0) {
+  const loading = isLoading || fallbackLoading;
+
+  const allItems = [...(data?.items || []), ...(fallbackData?.items || [])];
+  
+  // Remove duplicates and current item
+  const uniqueItems = [];
+  const seen = new Set([currentId]);
+  
+  for (const item of allItems) {
+    const id = item._id || item.id;
+    if (!seen.has(id)) {
+      seen.add(id);
+      uniqueItems.push(item);
+    }
+  }
+
+  // Sort by level match first
+  const recommendations = uniqueItems.sort((a, b) => {
+    if (level) {
+      if (a.level === level && b.level !== level) return -1;
+      if (a.level !== level && b.level === level) return 1;
+    }
+    return 0;
+  }).slice(0, 4);
+
+  if (!loading && recommendations.length === 0) {
     return null;
   }
 
   return (
     <div>
       <h2 className="text-lg font-semibold text-gray-900 mb-4">
-        {subject ? `More in ${subject}` : "Recommended for You"}
+        {subject ? `Related Resources in ${subject}` : "Recommended for You"}
       </h2>
 
-      {isLoading ? (
+      {loading ? (
         <div className="grid sm:grid-cols-2 md:grid-cols-4 gap-4">
           {[1, 2, 3, 4].map((i) => (
             <div key={i} className="bg-white border border-gray-200 rounded-xl overflow-hidden animate-pulse">
@@ -59,6 +85,11 @@ export default function RecommendedMaterials({ currentId, subject, category, cre
                     fill
                     className="object-cover group-hover:scale-105 transition-transform duration-500"
                   />
+                  {material.level && (
+                    <span className="absolute top-2 right-2 bg-white/90 backdrop-blur-sm text-blue-700 font-semibold text-[10px] px-2 py-0.5 rounded-md border border-blue-200 shadow-sm">
+                      {material.level.charAt(0).toUpperCase() + material.level.slice(1)}
+                    </span>
+                  )}
                 </div>
                 <div className="p-3">
                   <h3 className="text-sm font-semibold text-gray-900 line-clamp-1 group-hover:text-blue-600 transition-colors">

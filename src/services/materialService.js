@@ -10,6 +10,10 @@ export const materialService = {
     return apiClient(`/api/market-materials?id=${id}`);
   },
 
+  getMaterialFeedback: async (id) => {
+    return apiClient(`/api/materials/${id}/feedback`);
+  },
+
   getUserMaterials: async () => {
     return apiClient('/api/materials');
   },
@@ -37,8 +41,22 @@ export const materialService = {
     });
   },
 
+  submitMaterialFeedback: async (id, feedbackData) => {
+    return apiClient(`/api/materials/${id}/feedback`, {
+      method: 'POST',
+      body: feedbackData,
+    });
+  },
+
   getMaterialHistory: async (id) => {
     return apiClient(`/api/materials/history?id=${id}`);
+  },
+
+  reportMaterial: async (id, reportData) => {
+    return apiClient(`/api/materials/${id}/report`, {
+      method: 'POST',
+      body: reportData,
+    });
   },
 
   getTrendingMaterials: async (params = {}) => {

@@ -4,6 +4,7 @@ export const queryKeys = {
     marketplace: (params) => ['materials', 'marketplace', params],
     trending: (params) => ['materials', 'trending', params],
     detail: (id) => ['materials', 'detail', id],
+    feedback: (id) => ['materials', 'feedback', id],
     user: (address) => ['materials', 'user', address],
     saved: (address) => ['materials', 'saved', address],
   },

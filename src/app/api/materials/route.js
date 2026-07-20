@@ -46,6 +46,7 @@ export async function POST(request) {
         const doc = {
           userAddress,
           ...material,
+          version: 1,
           createdAt: new Date(),
           updatedAt: new Date(),
         };
@@ -129,7 +130,8 @@ export async function PUT(request) {
         }
 
         const now = new Date();
-        const updateDoc = { ...updates, updatedAt: now, updatedBy: userAddress };
+        const nextVersion = (existing.version || 1) + 1;
+        const updateDoc = { ...updates, updatedAt: now, updatedBy: userAddress, version: nextVersion };
 
         const result = await db.collection("materials").findOneAndUpdate(
           { _id: new ObjectId(materialId) },

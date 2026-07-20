@@ -11,6 +11,7 @@ import {
   validatePayoutSettingsPayload,
 } from "@/lib/api/validation";
 import { getUserFromCookie, sanitizeString } from "@/lib/api/auth";
+import { verifySessionWalletAddress } from "@/lib/auth/sessionVerification";
 import { sendWelcomeEmail } from "@/lib/email";
 import { getDb } from "@/lib/mongodb";
 
@@ -113,6 +114,14 @@ export async function PATCH(request) {
         }
 
         const profileData = await request.json();
+
+        if (profileData.walletAddress) {
+          if (!verifySessionWalletAddress(user, profileData)) {
+            auditLog({ event: "profile_update_forbidden", route: "profile", method: "PATCH", status: 403 });
+            return NextResponse.json({ error: "Forbidden: Wallet address mismatch" }, { status: 403 });
+          }
+        }
+
         const updateFields = {};
 
         if (profileData.displayName && typeof profileData.displayName === 'string') {

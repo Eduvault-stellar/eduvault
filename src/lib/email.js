@@ -114,3 +114,8 @@ export async function sendWelcomeEmail(to, name) {
 
   await transporter.sendMail({ from, to, subject, text, html });
 }
+
+export async function verifyEmailConnection() {
+  const transporter = createTransporter();
+  await transporter.verify();
+}

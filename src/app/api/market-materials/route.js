@@ -4,16 +4,25 @@ import { NextResponse } from "next/server";
 import { auditLog } from "@/lib/api/audit";
 import { withApiHardening } from "@/lib/api/hardening";
 import { parsePagination } from "@/lib/api/validation";
+import { buildMarketplaceDiscoveryQuery, buildMarketplaceSort } from "@/lib/backend/marketplaceDiscovery";
 import { getDb } from "@/lib/mongodb";
 import { ObjectId } from "mongodb";
+import { cacheGet, cacheSet } from "@/lib/cache/redis";
 
 export const runtime = "nodejs";
 
 function sanitizeMaterial(doc) {
   if (!doc) return doc;
   const { storageKey, fileUrl, metadataUrl, ...safe } = doc;
+  const averageScore = Number(safe.averageScore ?? safe.rating ?? 0) || 0;
+  const feedbackCount = Number(safe.feedbackCount ?? safe.reviewsCount ?? 0) || 0;
+
   return {
     ...safe,
+    averageScore,
+    rating: averageScore,
+    feedbackCount,
+    reviewsCount: feedbackCount,
     userAddress: safe.userAddress ?? safe.ownerAddress ?? null,
   };
 }
@@ -52,41 +61,14 @@ export async function GET(request) {
     // 2️⃣ Handle list fetch
     const { page, pageSize } = parsePagination(url.searchParams);
 
-    // Filters
-    const query = { visibility: "public" };
-    const search = url.searchParams.get("search");
-    const subject = url.searchParams.get("subject");
-    const category = url.searchParams.get("category");
-    const level = url.searchParams.get("level");
-    const minPrice = url.searchParams.get("minPrice");
-    const maxPrice = url.searchParams.get("maxPrice");
-    const creator = url.searchParams.get("creator");
-    const usageRights = url.searchParams.get("usageRights");
-
-    if (search) {
-      const regex = new RegExp(search, "i");
-      query.$or = [
-        { title: regex },
-        { description: regex },
-        { author: regex },
-        { subject: regex },
-      ];
+    const cacheKey = `market-materials:${url.searchParams.toString()}`;
+    const cached = await cacheGet(cacheKey);
+    if (cached) {
+      return NextResponse.json(cached, { status: 200 });
     }
-    if (subject) query.subject = subject;
-    if (category) query.category = category;
-    if (level) query.level = level;
-    if (minPrice) query.price = { ...query.price, $gte: Number(minPrice) };
-    if (maxPrice) query.price = { ...query.price, $lte: Number(maxPrice) };
-    if (creator) query["author"] = creator;
-    if (usageRights) query["usageRights"] = usageRights;
 
-    // Sorting
-    let sort = { createdAt: -1 };
-    const sortBy = url.searchParams.get("sortBy");
-    if (sortBy === "price_asc") sort = { price: 1 };
-    else if (sortBy === "price_desc") sort = { price: -1 };
-    else if (sortBy === "popular") sort = { likes: -1 };
-    // Default: newest
+    const query = buildMarketplaceDiscoveryQuery(url.searchParams);
+    const sort = buildMarketplaceSort(url.searchParams.get("sortBy"));
 
     const total = await db.collection("materials").countDocuments(query);
     const items = await db
@@ -101,10 +83,10 @@ export async function GET(request) {
 
     const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
-    return NextResponse.json(
-      { items: normalized, page, pageSize, total, totalPages },
-      { status: 200 }
-    );
+    const payload = { items: normalized, page, pageSize, total, totalPages };
+    await cacheSet(cacheKey, payload, 600);
+
+    return NextResponse.json(payload, { status: 200 });
   } catch (err) {
     if (err.name === "ValidationError") throw err;
     auditLog({ event: "market_materials_failed", route: "market-materials", method: "GET", status: 500, reason: err.message });

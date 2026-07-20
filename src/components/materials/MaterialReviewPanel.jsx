@@ -1,46 +1,45 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { FaCheckCircle, FaRegStar, FaStar } from "react-icons/fa";
+import { FaCheckCircle, FaRegStar, FaShieldAlt, FaStar } from "react-icons/fa";
+import { useMaterialFeedback, useSubmitMaterialFeedback } from "@/hooks/api/useMaterials";
 import { formatAddress } from "@/utils/formatAddress";
 
 const MIN_COMMENT_LENGTH = 12;
 const MAX_COMMENT_LENGTH = 600;
 const DEFAULT_REVIEWS = [];
 
+function normalizeAddress(value) {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
 function normalizeReview(review, index) {
   return {
     id: review.id || review._id || `review-${index}`,
-    rating: Number(review.rating) || 0,
+    rating: Number(review.score ?? review.rating) || 0,
     comment: review.comment || review.body || "",
     reviewer: review.reviewer || review.reviewerAddress || review.walletAddress || "Anonymous",
     reviewerName: review.reviewerName || review.name || "",
     verifiedBuyer: Boolean(review.verifiedBuyer || review.verified || review.hasVerifiedPurchase),
+    moderationStatus: review.moderationStatus || "pending_review",
     createdAt: review.createdAt || review.date || new Date().toISOString(),
   };
 }
 
-function getEntitlementState(entitlement, hasAddress) {
-  if (!hasAddress) {
+function getReviewGateState({ currentAddress, isCreator, isSubmitting }) {
+  if (!currentAddress) {
     return { canSubmit: false, status: "wallet-missing" };
   }
 
-  if (entitlement?.isLoading || entitlement?.isFetching) {
-    return { canSubmit: false, status: "checking" };
+  if (isCreator) {
+    return { canSubmit: false, status: "creator" };
   }
 
-  if (entitlement?.isError) {
-    return { canSubmit: false, status: "unavailable" };
+  if (isSubmitting) {
+    return { canSubmit: false, status: "submitting" };
   }
 
-  const data = entitlement?.data;
-  const hasAccess = Boolean(data?.hasAccess || data?.owned || data?.status === "active");
-
-  return {
-    canSubmit: hasAccess,
-    status: hasAccess ? "verified" : "not-verified",
-    source: data?.source || data?.entitlement?.source,
-  };
+  return { canSubmit: true, status: "ready" };
 }
 
 function RatingStars({ value, onChange, disabled = false, describedBy }) {
@@ -69,9 +68,10 @@ function RatingStars({ value, onChange, disabled = false, describedBy }) {
 }
 
 function SummaryStars({ rating }) {
-  const rounded = Math.round(rating);
+  const normalizedRating = Number(rating) || 0;
+  const rounded = Math.round(normalizedRating);
   return (
-    <div className="flex items-center gap-1 text-amber-500" aria-label={`${rating.toFixed(1)} out of 5 stars`}>
+    <div className="flex items-center gap-1 text-amber-500" aria-label={`${normalizedRating.toFixed(1)} out of 5 stars`}>
       {[1, 2, 3, 4, 5].map((star) => (
         <FaStar key={star} className={star <= rounded ? "opacity-100" : "opacity-25"} />
       ))}
@@ -79,44 +79,60 @@ function SummaryStars({ rating }) {
   );
 }
 
-function VerificationNotice({ state }) {
+function FeedbackGateNotice({ state }) {
   const messages = {
-    "wallet-missing": "Connect a wallet with a synced purchase to publish a verified review.",
-    checking: "Checking your purchase entitlement before enabling reviews.",
-    unavailable: "Purchase verification is unavailable right now, so review submission is paused.",
-    "not-verified": "Only verified buyers can publish reviews for this material.",
-    verified: "Your synced purchase is verified for this material.",
+    "wallet-missing": "Connect a wallet to leave feedback for this resource.",
+    creator: "Creators cannot score their own resource.",
+    submitting: "Publishing your feedback now.",
+    ready: "Your feedback helps learners discover the right material faster.",
   };
 
-  const tone = state.status === "verified" ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-slate-200 bg-slate-50 text-slate-600";
+  const tone = state.status === "ready" ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-slate-200 bg-slate-50 text-slate-600";
 
+  return <p className={`rounded-xl border px-4 py-3 text-sm ${tone}`}>{messages[state.status]}</p>;
+}
+
+function ModerationNotice({ moderation }) {
   return (
-    <p className={`rounded-xl border px-4 py-3 text-sm ${tone}`}>
-      {messages[state.status]}
-      {state.status === "verified" && state.source ? ` Source: ${state.source}.` : ""}
-    </p>
+    <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-800">
+      <div className="flex items-start gap-2">
+        <FaShieldAlt className="mt-0.5 shrink-0" aria-hidden="true" />
+        <div>
+          <p className="font-semibold">{moderation?.label || "Basic moderation placeholder"}</p>
+          <p className="mt-1">{moderation?.message || "Feedback is published immediately and queued for future moderation review."}</p>
+        </div>
+      </div>
+    </div>
   );
 }
 
-export default function MaterialReviewPanel({
+export function MaterialReviewPanelView({
   materialId,
   initialReviews = DEFAULT_REVIEWS,
-  entitlement,
+  feedbackData,
+  feedbackLoading = false,
+  submitFeedback,
+  submitError,
+  isSubmitting = false,
   currentAddress,
+  creatorAddress,
 }) {
-  const [reviews, setReviews] = useState(() => initialReviews.map(normalizeReview));
   const [rating, setRating] = useState(0);
   const [comment, setComment] = useState("");
   const [errors, setErrors] = useState({});
-  const [isSubmitting, setIsSubmitting] = useState(false);
   const [successMessage, setSuccessMessage] = useState("");
 
-  const entitlementState = getEntitlementState(entitlement, Boolean(currentAddress));
-  const averageRating = useMemo(() => {
-    if (reviews.length === 0) return 0;
-    const total = reviews.reduce((sum, review) => sum + review.rating, 0);
-    return total / reviews.length;
-  }, [reviews]);
+  const reviews = useMemo(() => {
+    const source = Array.isArray(feedbackData?.items) ? feedbackData.items : initialReviews;
+    return source.map(normalizeReview);
+  }, [feedbackData?.items, initialReviews]);
+
+  const isCreator = normalizeAddress(currentAddress) && normalizeAddress(currentAddress) === normalizeAddress(creatorAddress);
+  const gateState = getReviewGateState({ currentAddress, isCreator, isSubmitting });
+  const averageRating = Number(feedbackData?.averageScore) || (
+    reviews.length === 0 ? 0 : reviews.reduce((sum, review) => sum + review.rating, 0) / reviews.length
+  );
+  const feedbackCount = Number(feedbackData?.feedbackCount ?? reviews.length) || 0;
 
   function validate() {
     const nextErrors = {};
@@ -125,11 +141,11 @@ export default function MaterialReviewPanel({
       nextErrors.rating = "Choose a rating from 1 to 5 stars.";
     }
     if (!trimmed) {
-      nextErrors.comment = "Write a short review before publishing.";
+      nextErrors.comment = "Write a short feedback note before publishing.";
     } else if (trimmed.length < MIN_COMMENT_LENGTH) {
-      nextErrors.comment = `Review must be at least ${MIN_COMMENT_LENGTH} characters.`;
+      nextErrors.comment = `Feedback must be at least ${MIN_COMMENT_LENGTH} characters.`;
     } else if (trimmed.length > MAX_COMMENT_LENGTH) {
-      nextErrors.comment = `Review must be ${MAX_COMMENT_LENGTH} characters or fewer.`;
+      nextErrors.comment = `Feedback must be ${MAX_COMMENT_LENGTH} characters or fewer.`;
     }
     setErrors(nextErrors);
     return Object.keys(nextErrors).length === 0;
@@ -139,41 +155,31 @@ export default function MaterialReviewPanel({
     event.preventDefault();
     setSuccessMessage("");
 
-    if (!entitlementState.canSubmit) {
-      setErrors({ form: "A verified purchase is required before publishing a review." });
+    if (!gateState.canSubmit) {
+      setErrors({ form: gateState.status === "creator" ? "Creators cannot score their own resource." : "Connect a wallet before publishing feedback." });
       return;
     }
 
     if (!validate()) return;
 
-    setIsSubmitting(true);
-    await new Promise((resolve) => window.setTimeout(resolve, 300));
-
-    const nextReview = {
-      id: `${materialId || "material"}-${Date.now()}`,
-      rating,
-      comment: comment.trim(),
-      reviewer: currentAddress,
-      reviewerName: "",
-      verifiedBuyer: true,
-      createdAt: new Date().toISOString(),
-    };
-
-    setReviews((current) => [nextReview, ...current]);
-    setRating(0);
-    setComment("");
-    setErrors({});
-    setSuccessMessage("Review published. Thanks for helping future learners choose well.");
-    setIsSubmitting(false);
+    try {
+      await submitFeedback({ score: rating, comment: comment.trim() });
+      setRating(0);
+      setComment("");
+      setErrors({});
+      setSuccessMessage("Feedback published and queued for moderation review.");
+    } catch (error) {
+      setErrors({ form: error?.message || "Unable to publish feedback right now." });
+    }
   }
 
   return (
-    <section className="mt-10 rounded-3xl border border-slate-200 bg-white p-5 shadow-sm md:p-7" aria-labelledby="material-reviews-heading">
+    <section className="mt-10 rounded-3xl border border-slate-200 bg-white p-5 shadow-sm md:p-7" aria-labelledby="material-feedback-heading">
       <div className="grid gap-8 lg:grid-cols-[0.85fr_1.15fr]">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-blue-600">Buyer feedback</p>
-          <h2 id="material-reviews-heading" className="mt-2 text-2xl font-bold text-slate-950">
-            Reviews and ratings
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-blue-600">Learner feedback</p>
+          <h2 id="material-feedback-heading" className="mt-2 text-2xl font-bold text-slate-950">
+            Resource ratings
           </h2>
           <div className="mt-5 rounded-2xl border border-slate-100 bg-slate-50 p-5">
             <div className="flex items-end gap-3">
@@ -184,62 +190,63 @@ export default function MaterialReviewPanel({
               <SummaryStars rating={averageRating} />
             </div>
             <p className="mt-3 text-sm text-slate-600">
-              {reviews.length === 0 ? "No reviews yet" : `${reviews.length} review${reviews.length === 1 ? "" : "s"}`}
+              {feedbackCount === 0 ? "No feedback yet" : `${feedbackCount} feedback score${feedbackCount === 1 ? "" : "s"}`}
             </p>
           </div>
 
           <form onSubmit={handleSubmit} noValidate className="mt-6 space-y-5">
-            <VerificationNotice state={entitlementState} />
-            {errors.form && (
+            <FeedbackGateNotice state={gateState} />
+            <ModerationNotice moderation={feedbackData?.moderation} />
+            {(errors.form || submitError) && (
               <p role="alert" className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-                {errors.form}
+                {errors.form || submitError?.message || "Unable to publish feedback right now."}
               </p>
             )}
 
             <div>
-              <label className="mb-3 block text-sm font-semibold text-slate-800">Rating</label>
+              <label className="mb-3 block text-sm font-semibold text-slate-800">Score</label>
               <RatingStars
                 value={rating}
                 onChange={(nextRating) => {
                   setRating(nextRating);
                   setErrors((current) => ({ ...current, rating: undefined, form: undefined }));
                 }}
-                disabled={!entitlementState.canSubmit || isSubmitting}
-                describedBy={errors.rating ? "review-rating-error" : undefined}
+                disabled={!gateState.canSubmit}
+                describedBy={errors.rating ? "feedback-rating-error" : undefined}
               />
               {errors.rating && (
-                <p id="review-rating-error" role="alert" className="mt-2 text-sm text-red-600">
+                <p id="feedback-rating-error" role="alert" className="mt-2 text-sm text-red-600">
                   {errors.rating}
                 </p>
               )}
             </div>
 
             <div>
-              <label htmlFor="review-comment" className="mb-2 block text-sm font-semibold text-slate-800">
-                Review
+              <label htmlFor="feedback-comment" className="mb-2 block text-sm font-semibold text-slate-800">
+                Feedback
               </label>
               <textarea
-                id="review-comment"
+                id="feedback-comment"
                 value={comment}
                 onChange={(event) => {
                   setComment(event.target.value);
                   setErrors((current) => ({ ...current, comment: undefined, form: undefined }));
                 }}
-                disabled={!entitlementState.canSubmit || isSubmitting}
+                disabled={!gateState.canSubmit}
                 rows={5}
                 maxLength={MAX_COMMENT_LENGTH}
                 aria-invalid={Boolean(errors.comment)}
-                aria-describedby={errors.comment ? "review-comment-error" : "review-comment-help"}
+                aria-describedby={errors.comment ? "feedback-comment-error" : "feedback-comment-help"}
                 className="w-full resize-y rounded-2xl border border-slate-200 px-4 py-3 text-sm text-slate-800 shadow-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400"
                 placeholder="Share what helped, what could be clearer, and who this material is best for."
               />
               <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
                 {errors.comment ? (
-                  <p id="review-comment-error" role="alert" className="text-sm text-red-600">
+                  <p id="feedback-comment-error" role="alert" className="text-sm text-red-600">
                     {errors.comment}
                   </p>
                 ) : (
-                  <p id="review-comment-help" className="text-sm text-slate-500">
+                  <p id="feedback-comment-help" className="text-sm text-slate-500">
                     {MIN_COMMENT_LENGTH}-{MAX_COMMENT_LENGTH} characters
                   </p>
                 )}
@@ -249,10 +256,10 @@ export default function MaterialReviewPanel({
 
             <button
               type="submit"
-              disabled={!entitlementState.canSubmit || isSubmitting}
+              disabled={!gateState.canSubmit}
               className="min-h-11 w-full rounded-2xl bg-slate-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-400 disabled:cursor-not-allowed disabled:bg-slate-300"
             >
-              {isSubmitting ? "Publishing review..." : "Publish review"}
+              {isSubmitting ? "Publishing feedback..." : "Publish feedback"}
             </button>
             {successMessage && (
               <p role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
@@ -263,11 +270,15 @@ export default function MaterialReviewPanel({
         </div>
 
         <div className="min-w-0">
-          <h3 className="text-lg font-semibold text-slate-950">Review history</h3>
-          {reviews.length === 0 ? (
+          <h3 className="text-lg font-semibold text-slate-950">Feedback history</h3>
+          {feedbackLoading ? (
+            <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 px-5 py-10 text-center">
+              <p className="font-semibold text-slate-800">Loading feedback...</p>
+            </div>
+          ) : reviews.length === 0 ? (
             <div className="mt-4 rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-5 py-10 text-center">
-              <p className="font-semibold text-slate-800">No reviews have been published yet.</p>
-              <p className="mt-2 text-sm text-slate-500">Verified buyers can add the first rating after purchase sync completes.</p>
+              <p className="font-semibold text-slate-800">No feedback has been published yet.</p>
+              <p className="mt-2 text-sm text-slate-500">Learners can add the first score from this resource page.</p>
             </div>
           ) : (
             <ol className="mt-5 space-y-5">
@@ -286,12 +297,10 @@ export default function MaterialReviewPanel({
                         })}
                       </p>
                     </div>
-                    {review.verifiedBuyer && (
-                      <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
-                        <FaCheckCircle aria-hidden="true" />
-                        Verified buyer
-                      </span>
-                    )}
+                    <span className="inline-flex items-center gap-1 rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
+                      <FaShieldAlt aria-hidden="true" />
+                      {review.moderationStatus === "pending_review" ? "Queued review" : "Moderated"}
+                    </span>
                   </div>
                   <div className="mt-3">
                     <SummaryStars rating={review.rating} />
@@ -299,6 +308,12 @@ export default function MaterialReviewPanel({
                   <p className="mt-3 overflow-wrap-anywhere break-words text-sm leading-6 text-slate-700">
                     {review.comment}
                   </p>
+                  {review.verifiedBuyer && (
+                    <span className="mt-4 inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
+                      <FaCheckCircle aria-hidden="true" />
+                      Verified buyer
+                    </span>
+                  )}
                 </li>
               ))}
             </ol>
@@ -306,5 +321,21 @@ export default function MaterialReviewPanel({
         </div>
       </div>
     </section>
+  );
+}
+
+export default function MaterialReviewPanel(props) {
+  const feedbackQuery = useMaterialFeedback(props.materialId);
+  const submitFeedbackMutation = useSubmitMaterialFeedback(props.materialId);
+
+  return (
+    <MaterialReviewPanelView
+      {...props}
+      feedbackData={feedbackQuery.data}
+      feedbackLoading={feedbackQuery.isLoading && !feedbackQuery.data}
+      submitFeedback={(payload) => submitFeedbackMutation.mutateAsync(payload)}
+      submitError={submitFeedbackMutation.error}
+      isSubmitting={submitFeedbackMutation.isPending}
+    />
   );
 }

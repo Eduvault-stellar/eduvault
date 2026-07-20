@@ -1,97 +1,725 @@
-export const COLLECTIONS = {
+export const COLLECTIONS = Object.freeze({
   users: "users",
   materials: "materials",
   purchases: "purchases",
   entitlementCache: "entitlement_cache",
   syncState: "sync_state",
   syncEvents: "sync_events",
+  collections: "collections",
+  progress: "progress",
   deadLetterEvents: "dead_letter_events",
   materialHistory: "material_history",
   savedMaterials: "saved_materials",
-};
+  migrationConflicts: "_migration_conflicts",
 
-export const REQUIRED_INDEXES = {
+  // Security and workflow collections.
+  challenges: "auth_challenges",
+  uploadSessions: "upload_sessions",
+
+  // Migration infrastructure.
+  schemaMigrations: "_schema_migrations",
+  migrationLock: "_migration_lock",
+
+  // Content provenance.
+  manifests: "material_manifests",
+  digestAnchors: "manifest_digest_anchors",
+});
+
+export const REQUIRED_INDEXES = Object.freeze({
   users: [
-    { keys: { email: 1 }, options: { unique: true } },
-    { keys: { walletAddressLower: 1 }, options: { sparse: true } },
+    {
+      name: "users_email_unique",
+      keys: { email: 1 },
+      options: {
+        unique: true,
+      },
+    },
+    {
+      name: "users_wallet_address_lower_unique",
+      keys: { walletAddressLower: 1 },
+      options: {
+        unique: true,
+        partialFilterExpression: {
+          walletAddressLower: {
+            $type: "string",
+          },
+        },
+      },
+    },
+    {
+      name: "users_payout_wallet_address_lower",
+      keys: { payoutWalletAddressLower: 1 },
+      options: {
+        partialFilterExpression: {
+          payoutWalletAddressLower: {
+            $type: "string",
+          },
+        },
+      },
+    },
   ],
+
   materials: [
-    { keys: { userAddress: 1, createdAt: -1 } },
-    { keys: { visibility: 1, createdAt: -1 } },
-    { keys: { materialId: 1 }, options: { sparse: true } },
-    { keys: { updatedAt: -1 } },
-    { keys: { category: 1 } },
-    { keys: { subject: 1 } },
-    { keys: { level: 1 } },
-    { keys: { category: 1, subject: 1 } },
+    {
+      name: "materials_creator_created_at",
+      keys: { userAddress: 1, createdAt: -1 },
+      options: {},
+    },
+    {
+      name: "materials_visibility_created_at",
+      keys: { visibility: 1, createdAt: -1 },
+      options: {},
+    },
+    {
+      name: "materials_material_id",
+      keys: { materialId: 1 },
+      options: {
+        partialFilterExpression: {
+          materialId: {
+            $type: "string",
+          },
+        },
+      },
+    },
+    {
+      name: "materials_token_id_unique",
+      keys: { tokenId: 1 },
+      options: {
+        unique: true,
+        partialFilterExpression: {
+          tokenId: {
+            $type: "string",
+          },
+        },
+      },
+    },
+    {
+      name: "materials_tx_hash_unique",
+      keys: { txHash: 1 },
+      options: {
+        unique: true,
+        partialFilterExpression: {
+          txHash: {
+            $type: "string",
+          },
+        },
+      },
+    },
+    {
+      name: "materials_updated_at",
+      keys: { updatedAt: -1 },
+      options: {},
+    },
+    {
+      name: "materials_category",
+      keys: { category: 1 },
+      options: {},
+    },
+    {
+      name: "materials_subject",
+      keys: { subject: 1 },
+      options: {},
+    },
+    {
+      name: "materials_level",
+      keys: { level: 1 },
+      options: {},
+    },
+    {
+      name: "materials_category_subject",
+      keys: { category: 1, subject: 1 },
+      options: {},
+    },
+    {
+      name: "materials_text_search",
+      keys: {
+        title: "text",
+        description: "text",
+      },
+      options: {
+        default_language: "english",
+      },
+    },
+    {
+      name: "materials_category_price",
+      keys: {
+        category: 1,
+        price: 1,
+      },
+      options: {},
+    },
   ],
+
   purchases: [
-    { keys: { buyerAddress: 1, createdAt: -1 } },
-    { keys: { materialId: 1, buyerAddress: 1 }, options: { unique: true, sparse: true } },
-    { keys: { chainTxHash: 1 }, options: { unique: true, sparse: true } },
+    {
+      name: "purchases_buyer_created_at",
+      keys: { buyerAddress: 1, createdAt: -1 },
+      options: {},
+    },
+    {
+      name: "purchases_material_buyer_unique",
+      keys: { materialId: 1, buyerAddress: 1 },
+      options: {
+        unique: true,
+        partialFilterExpression: {
+          materialId: {
+            $type: "string",
+          },
+          buyerAddress: {
+            $type: "string",
+          },
+        },
+      },
+    },
+    {
+      name: "purchases_chain_tx_hash_unique",
+      keys: { chainTxHash: 1 },
+      options: {
+        unique: true,
+        partialFilterExpression: {
+          chainTxHash: {
+            $type: "string",
+          },
+        },
+      },
+    },
   ],
+
   entitlement_cache: [
-    { keys: { buyerAddress: 1, materialId: 1 }, options: { unique: true } },
-    { keys: { active: 1, updatedAt: -1 } },
+    {
+      name: "entitlements_buyer_material_unique",
+      keys: { buyerAddress: 1, materialId: 1 },
+      options: {
+        unique: true,
+      },
+    },
+    {
+      name: "entitlements_active_updated_at",
+      keys: { active: 1, updatedAt: -1 },
+      options: {},
+    },
   ],
-  sync_state: [{ keys: { source: 1 }, options: { unique: true } }],
-  sync_events: [{ keys: { _id: 1 }, options: { unique: true } }],
+
+  sync_state: [
+    {
+      name: "sync_state_source_unique",
+      keys: { source: 1 },
+      options: {
+        unique: true,
+      },
+    },
+  ],
+
+  sync_events: [
+    {
+      name: "sync_events_source_event_unique",
+      keys: { source: 1, eventId: 1 },
+      options: {
+        unique: true,
+        partialFilterExpression: {
+          source: {
+            $type: "string",
+          },
+          eventId: {
+            $type: "string",
+          },
+        },
+      },
+    },
+    {
+      name: "sync_events_created_at",
+      keys: { createdAt: -1 },
+      options: {},
+    },
+  ],
+
+  collections: [
+    {
+      name: "collections_creator_created_at",
+      keys: { creatorId: 1, createdAt: -1 },
+      options: {},
+    },
+  ],
+
+  progress: [
+    {
+      name: "progress_user_material_unique",
+      keys: { userId: 1, materialId: 1 },
+      options: {
+        unique: true,
+      },
+    },
+    {
+      name: "progress_completed_at",
+      keys: { completedAt: -1 },
+      options: {},
+    },
+  ],
+
   dead_letter_events: [
-    { keys: { _id: 1 }, options: { unique: true } },
-    { keys: { status: 1 } },
-    { keys: { retryCount: 1 } },
+    {
+      name: "dead_letter_events_status",
+      keys: { status: 1 },
+      options: {},
+    },
+    {
+      name: "dead_letter_events_retry_count",
+      keys: { retryCount: 1 },
+      options: {},
+    },
   ],
+
   material_history: [
-    { keys: { materialId: 1, updatedAt: -1 } },
-    { keys: { updatedBy: 1 } },
+    {
+      name: "material_history_material_updated_at",
+      keys: { materialId: 1, updatedAt: -1 },
+      options: {},
+    },
+    {
+      name: "material_history_updated_by",
+      keys: { updatedBy: 1 },
+      options: {},
+    },
   ],
+
   saved_materials: [
-    { keys: { walletAddress: 1, savedAt: -1 } },
-    { keys: { walletAddress: 1, materialId: 1 }, options: { unique: true } },
+    {
+      name: "saved_materials_wallet_saved_at",
+      keys: { walletAddress: 1, savedAt: -1 },
+      options: {},
+    },
+    {
+      name: "saved_materials_wallet_material_unique",
+      keys: { walletAddress: 1, materialId: 1 },
+      options: {
+        unique: true,
+      },
+    },
   ],
-};
 
-export function applyTimestamps(record, now = new Date()) {
-  const timestamp = now instanceof Date ? now : new Date(now);
-  return {
-    ...record,
-    createdAt: record.createdAt || timestamp,
-    updatedAt: timestamp,
-  };
-}
+  reviews: [
+    {
+      name: "reviews_material_created_at",
+      keys: { materialId: 1, createdAt: -1 },
+      options: {},
+    },
+    {
+      name: "reviews_material_version",
+      keys: { materialId: 1, reviewVersion: 1 },
+      options: {},
+    },
+  ],
 
-export const EDITABLE_MATERIAL_FIELDS = [
-  "title",
-  "description",
-  "price",
-  "usageRights",
-  "visibility",
-  "thumbnailUrl",
-  "category",
-  "subject",
-  "level",
-];
+  auth_challenges: [
+    {
+      name: "auth_challenges_nonce_unique",
+      keys: { nonce: 1 },
+      options: {
+        unique: true,
+      },
+    },
+    {
+      name: "auth_challenges_expires_at_ttl",
+      keys: { expiresAt: 1 },
+      options: {
+        expireAfterSeconds: 0,
+      },
+    },
+    {
+      name: "auth_challenges_account_created_at",
+      keys: { account: 1, createdAt: -1 },
+      options: {},
+    },
+  ],
 
-export const IMMUTABLE_MATERIAL_FIELDS = [
-  "storageKey",
-  "userAddress",
-  "materialId",
-  "createdAt",
-];
+  upload_sessions: [
+    {
+      name: "upload_sessions_session_id_unique",
+      keys: { sessionId: 1 },
+      options: {
+        unique: true,
+      },
+    },
+    {
+      name: "upload_sessions_expires_at_ttl",
+      keys: { expiresAt: 1 },
+      options: {
+        expireAfterSeconds: 0,
+      },
+    },
+    {
+      name: "upload_sessions_owner_status",
+      keys: { ownerId: 1, status: 1 },
+      options: {},
+    },
+  ],
 
-export function buildMaterialHistoryEntry({ materialId, previousDoc, update, updatedBy, changeReason, source }) {
-  const changes = {};
-  for (const key of EDITABLE_MATERIAL_FIELDS) {
-    if (key in update && update[key] !== previousDoc?.[key]) {
-      changes[key] = { from: previousDoc?.[key], to: update[key] };
-    }
-  }
-  return {
-    materialId,
-    changes,
-    updatedBy,
-    updatedAt: new Date(),
-    changeReason: changeReason || null,
-    source: source || "creator",
-  };
-}
+  _schema_migrations: [
+    {
+      name: "schema_migrations_version_unique",
+      keys: { version: 1 },
+      options: {
+        unique: true,
+      },
+    },
+    {
+      name: "schema_migrations_status",
+      keys: { status: 1, startedAt: 1 },
+      options: {},
+    },
+  ],
+
+  _migration_lock: [
+    {
+      name: "migration_lock_expires_at_ttl",
+      keys: { expiresAt: 1 },
+      options: {
+        expireAfterSeconds: 0,
+      },
+    },
+  ],
+
+  material_manifests: [
+    {
+      name: "manifests_material_version_unique",
+      keys: { materialId: 1, version: 1 },
+      options: { unique: true },
+    },
+    {
+      name: "manifests_material_digest",
+      keys: { materialId: 1, digest: 1 },
+      options: {},
+    },
+    {
+      name: "manifests_creator_created_at",
+      keys: { creator: 1, createdAt: -1 },
+      options: {},
+    },
+  ],
+
+  manifest_digest_anchors: [
+    {
+      name: "digest_anchors_material_version_unique",
+      keys: { materialId: 1, version: 1 },
+      options: { unique: true },
+    },
+    {
+      name: "digest_anchors_tx_hash",
+      keys: { chainTxHash: 1 },
+      options: {
+        unique: true,
+        partialFilterExpression: {
+          chainTxHash: { $type: "string" },
+        },
+      },
+    },
+  ],
+});
+
+export const COLLECTION_VALIDATORS = Object.freeze({
+  users: {
+    $jsonSchema: {
+      bsonType: "object",
+      required: ["fullName", "email", "createdAt", "updatedAt"],
+      properties: {
+        fullName: {
+          bsonType: "string",
+          minLength: 1,
+        },
+        email: {
+          bsonType: "string",
+          minLength: 3,
+        },
+        walletAddress: {
+          bsonType: ["string", "null"],
+        },
+        walletAddressLower: {
+          bsonType: ["string", "null"],
+        },
+        createdAt: {
+          bsonType: "date",
+        },
+        updatedAt: {
+          bsonType: "date",
+        },
+      },
+    },
+  },
+
+  purchases: {
+    $jsonSchema: {
+      bsonType: "object",
+      required: [
+        "materialId",
+        "buyerAddress",
+        "status",
+        "createdAt",
+        "updatedAt",
+      ],
+      properties: {
+        materialId: {
+          bsonType: "string",
+          minLength: 1,
+        },
+        buyerAddress: {
+          bsonType: "string",
+          minLength: 1,
+        },
+        status: {
+          enum: [
+            "pending",
+            "submitted",
+            "confirmed",
+            "failed",
+            "refunded",
+          ],
+        },
+        chainTxHash: {
+          bsonType: ["string", "null"],
+        },
+        amount: {
+          bsonType: ["double", "decimal", "int", "long", "null"],
+          minimum: 0,
+        },
+        purchasedVersion: {
+          bsonType: ["int", "long", "null"],
+        },
+        versionBinding: {
+          bsonType: ["object", "null"],
+        },
+        createdAt: {
+          bsonType: "date",
+        },
+        updatedAt: {
+          bsonType: "date",
+        },
+      },
+    },
+  },
+
+  entitlement_cache: {
+    $jsonSchema: {
+      bsonType: "object",
+      required: [
+        "materialId",
+        "buyerAddress",
+        "active",
+        "source",
+        "createdAt",
+        "updatedAt",
+      ],
+      properties: {
+        materialId: {
+          bsonType: "string",
+          minLength: 1,
+        },
+        buyerAddress: {
+          bsonType: "string",
+          minLength: 1,
+        },
+        active: {
+          bsonType: "bool",
+        },
+        source: {
+          bsonType: "string",
+          minLength: 1,
+        },
+        createdAt: {
+          bsonType: "date",
+        },
+        updatedAt: {
+          bsonType: "date",
+        },
+      },
+    },
+  },
+
+  sync_events: {
+    $jsonSchema: {
+      bsonType: "object",
+      required: ["type", "source", "raw", "createdAt"],
+      properties: {
+        eventId: {
+          bsonType: ["string", "null"],
+        },
+        type: {
+          bsonType: "string",
+          minLength: 1,
+        },
+        source: {
+          bsonType: "string",
+          minLength: 1,
+        },
+        createdAt: {
+          bsonType: "date",
+        },
+      },
+    },
+  },
+
+  auth_challenges: {
+    $jsonSchema: {
+      bsonType: "object",
+      required: [
+        "nonce",
+        "account",
+        "issuedAt",
+        "expiresAt",
+        "createdAt",
+      ],
+      properties: {
+        nonce: {
+          bsonType: "string",
+          minLength: 16,
+        },
+        account: {
+          bsonType: "string",
+          minLength: 1,
+        },
+        consumedAt: {
+          bsonType: ["date", "null"],
+        },
+        issuedAt: {
+          bsonType: "date",
+        },
+        expiresAt: {
+          bsonType: "date",
+        },
+        createdAt: {
+          bsonType: "date",
+        },
+      },
+    },
+  },
+
+  upload_sessions: {
+    $jsonSchema: {
+      bsonType: "object",
+      required: [
+        "sessionId",
+        "ownerId",
+        "status",
+        "createdAt",
+        "updatedAt",
+        "expiresAt",
+      ],
+      properties: {
+        sessionId: {
+          bsonType: "string",
+          minLength: 1,
+        },
+        ownerId: {
+          bsonType: "string",
+          minLength: 1,
+        },
+        status: {
+          enum: [
+            "created",
+            "uploading",
+            "completed",
+            "failed",
+            "expired",
+          ],
+        },
+        createdAt: {
+          bsonType: "date",
+        },
+        updatedAt: {
+          bsonType: "date",
+        },
+        expiresAt: {
+          bsonType: "date",
+        },
+      },
+    },
+  },
+
+  material_manifests: {
+    $jsonSchema: {
+      bsonType: "object",
+      required: [
+        "materialId",
+        "version",
+        "digest",
+        "manifest",
+        "creator",
+        "createdAt",
+        "verified",
+      ],
+      properties: {
+        materialId: {
+          bsonType: "string",
+          minLength: 1,
+        },
+        version: {
+          bsonType: "int",
+          minimum: 1,
+        },
+        digest: {
+          bsonType: "string",
+          minLength: 1,
+        },
+        manifest: {
+          bsonType: "object",
+        },
+        creator: {
+          bsonType: ["string", "null"],
+        },
+        previousVersionDigest: {
+          bsonType: ["string", "null"],
+        },
+        verified: {
+          bsonType: "bool",
+        },
+        withdrawn: {
+          bsonType: "bool",
+        },
+        createdAt: {
+          bsonType: "date",
+        },
+      },
+    },
+  },
+
+  manifest_digest_anchors: {
+    $jsonSchema: {
+      bsonType: "object",
+      required: [
+        "materialId",
+        "version",
+        "digest",
+        "anchoredAt",
+        "verified",
+      ],
+      properties: {
+        materialId: {
+          bsonType: "string",
+          minLength: 1,
+        },
+        version: {
+          bsonType: "int",
+          minimum: 1,
+        },
+        digest: {
+          bsonType: "string",
+          minLength: 1,
+        },
+        chainTxHash: {
+          bsonType: ["string", "null"],
+        },
+        ledgerSequence: {
+          bsonType: ["int", "long", "null"],
+        },
+        anchoredAt: {
+          bsonType: "date",
+        },
+        verified: {
+          bsonType: "bool",
+        },
+        createdAt: {
+          bsonType: "date",
+        },
+      },
+    },
+  },
+});

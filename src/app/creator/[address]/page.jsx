@@ -96,9 +96,6 @@ export default function CreatorProfilePage() {
   // Determine wallet status
   const walletStatus = creatorProfile.walletAddress ? 'linked' : 'not linked';
 
-  // Get material count (from filteredMaterials)
-  const materialCount = filteredMaterials.length;
-
   // Handle profile update
   const handleUpdateProfile = async () => {
     setIsUpdating(true);
@@ -188,6 +185,8 @@ export default function CreatorProfilePage() {
       if (sortBy === 'Highest Rated') return Number(b.rating || 4.8) - Number(a.rating || 4.8);
       return Number(b.likes || 0) - Number(a.likes || 0); // Popular
     });
+
+  const materialCount = filteredMaterials.length;
 
   const [subjects, setSubjects] = useState(['All']);
   const [subjectsLoading, setSubjectsLoading] = useState(true);
@@ -326,7 +325,7 @@ export default function CreatorProfilePage() {
                 href={creatorProfile.twitterUrl || "#"}
                 target="_blank"
                 rel="noopener noreferrer"
-                className={`w-9 h-9 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700/60 hover:bg-slate-100 dark:hover:bg-slate-700 ${creatorProfile.twitterUrl ? 'hover:text-blue-500' : 'text-slate-300 dark:text-slate-600 cursor-not-allowed'} flex items-center justify-center text-slate-500 dark:text-slate-400 text-sm transition-all`}
+                className={`w-9 h-9 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700/60 hover:bg-slate-100 dark:hover:bg-slate-700 focus-visible:ring-2 focus-visible:ring-blue-500 ${creatorProfile.twitterUrl ? 'hover:text-blue-500' : 'text-slate-300 dark:text-slate-600 cursor-not-allowed'} flex items-center justify-center text-slate-500 dark:text-slate-400 text-sm transition-all`}
                 title="Twitter Connect"
                 aria-label={creatorProfile.twitterUrl ? `Visit ${creatorProfile.fullName}'s Twitter profile` : "Twitter profile not available"}
               >
@@ -336,7 +335,7 @@ export default function CreatorProfilePage() {
                 href={creatorProfile.githubUrl || "#"}
                 target="_blank"
                 rel="noopener noreferrer"
-                className={`w-9 h-9 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700/60 hover:bg-slate-100 dark:hover:bg-slate-700 ${creatorProfile.githubUrl ? 'hover:text-slate-900 dark:hover:text-white' : 'text-slate-300 dark:text-slate-600 cursor-not-allowed'} flex items-center justify-center text-slate-500 dark:text-slate-400 text-sm transition-all`}
+                className={`w-9 h-9 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700/60 hover:bg-slate-100 dark:hover:bg-slate-700 focus-visible:ring-2 focus-visible:ring-blue-500 ${creatorProfile.githubUrl ? 'hover:text-slate-900 dark:hover:text-white' : 'text-slate-300 dark:text-slate-600 cursor-not-allowed'} flex items-center justify-center text-slate-500 dark:text-slate-400 text-sm transition-all`}
                 title="GitHub Connect"
                 aria-label={creatorProfile.githubUrl ? `Visit ${creatorProfile.fullName}'s GitHub profile` : "GitHub profile not available"}
               >
@@ -346,7 +345,7 @@ export default function CreatorProfilePage() {
                 href={creatorProfile.websiteUrl || "#"}
                 target="_blank"
                 rel="noopener noreferrer"
-                className={`w-9 h-9 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700/60 hover:bg-slate-100 dark:hover:bg-slate-700 ${creatorProfile.websiteUrl ? 'hover:text-blue-600' : 'text-slate-300 dark:text-slate-600 cursor-not-allowed'} flex items-center justify-center text-slate-500 dark:text-slate-400 text-sm transition-all`}
+                className={`w-9 h-9 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700/60 hover:bg-slate-100 dark:hover:bg-slate-700 focus-visible:ring-2 focus-visible:ring-blue-500 ${creatorProfile.websiteUrl ? 'hover:text-blue-600' : 'text-slate-300 dark:text-slate-600 cursor-not-allowed'} flex items-center justify-center text-slate-500 dark:text-slate-400 text-sm transition-all`}
                 title="Personal website"
                 aria-label={creatorProfile.websiteUrl ? `Visit ${creatorProfile.fullName}'s personal website` : "Personal website not available"}
               >
@@ -356,8 +355,24 @@ export default function CreatorProfilePage() {
           </div>
         </motion.section>
 
+        {/* Creator Stats Summary */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-10">
+          {[
+            { label: 'Published', value: creatorMaterials.length, suffix: 'resources', color: 'blue' },
+            { label: 'Avg Rating', value: creatorMaterials.length > 0 ? (creatorMaterials.reduce((sum, m) => sum + Number(m.rating || 4.8), 0) / creatorMaterials.length).toFixed(1) : '—', suffix: '/ 5.0', color: 'amber' },
+            { label: 'Total Likes', value: creatorMaterials.reduce((sum, m) => sum + Number(m.likes || 0), 0), suffix: 'likes', color: 'rose' },
+            { label: 'Profile', value: `${completenessPercentage}%`, suffix: 'complete', color: 'green' },
+          ].map((stat) => (
+            <div key={stat.label} className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-5 shadow-sm text-center">
+              <p className={`text-2xl font-extrabold text-${stat.color}-600 dark:text-${stat.color}-400`}>{stat.value}</p>
+              <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mt-1">{stat.label}</p>
+              <p className="text-[10px] text-slate-400 mt-0.5">{stat.suffix}</p>
+            </div>
+          ))}
+        </div>
+
         {/* Tab Selection Navbar */}
-        <section className="flex border-b border-slate-200 dark:border-slate-800 mb-8 gap-6 md:gap-8 bg-white dark:bg-slate-900 p-2 rounded-2xl border border-slate-200 dark:border-slate-800/80 shadow-xs max-w-sm">
+        <nav aria-label="Creator profile tabs" className="flex border-b border-slate-200 dark:border-slate-800 mb-8 gap-6 md:gap-8 bg-white dark:bg-slate-900 p-2 rounded-2xl border border-slate-200 dark:border-slate-800/80 shadow-xs max-w-sm">
           {[
             { id: 'uploads', label: 'Uploads', icon: <FaBook /> },
             { id: 'reviews', label: 'Reviews', icon: <FaRegComments /> },
@@ -368,7 +383,9 @@ export default function CreatorProfilePage() {
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
-                className={`relative px-4 py-2 text-xs font-bold transition-all flex items-center gap-1.5 rounded-xl ${
+                role="tab"
+                aria-selected={isActive}
+                className={`relative px-4 py-2 text-xs font-bold transition-all flex items-center gap-1.5 rounded-xl focus-visible:ring-2 focus-visible:ring-blue-500 ${
                   isActive
                     ? 'text-blue-600 bg-blue-50 dark:bg-blue-950/40 border border-blue-100/50 dark:border-blue-900/40 shadow-xs'
                     : 'text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800/50'
@@ -384,10 +401,10 @@ export default function CreatorProfilePage() {
               </button>
             );
           })}
-        </section>
+        </nav>
 
         {/* Tab content renderer */}
-        <section className="relative min-h-[40vh]">
+        <section aria-live="polite" className="relative min-h-[40vh]">
           <AnimatePresence mode="wait">
             {/* ── TAB: UPLOADS ── */}
             {activeTab === 'uploads' && (
@@ -406,6 +423,7 @@ export default function CreatorProfilePage() {
                     <input
                       type="text"
                       placeholder="Search this creator's catalog..."
+                      aria-label="Search this creator's catalog"
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
                       className="w-full pl-10 pr-4 py-2 bg-slate-50 dark:bg-slate-850 border border-slate-200 dark:border-slate-800 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-blue-500/50 dark:focus:ring-blue-450 focus:bg-white text-slate-800 dark:text-slate-100 font-medium"
@@ -421,7 +439,8 @@ export default function CreatorProfilePage() {
                         value={selectedSubject}
                         onChange={(e) => setSelectedSubject(e.target.value)}
                         disabled={subjectsLoading}
-                        className={`bg-transparent text-xs font-semibold text-slate-650 dark:text-slate-350 focus:outline-none cursor-pointer ${subjectsLoading ? 'opacity-50' : ''}`}
+                        aria-label="Filter by subject"
+                        className={`bg-transparent text-xs font-semibold text-slate-650 dark:text-slate-350 focus:outline-none cursor-pointer focus-visible:ring-2 focus-visible:ring-blue-500 ${subjectsLoading ? 'opacity-50' : ''}`}
                       >
                         <option value="All">All Subjects</option>
                         {subjectsLoading ? (
@@ -442,7 +461,8 @@ export default function CreatorProfilePage() {
                       <select
                         value={sortBy}
                         onChange={(e) => setSortBy(e.target.value)}
-                        className="bg-transparent text-xs font-bold text-slate-700 dark:text-slate-200 focus:outline-none cursor-pointer"
+                        aria-label="Sort materials"
+                        className="bg-transparent text-xs font-bold text-slate-700 dark:text-slate-200 focus:outline-none cursor-pointer focus-visible:ring-2 focus-visible:ring-blue-500"
                       >
                         <option>Popular</option>
                         <option>Highest Rated</option>
@@ -455,13 +475,13 @@ export default function CreatorProfilePage() {
 
                 {/* Catalog Cards Grid */}
                 {materialsLoading ? (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                  <div aria-live="polite" aria-busy="true" className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
                     {Array.from({ length: 4 }).map((_, i) => (
                       <div key={i} className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-5 animate-pulse h-64" />
                     ))}
                   </div>
                 ) : filteredMaterials.length === 0 ? (
-                  <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 py-16 px-6 text-center">
+                  <div aria-live="polite" className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 py-16 px-6 text-center">
                     <div className="w-14 h-14 bg-slate-100 dark:bg-slate-800 rounded-full flex items-center justify-center mx-auto mb-4">
                       <FaBook className="text-slate-400 w-5 h-5" />
                     </div>
@@ -473,15 +493,16 @@ export default function CreatorProfilePage() {
                     </p>
                   </div>
                 ) : (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                  <div role="list" className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
                     {filteredMaterials.map((material) => {
                       const materialId = material._id || material.id;
                       const isAlreadyInCart = cartItems.some((item) => (item._id || item.id) === materialId);
                       const isAlreadyInComp = comparedItems.some((item) => (item._id || item.id) === materialId);
                       
                       return (
-                        <div
+                        <article
                           key={materialId}
+                          role="listitem"
                           className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden shadow-sm hover:shadow-md hover:border-blue-400/40 dark:hover:border-blue-800/40 transition-all duration-300 flex flex-col group"
                         >
                           {/* Card Thumbnail */}
@@ -542,7 +563,7 @@ export default function CreatorProfilePage() {
                                     e.preventDefault();
                                     addToComparison(material);
                                   }}
-                                  className={`flex items-center justify-center gap-1 py-1.5 rounded-lg font-bold text-[10px] transition-all border ${
+                                  className={`flex items-center justify-center gap-1 py-1.5 rounded-lg font-bold text-[10px] transition-all border focus-visible:ring-2 focus-visible:ring-blue-500 ${
                                     isAlreadyInComp
                                       ? 'bg-amber-550 border-amber-600 text-white shadow-xs'
                                       : 'bg-white dark:bg-slate-850 hover:bg-slate-50 dark:hover:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300'
@@ -558,7 +579,7 @@ export default function CreatorProfilePage() {
                                     e.preventDefault();
                                     addToCart(material);
                                   }}
-                                  className={`flex items-center justify-center gap-1 py-1.5 rounded-lg font-bold text-[10px] transition-all border ${
+                                  className={`flex items-center justify-center gap-1 py-1.5 rounded-lg font-bold text-[10px] transition-all border focus-visible:ring-2 focus-visible:ring-blue-500 ${
                                     isAlreadyInCart
                                       ? 'bg-emerald-600 border-emerald-700 text-white shadow-xs'
                                       : 'bg-blue-600 hover:bg-blue-700 border-blue-750 text-white shadow-xs'
@@ -570,7 +591,7 @@ export default function CreatorProfilePage() {
                               </div>
                             </div>
                           </div>
-                        </div>
+                        </article>
                       );
                     })}
                   </div>
@@ -585,6 +606,7 @@ export default function CreatorProfilePage() {
                 initial={{ opacity: 0, y: 15 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -15 }}
+                role="list"
                 className="max-w-3xl mx-auto space-y-6"
               >
                 <div className="bg-white dark:bg-slate-900 rounded-2xl p-6 border border-slate-250 dark:border-slate-800 shadow-sm flex items-center justify-between">
@@ -614,7 +636,8 @@ export default function CreatorProfilePage() {
                 {mockReviews.map((rev) => (
                   <div
                     key={rev.id}
-                    className="bg-white dark:bg-slate-900 rounded-2xl p-5 border border-slate-200 dark:border-slate-800 shadow-sm space-y-3.5"
+                    role="listitem"
+                      className="bg-white dark:bg-slate-900 rounded-2xl p-5 border border-slate-200 dark:border-slate-800 shadow-sm space-y-3.5"
                   >
                     <div className="flex justify-between items-start">
                       <div>
@@ -713,7 +736,7 @@ export default function CreatorProfilePage() {
                     </h3>
                     <button
                       onClick={() => setIsEditing(!isEditing)}
-                      className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-semibold transition-colors"
+                      className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-semibold transition-colors focus-visible:ring-2 focus-visible:ring-blue-500"
                     >
                       {isEditing ? 'Cancel' : 'Edit Profile'}
                     </button>
@@ -727,6 +750,7 @@ export default function CreatorProfilePage() {
                         </label>
                         <input
                           type="text"
+                          aria-label="Full Name"
                           value={editProfile.fullName || creatorProfile.fullName}
                           onChange={(e) => setEditProfile({...editProfile, fullName: e.target.value})}
                           className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-850 border border-slate-200 dark:border-slate-800 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50 dark:focus:ring-blue-450"
@@ -738,6 +762,7 @@ export default function CreatorProfilePage() {
                           Biography
                         </label>
                         <textarea
+                          aria-label="Biography"
                           value={editProfile.bio || creatorProfile.bio}
                           onChange={(e) => setEditProfile({...editProfile, bio: e.target.value})}
                           rows="3"
@@ -751,6 +776,7 @@ export default function CreatorProfilePage() {
                         </label>
                         <input
                           type="text"
+                          aria-label="Institutional Affiliation"
                           value={editProfile.institution || creatorProfile.institution}
                           onChange={(e) => setEditProfile({...editProfile, institution: e.target.value})}
                           className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-850 border border-slate-200 dark:border-slate-800 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50 dark:focus:ring-blue-450"
@@ -763,6 +789,7 @@ export default function CreatorProfilePage() {
                         </label>
                         <input
                           type="text"
+                          aria-label="Regional Base"
                           value={editProfile.country || creatorProfile.country}
                           onChange={(e) => setEditProfile({...editProfile, country: e.target.value})}
                           className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-850 border border-slate-200 dark:border-slate-800 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50 dark:focus:ring-blue-450"
@@ -775,6 +802,7 @@ export default function CreatorProfilePage() {
                         </label>
                         <input
                           type="url"
+                          aria-label="Twitter URL"
                           value={editProfile.twitterUrl || creatorProfile.twitterUrl || ''}
                           onChange={(e) => setEditProfile({...editProfile, twitterUrl: e.target.value})}
                           placeholder="https://twitter.com/username"
@@ -788,6 +816,7 @@ export default function CreatorProfilePage() {
                         </label>
                         <input
                           type="url"
+                          aria-label="GitHub URL"
                           value={editProfile.githubUrl || creatorProfile.githubUrl || ''}
                           onChange={(e) => setEditProfile({...editProfile, githubUrl: e.target.value})}
                           placeholder="https://github.com/username"
@@ -801,6 +830,7 @@ export default function CreatorProfilePage() {
                         </label>
                         <input
                           type="url"
+                          aria-label="Website URL"
                           value={editProfile.websiteUrl || creatorProfile.websiteUrl || ''}
                           onChange={(e) => setEditProfile({...editProfile, websiteUrl: e.target.value})}
                           placeholder="https://yourwebsite.com"
@@ -812,7 +842,7 @@ export default function CreatorProfilePage() {
                         <button
                           onClick={handleUpdateProfile}
                           disabled={isUpdating}
-                          className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${isUpdating ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700 text-white'}`}
+                          className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors focus-visible:ring-2 focus-visible:ring-blue-500 ${isUpdating ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700 text-white'}`}
                         >
                           {isUpdating ? 'Updating...' : 'Save Changes'}
                         </button>

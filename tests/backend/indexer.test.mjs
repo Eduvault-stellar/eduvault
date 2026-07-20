@@ -4,6 +4,7 @@ import { test } from "node:test";
 import {
   applyIndexedEvent,
   createJsonRpcEventSource,
+  eventId,
   runIndexerBatch,
 } from "../../src/lib/indexer/stellarIndexer.js";
 
@@ -59,6 +60,19 @@ test("applyIndexedEvent writes purchases and entitlement cache idempotently", as
 
   assert.equal((await applyIndexedEvent(db, event)).skipped, false);
   assert.equal((await applyIndexedEvent(db, event)).skipped, true);
+});
+
+test("event identity includes network, contract, ledger, transaction, and zero position", () => {
+  assert.equal(
+    eventId({
+      network: "testnet",
+      contractId: "CABC",
+      ledger: 123,
+      transactionHash: "tx-hash",
+      index: 0,
+    }),
+    "testnet:CABC:123:tx-hash:0",
+  );
 });
 
 test("runIndexerBatch stores cursor progress", async () => {

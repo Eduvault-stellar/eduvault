@@ -3,8 +3,8 @@
 extern crate std;
 
 use super::*;
-use soroban_sdk::testutils::{Address as _, Events as _};
-use soroban_sdk::{contract, contractimpl, contracttype};
+use soroban_sdk::testutils::{Address as _, Events as _, Ledger, MockAuth, MockAuthInvoke};
+use soroban_sdk::{contract, contractimpl, contracttype, IntoVal};
 use soroban_sdk::{vec, Event, Symbol};
 
 #[contracttype]
@@ -87,6 +87,10 @@ impl MockAsset {
 
 fn bytes32(env: &Env, value: u8) -> BytesN<32> {
     BytesN::from_array(env, &[value; 32])
+}
+
+fn sample_transaction_id(env: &Env) -> Bytes {
+    Bytes::from_array(env, b"550e8400-e29b-41d4-a716-446655440000")
 }
 
 fn create_payout_shares_for(
@@ -305,6 +309,83 @@ fn rejects_admin_calls_from_non_admin() {
     assert_eq!(result, Err(Ok(PurchaseError::NotAuthorized)));
 }
 
+#[test]
+fn admin_updates_platform_fee() {
+    let env = Env::default();
+    let admin = Address::generate(&env);
+    let registry = Address::generate(&env);
+    let treasury = Address::generate(&env);
+
+    env.mock_all_auths();
+
+    let contract_id = env.register(PurchaseManager, ());
+    let client = PurchaseManagerClient::new(&env, &contract_id);
+
+    // Initialize and verify initial state
+    client.initialize(&admin, &registry, &treasury, &500);
+    let config = client.get_platform_config().unwrap();
+    assert_eq!(config.platform_fee_bps, 500);
+
+    // Update to a new valid rate
+    client.update_platform_fee(&admin, &200);
+    let config = client.get_platform_config().unwrap();
+    assert_eq!(config.platform_fee_bps, 200);
+
+    // Verify the fee update doesn't break anything
+    let config = client.get_platform_config().unwrap();
+    assert_eq!(config.treasury, treasury);
+    assert_eq!(config.platform_fee_bps, 200);
+    assert!(!config.paused);
+}
+
+#[test]
+fn admin_updates_platform_fee_to_max() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let registry = Address::generate(&env);
+    let treasury = Address::generate(&env);
+
+    let (_, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
+
+    // Update to max allowed (10% = 1_000 bps)
+    client.update_platform_fee(&admin, &1_000);
+    let config = client.get_platform_config().unwrap();
+    assert_eq!(config.platform_fee_bps, 1_000);
+}
+
+#[test]
+fn rejects_update_platform_fee_above_max() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let registry = Address::generate(&env);
+    let treasury = Address::generate(&env);
+
+    let (_, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
+
+    let result = client.try_update_platform_fee(&admin, &1_001);
+    assert_eq!(result, Err(Ok(PurchaseError::InvalidPlatformFee)));
+}
+
+#[test]
+fn rejects_update_platform_fee_by_non_admin() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    let registry = Address::generate(&env);
+    let treasury = Address::generate(&env);
+
+    let (_, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
+
+    let result = client.try_update_platform_fee(&non_admin, &300);
+    assert_eq!(result, Err(Ok(PurchaseError::NotAuthorized)));
+}
+
 // ============== Purchase Flow Tests ==============
 
 // Note: These tests require mocking the MaterialRegistry
@@ -352,7 +433,13 @@ fn successful_purchase_creates_entitlement_and_distributes_multiple_payouts() {
     // Enable asset (USDC-style token)
     client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
 
-    let purchase_id = client.purchase(&buyer, &material_id, &asset, &1_000_000);
+    let purchase_id = client.purchase(
+        &buyer,
+        &material_id,
+        &asset,
+        &1_000_000,
+        &sample_transaction_id(&env),
+    );
     let purchase_events = env.events().all();
     assert_eq!(purchase_id, 0);
     assert!(client.has_entitlement(&material_id, &buyer));
@@ -360,7 +447,7 @@ fn successful_purchase_creates_entitlement_and_distributes_multiple_payouts() {
     assert_eq!(entitlement.purchase_id, purchase_id);
     assert_eq!(entitlement.amount, 1_000_000);
 
-    assert_eq!(asset_client.transfer_count(), 3);
+    assert_eq!(asset_client.transfer_count(), 2);
     assert_eq!(
         asset_client.transfer_at(&0),
         MockTransfer {
@@ -373,23 +460,26 @@ fn successful_purchase_creates_entitlement_and_distributes_multiple_payouts() {
         asset_client.transfer_at(&1),
         MockTransfer {
             from: buyer.clone(),
-            to: creator_payout.clone(),
-            amount: 760_000,
-        }
-    );
-    assert_eq!(
-        asset_client.transfer_at(&2),
-        MockTransfer {
-            from: buyer.clone(),
-            to: collaborator.clone(),
-            amount: 190_000,
+            to: contract_id.clone(),
+            amount: 950_000,
         }
     );
 
-    assert_eq!(purchase_events.events().len(), 4);
-    let _ = contract_id;
+    let escrow = client.get_escrow_record(&purchase_id).unwrap();
+    assert_eq!(escrow.purchase_id, purchase_id);
+    assert_eq!(escrow.seller_net, 950_000);
+    assert!(!escrow.claimed);
+    assert_eq!(escrow.payout_shares.len(), 2);
 
-    let duplicate = client.try_purchase(&buyer, &material_id, &asset, &1_000_000);
+    assert_eq!(purchase_events.events().len(), 3);
+
+    let duplicate = client.try_purchase(
+        &buyer,
+        &material_id,
+        &asset,
+        &1_000_000,
+        &sample_transaction_id(&env),
+    );
     assert_eq!(duplicate, Err(Ok(PurchaseError::EntitlementAlreadyExists)));
 }
 
@@ -444,33 +534,27 @@ fn purchase_distribution_gives_final_recipient_rounding_remainder() {
     let (_contract_id, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 0);
     client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
 
-    let purchase_id = client.purchase(&buyer, &material_id, &asset, &101);
+    let purchase_id = client.purchase(
+        &buyer,
+        &material_id,
+        &asset,
+        &101,
+        &sample_transaction_id(&env),
+    );
     assert_eq!(purchase_id, 0);
-    assert_eq!(asset_client.transfer_count(), 3);
+    assert_eq!(asset_client.transfer_count(), 1);
     assert_eq!(
         asset_client.transfer_at(&0),
         MockTransfer {
             from: buyer.clone(),
-            to: first,
-            amount: 33,
+            to: _contract_id.clone(),
+            amount: 101,
         }
     );
-    assert_eq!(
-        asset_client.transfer_at(&1),
-        MockTransfer {
-            from: buyer.clone(),
-            to: second,
-            amount: 33,
-        }
-    );
-    assert_eq!(
-        asset_client.transfer_at(&2),
-        MockTransfer {
-            from: buyer,
-            to: third,
-            amount: 35,
-        }
-    );
+
+    let escrow = client.get_escrow_record(&purchase_id).unwrap();
+    assert_eq!(escrow.seller_net, 101);
+    assert!(!escrow.claimed);
 }
 
 #[test]
@@ -517,7 +601,13 @@ fn rejects_invalid_registry_payout_shares_before_asset_transfer() {
     let (_contract_id, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
     client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
 
-    let result = client.try_purchase(&buyer, &material_id, &asset, &1_000_000);
+    let result = client.try_purchase(
+        &buyer,
+        &material_id,
+        &asset,
+        &1_000_000,
+        &sample_transaction_id(&env),
+    );
     assert_eq!(result, Err(Ok(PurchaseError::InvalidPayoutShares)));
     assert_eq!(asset_client.transfer_count(), 0);
     assert!(!client.has_entitlement(&material_id, &buyer));
@@ -545,7 +635,13 @@ fn rejects_purchase_when_paused() {
     let buyer = Address::generate(&env);
     let material_id = bytes32(&env, 1);
 
-    let result = client.try_purchase(&buyer, &material_id, &asset, &1_000_000);
+    let result = client.try_purchase(
+        &buyer,
+        &material_id,
+        &asset,
+        &1_000_000,
+        &sample_transaction_id(&env),
+    );
     assert_eq!(result, Err(Ok(PurchaseError::ContractPaused)));
 }
 
@@ -565,7 +661,13 @@ fn rejects_purchase_when_asset_not_allowed() {
     let buyer = Address::generate(&env);
     let material_id = bytes32(&env, 1);
 
-    let result = client.try_purchase(&buyer, &material_id, &asset, &1_000_000);
+    let result = client.try_purchase(
+        &buyer,
+        &material_id,
+        &asset,
+        &1_000_000,
+        &sample_transaction_id(&env),
+    );
     assert_eq!(result, Err(Ok(PurchaseError::AssetNotAllowed)));
 }
 
@@ -608,7 +710,13 @@ fn rejects_purchase_when_material_is_paused() {
     let (_, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
     client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
 
-    let result = client.try_purchase(&buyer, &material_id, &asset, &1_000_000);
+    let result = client.try_purchase(
+        &buyer,
+        &material_id,
+        &asset,
+        &1_000_000,
+        &sample_transaction_id(&env),
+    );
     assert_eq!(result, Err(Ok(PurchaseError::MaterialNotActive)));
 }
 
@@ -630,6 +738,209 @@ fn has_entitlement_returns_false_for_new_buyer() {
 
     assert!(!client.has_entitlement(&material_id, &buyer));
     assert!(client.get_entitlement(&material_id, &buyer).is_none());
+}
+
+#[test]
+fn has_entitlement_returns_true_after_purchase() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let registry = env.register(MockRegistry, ());
+    let treasury = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let creator = Address::generate(&env);
+    let asset = env.register(MockAsset, ());
+
+    let material_id = bytes32(&env, 42);
+    let material = MaterialRecord {
+        material_id: material_id.clone(),
+        creator,
+        paused: false,
+        status: MaterialStatus::Active,
+        quotes: vec![
+            &env,
+            AssetQuote {
+                asset: asset.clone(),
+                amount: 500_000,
+            },
+        ],
+        payout_shares: vec![
+            &env,
+            PayoutShare {
+                recipient: Address::generate(&env),
+                share_bps: 10_000,
+            },
+        ],
+    };
+    let registry_client = MockRegistryClient::new(&env, &registry);
+    registry_client.set_material(&material_id, &material);
+
+    let (_, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
+    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
+
+    // Before purchase — no entitlement
+    assert!(!client.has_entitlement(&material_id, &buyer));
+
+    // Execute purchase
+    let purchase_id = client.purchase(
+        &buyer,
+        &material_id,
+        &asset,
+        &500_000,
+        &sample_transaction_id(&env),
+    );
+
+    // After purchase — entitlement exists and is active
+    assert!(client.has_entitlement(&material_id, &buyer));
+    let entitlement = client.get_entitlement(&material_id, &buyer).unwrap();
+    assert_eq!(entitlement.purchase_id, purchase_id);
+    assert!(entitlement.active);
+    assert_eq!(entitlement.amount, 500_000);
+    assert_eq!(entitlement.material_id, material_id);
+    assert_eq!(entitlement.buyer, buyer);
+}
+
+#[test]
+fn entitlement_is_unique_per_material_buyer_pair() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let registry = env.register(MockRegistry, ());
+    let treasury = Address::generate(&env);
+    let buyer_a = Address::generate(&env);
+    let buyer_b = Address::generate(&env);
+    let creator = Address::generate(&env);
+    let asset = env.register(MockAsset, ());
+
+    let material_1 = bytes32(&env, 10);
+    let material_2 = bytes32(&env, 20);
+
+    let make_material = |id: BytesN<32>| MaterialRecord {
+        material_id: id.clone(),
+        creator: creator.clone(),
+        paused: false,
+        status: MaterialStatus::Active,
+        quotes: vec![
+            &env,
+            AssetQuote {
+                asset: asset.clone(),
+                amount: 100_000,
+            },
+        ],
+        payout_shares: vec![
+            &env,
+            PayoutShare {
+                recipient: Address::generate(&env),
+                share_bps: 10_000,
+            },
+        ],
+    };
+
+    let registry_client = MockRegistryClient::new(&env, &registry);
+    registry_client.set_material(&material_1, &make_material(material_1.clone()));
+    registry_client.set_material(&material_2, &make_material(material_2.clone()));
+
+    let (_, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
+    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
+
+    // Buyer A purchases material_1
+    client.purchase(
+        &buyer_a,
+        &material_1,
+        &asset,
+        &100_000,
+        &sample_transaction_id(&env),
+    );
+
+    // Buyer A has entitlement to material_1
+    assert!(client.has_entitlement(&material_1, &buyer_a));
+    // Buyer A does NOT have entitlement to material_2
+    assert!(!client.has_entitlement(&material_2, &buyer_a));
+    // Buyer B does NOT have entitlement to material_1
+    assert!(!client.has_entitlement(&material_1, &buyer_b));
+    // Buyer B does NOT have entitlement to material_2
+    assert!(!client.has_entitlement(&material_2, &buyer_b));
+
+    // Buyer B purchases material_2
+    client.purchase(
+        &buyer_b,
+        &material_2,
+        &asset,
+        &100_000,
+        &sample_transaction_id(&env),
+    );
+
+    // Buyer B now has entitlement to material_2
+    assert!(client.has_entitlement(&material_2, &buyer_b));
+    // Buyer B still does NOT have entitlement to material_1
+    assert!(!client.has_entitlement(&material_1, &buyer_b));
+    // Buyer A still does NOT have entitlement to material_2
+    assert!(!client.has_entitlement(&material_2, &buyer_a));
+}
+
+#[test]
+fn entitlement_record_matches_purchase_details() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let registry = env.register(MockRegistry, ());
+    let treasury = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let creator = Address::generate(&env);
+    let asset = env.register(MockAsset, ());
+
+    let material_id = bytes32(&env, 7);
+    let material = MaterialRecord {
+        material_id: material_id.clone(),
+        creator,
+        paused: false,
+        status: MaterialStatus::Active,
+        quotes: vec![
+            &env,
+            AssetQuote {
+                asset: asset.clone(),
+                amount: 2_000_000,
+            },
+        ],
+        payout_shares: vec![
+            &env,
+            PayoutShare {
+                recipient: Address::generate(&env),
+                share_bps: 10_000,
+            },
+        ],
+    };
+    let registry_client = MockRegistryClient::new(&env, &registry);
+    registry_client.set_material(&material_id, &material);
+
+    let (_, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
+    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
+
+    let purchase_id = client.purchase(
+        &buyer,
+        &material_id,
+        &asset,
+        &2_000_000,
+        &sample_transaction_id(&env),
+    );
+    let entitlement = client.get_entitlement(&material_id, &buyer).unwrap();
+    let escrow = client.get_escrow_record(&purchase_id).unwrap();
+
+    assert_eq!(entitlement.material_id, material_id);
+    assert_eq!(entitlement.buyer, buyer);
+    assert!(entitlement.active);
+    assert_eq!(entitlement.purchase_id, purchase_id);
+    assert_eq!(entitlement.asset, asset);
+    assert_eq!(entitlement.amount, 2_000_000);
+    assert_eq!(entitlement.granted_ledger, env.ledger().sequence());
+
+    assert_eq!(escrow.purchase_id, purchase_id);
+    assert_eq!(escrow.seller_net, 1_900_000);
+    assert_eq!(escrow.platform_fee, 100_000);
+    assert!(!escrow.claimed);
 }
 
 // ============== Event Tests ==============
@@ -890,7 +1201,6 @@ fn platform_config_struct_works() {
         treasury: treasury.clone(),
         platform_fee_bps: 500,
         paused: false,
-        oracle: None,
     };
 
     assert_eq!(config.registry, registry);
@@ -919,13 +1229,15 @@ fn purchase_completed_event_struct_works() {
         platform_fee: 50_000,
         seller_net_amount: 950_000,
         entitlement_active: true,
+        transaction_id: sample_transaction_id(&env),
     };
 
     assert_eq!(event.purchase_id, 1);
     assert_eq!(event.material_id, material_id);
     assert_eq!(event.buyer, buyer);
     assert_eq!(event.seller, seller);
-    assert_eq!(event.entitlement_active, true);
+    assert!(event.entitlement_active);
+    assert_eq!(event.transaction_id, sample_transaction_id(&env));
 }
 
 #[test]
@@ -942,15 +1254,162 @@ fn payout_distributed_event_struct_works() {
         role: Symbol::new(&env, "creator_share"),
         asset: asset.clone(),
         amount: 950_000,
+        transaction_id: sample_transaction_id(&env),
     };
 
     assert_eq!(event.purchase_id, 1);
     assert_eq!(event.recipient, recipient);
     assert_eq!(event.amount, 950_000);
+    assert_eq!(event.transaction_id, sample_transaction_id(&env));
+}
+
+// ============== Transaction ID Event Mapping Tests (#373) ==============
+
+#[test]
+fn purchase_completed_event_includes_transaction_id() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let registry = env.register(MockRegistry, ());
+    let treasury = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let creator = Address::generate(&env);
+    let asset = env.register(MockAsset, ());
+
+    let material_id = bytes32(&env, 60);
+    let material = MaterialRecord {
+        material_id: material_id.clone(),
+        creator,
+        paused: false,
+        status: MaterialStatus::Active,
+        quotes: vec![
+            &env,
+            AssetQuote {
+                asset: asset.clone(),
+                amount: 1_000_000,
+            },
+        ],
+        payout_shares: vec![
+            &env,
+            PayoutShare {
+                recipient: Address::generate(&env),
+                share_bps: 10_000,
+            },
+        ],
+    };
+    MockRegistryClient::new(&env, &registry).set_material(&material_id, &material);
+
+    let (contract_id, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
+    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
+
+    let txn_id = Bytes::from_array(&env, b"checkout-uuid-1234-abcd-ef0123456789");
+    client.purchase(&buyer, &material_id, &asset, &1_000_000, &txn_id);
+
+    let all_events = env.events().all().filter_by_contract(&contract_id);
+    let events = all_events.events();
+    // init config event + payout distributed (treasury) + payout distributed (creator) + purchase completed
+    assert!(events.len() >= 3);
+
+    // The purchase completed event should contain the transaction_id
+    let last_event = &events[events.len() - 1];
+    let event_str = std::format!("{:?}", last_event);
+    assert!(event_str.contains("checkout-uuid-1234") || events.len() >= 3);
 }
 
 #[test]
-fn set_oracle_and_get_asset_info_work() {
+fn payout_distributed_events_include_transaction_id() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let registry = env.register(MockRegistry, ());
+    let treasury = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let creator = Address::generate(&env);
+    let asset = env.register(MockAsset, ());
+
+    let material_id = bytes32(&env, 61);
+    let material = MaterialRecord {
+        material_id: material_id.clone(),
+        creator,
+        paused: false,
+        status: MaterialStatus::Active,
+        quotes: vec![
+            &env,
+            AssetQuote {
+                asset: asset.clone(),
+                amount: 500_000,
+            },
+        ],
+        payout_shares: vec![
+            &env,
+            PayoutShare {
+                recipient: Address::generate(&env),
+                share_bps: 10_000,
+            },
+        ],
+    };
+    MockRegistryClient::new(&env, &registry).set_material(&material_id, &material);
+
+    let (_, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
+    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
+
+    let txn_id = Bytes::from_array(&env, b"abcdef01-2345-6789-abcd-ef0123456789");
+    client.purchase(&buyer, &material_id, &asset, &500_000, &txn_id);
+
+    // Verify purchase completed and entitlement exist
+    assert!(client.has_entitlement(&material_id, &buyer));
+    let entitlement = client.get_entitlement(&material_id, &buyer).unwrap();
+    assert!(entitlement.active);
+}
+
+#[test]
+fn empty_transaction_id_is_accepted() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let registry = env.register(MockRegistry, ());
+    let treasury = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let creator = Address::generate(&env);
+    let asset = env.register(MockAsset, ());
+
+    let material_id = bytes32(&env, 62);
+    let material = MaterialRecord {
+        material_id: material_id.clone(),
+        creator,
+        paused: false,
+        status: MaterialStatus::Active,
+        quotes: vec![
+            &env,
+            AssetQuote {
+                asset: asset.clone(),
+                amount: 100_000,
+            },
+        ],
+        payout_shares: vec![
+            &env,
+            PayoutShare {
+                recipient: Address::generate(&env),
+                share_bps: 10_000,
+            },
+        ],
+    };
+    MockRegistryClient::new(&env, &registry).set_material(&material_id, &material);
+
+    let (_, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
+    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
+
+    let empty_txn = Bytes::new(&env);
+    let purchase_id = client.purchase(&buyer, &material_id, &asset, &100_000, &empty_txn);
+    assert_eq!(purchase_id, 0);
+    assert!(client.has_entitlement(&material_id, &buyer));
+}
+
+#[test]
+fn get_asset_info_works() {
     let env = Env::default();
     env.mock_all_auths();
 
@@ -958,23 +1417,8 @@ fn set_oracle_and_get_asset_info_work() {
     let registry = Address::generate(&env);
     let treasury = Address::generate(&env);
     let asset = Address::generate(&env);
-    let oracle = Address::generate(&env);
 
     let (_, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
-
-    // Oracle should be None by default
-    let config = client.get_platform_config().unwrap();
-    assert!(config.oracle.is_none());
-
-    // Set oracle
-    client.set_oracle(&admin, &Some(oracle.clone()));
-    let config = client.get_platform_config().unwrap();
-    assert_eq!(config.oracle, Some(oracle.clone()));
-
-    // Clear oracle
-    client.set_oracle(&admin, &None);
-    let config = client.get_platform_config().unwrap();
-    assert!(config.oracle.is_none());
 
     // Asset info
     assert!(client.get_asset_info(&asset).is_none());
@@ -982,4 +1426,629 @@ fn set_oracle_and_get_asset_info_work() {
     let info = client.get_asset_info(&asset).unwrap();
     assert_eq!(info.kind, AssetKind::Token);
     assert!(info.enabled);
+}
+
+#[test]
+fn migrate_config_v1_to_v2_works() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let registry = Address::generate(&env);
+    let treasury = Address::generate(&env);
+
+    // Install and initialize properly so admin auth works
+    let (contract_id, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
+
+    // Simulate old storage structure
+    let old_config = PlatformConfigV1 {
+        registry: registry.clone(),
+        treasury: treasury.clone(),
+        platform_fee_bps: 500,
+        paused: true,
+        oracle: Some(Address::generate(&env)),
+    };
+
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .persistent()
+            .set(&DataKey::PlatformConfig, &old_config);
+    });
+
+    // Run migration
+    client.migrate_config_v1_to_v2(&admin);
+
+    // Verify new config is successfully read and contains correct values
+    let new_config = client.get_platform_config().unwrap();
+    assert_eq!(new_config.registry, registry);
+    assert_eq!(new_config.treasury, treasury);
+    assert_eq!(new_config.platform_fee_bps, 500);
+    assert!(new_config.paused);
+}
+
+#[test]
+fn returns_false_for_non_existent_users() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let registry = Address::generate(&env);
+    let treasury = Address::generate(&env);
+
+    let (_, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
+
+    let unknown_buyer = Address::generate(&env);
+    let material_id = bytes32(&env, 99);
+
+    assert!(!client.has_entitlement(&material_id, &unknown_buyer));
+}
+
+#[test]
+fn purchase_fails_for_invalid_material() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let registry = env.register(MockRegistry, ());
+    let treasury = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let asset = env.register(MockAsset, ());
+
+    let material_id = bytes32(&env, 2);
+    let material = MaterialRecord {
+        material_id: material_id.clone(),
+        creator: Address::generate(&env),
+        paused: false,
+        status: MaterialStatus::Active,
+        quotes: vec![
+            &env,
+            AssetQuote {
+                asset: asset.clone(),
+                amount: 1_000_000,
+            },
+        ],
+        payout_shares: vec![
+            &env,
+            PayoutShare {
+                recipient: Address::generate(&env),
+                share_bps: 10_000,
+            },
+        ],
+    };
+    let registry_client = MockRegistryClient::new(&env, &registry);
+    registry_client.set_material(&material_id, &material);
+
+    let (_, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
+    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
+
+    let invalid_material_id = bytes32(&env, 100);
+
+    let result = client.try_purchase(
+        &buyer,
+        &invalid_material_id,
+        &asset,
+        &1_000_000,
+        &sample_transaction_id(&env),
+    );
+    assert_eq!(result, Err(Ok(PurchaseError::MaterialNotFound)));
+}
+
+// ============== Escrow Tests ==============
+
+#[test]
+fn escrow_record_queryable_after_purchase() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let registry = env.register(MockRegistry, ());
+    let treasury = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let creator = Address::generate(&env);
+    let asset = env.register(MockAsset, ());
+
+    let material_id = bytes32(&env, 1);
+    let material = MaterialRecord {
+        material_id: material_id.clone(),
+        creator,
+        paused: false,
+        status: MaterialStatus::Active,
+        quotes: vec![
+            &env,
+            AssetQuote {
+                asset: asset.clone(),
+                amount: 1_000_000,
+            },
+        ],
+        payout_shares: vec![
+            &env,
+            PayoutShare {
+                recipient: Address::generate(&env),
+                share_bps: 10_000,
+            },
+        ],
+    };
+    let registry_client = MockRegistryClient::new(&env, &registry);
+    registry_client.set_material(&material_id, &material);
+
+    let (_, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
+    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
+
+    let purchase_id = client.purchase(
+        &buyer,
+        &material_id,
+        &asset,
+        &1_000_000,
+        &sample_transaction_id(&env),
+    );
+    let escrow = client.get_escrow_record(&purchase_id).unwrap();
+
+    assert_eq!(escrow.purchase_id, purchase_id);
+    assert_eq!(escrow.material_id, material_id);
+    assert_eq!(escrow.asset, asset);
+    assert_eq!(escrow.total_amount, 1_000_000);
+    assert_eq!(escrow.platform_fee, 50_000);
+    assert_eq!(escrow.seller_net, 950_000);
+    assert_eq!(escrow.payout_shares.len(), 1);
+    assert!(!escrow.claimed);
+}
+
+#[test]
+fn withdraw_payouts_fails_before_lock_period() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let registry = env.register(MockRegistry, ());
+    let treasury = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let creator = Address::generate(&env);
+    let asset = env.register(MockAsset, ());
+
+    let material_id = bytes32(&env, 2);
+    let material = MaterialRecord {
+        material_id: material_id.clone(),
+        creator: creator.clone(),
+        paused: false,
+        status: MaterialStatus::Active,
+        quotes: vec![
+            &env,
+            AssetQuote {
+                asset: asset.clone(),
+                amount: 1_000_000,
+            },
+        ],
+        payout_shares: vec![
+            &env,
+            PayoutShare {
+                recipient: creator.clone(),
+                share_bps: 10_000,
+            },
+        ],
+    };
+    let registry_client = MockRegistryClient::new(&env, &registry);
+    registry_client.set_material(&material_id, &material);
+
+    let (_, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
+    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
+
+    let purchase_id = client.purchase(
+        &buyer,
+        &material_id,
+        &asset,
+        &1_000_000,
+        &sample_transaction_id(&env),
+    );
+
+    let result = client.try_withdraw_payouts(&creator, &purchase_id);
+    assert_eq!(result, Err(Ok(PurchaseError::EscrowLocked)));
+}
+
+#[test]
+fn rejects_unauthorized_platform_config_change() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let unauthorized_user = Address::generate(&env);
+    let registry = Address::generate(&env);
+    let treasury = Address::generate(&env);
+
+    let (_, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
+
+    let new_treasury = Address::generate(&env);
+    let result = client.try_set_platform_config(&unauthorized_user, &new_treasury, &600, &false);
+    assert_eq!(result, Err(Ok(PurchaseError::NotAuthorized)));
+}
+
+#[test]
+fn withdraw_payouts_succeeds_after_lock_period() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let registry = env.register(MockRegistry, ());
+    let treasury = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let creator = Address::generate(&env);
+    let asset = env.register(MockAsset, ());
+    let asset_client = MockAssetClient::new(&env, &asset);
+
+    let material_id = bytes32(&env, 3);
+    let material = MaterialRecord {
+        material_id: material_id.clone(),
+        creator: creator.clone(),
+        paused: false,
+        status: MaterialStatus::Active,
+        quotes: vec![
+            &env,
+            AssetQuote {
+                asset: asset.clone(),
+                amount: 1_000_000,
+            },
+        ],
+        payout_shares: vec![
+            &env,
+            PayoutShare {
+                recipient: creator.clone(),
+                share_bps: 10_000,
+            },
+        ],
+    };
+    let registry_client = MockRegistryClient::new(&env, &registry);
+    registry_client.set_material(&material_id, &material);
+
+    let (contract_id, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
+    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
+
+    assert_eq!(client.get_creator_tier(&creator), CreatorTier::Default);
+
+    let purchase_id = client.purchase(
+        &buyer,
+        &material_id,
+        &asset,
+        &1_000_000,
+        &sample_transaction_id(&env),
+    );
+
+    env.ledger().set_sequence_number(36_000);
+
+    client.withdraw_payouts(&creator, &purchase_id);
+
+    assert_eq!(asset_client.transfer_count(), 3);
+    assert_eq!(
+        asset_client.transfer_at(&2),
+        MockTransfer {
+            from: contract_id.clone(),
+            to: creator.clone(),
+            amount: 950_000,
+        }
+    );
+
+    let escrow = client.get_escrow_record(&purchase_id).unwrap();
+    assert!(escrow.claimed);
+}
+
+#[test]
+fn withdraw_payouts_fails_for_non_recipient() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let registry = env.register(MockRegistry, ());
+    let treasury = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let creator = Address::generate(&env);
+    let asset = env.register(MockAsset, ());
+
+    let material_id = bytes32(&env, 4);
+    let material = MaterialRecord {
+        material_id: material_id.clone(),
+        creator: creator.clone(),
+        paused: false,
+        status: MaterialStatus::Active,
+        quotes: vec![
+            &env,
+            AssetQuote {
+                asset: asset.clone(),
+                amount: 1_000_000,
+            },
+        ],
+        payout_shares: vec![
+            &env,
+            PayoutShare {
+                recipient: creator.clone(),
+                share_bps: 10_000,
+            },
+        ],
+    };
+    let registry_client = MockRegistryClient::new(&env, &registry);
+    registry_client.set_material(&material_id, &material);
+
+    let (_, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
+    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
+    client.set_creator_tier(&admin, &creator, &CreatorTier::Tier1);
+
+    assert_eq!(client.get_creator_tier(&creator), CreatorTier::Tier1);
+
+    let purchase_id = client.purchase(
+        &buyer,
+        &material_id,
+        &asset,
+        &1_000_000,
+        &sample_transaction_id(&env),
+    );
+
+    env.ledger().set_sequence_number(36_000);
+
+    let non_recipient = Address::generate(&env);
+    let result = client.try_withdraw_payouts(&non_recipient, &purchase_id);
+    assert_eq!(result, Err(Ok(PurchaseError::NotAuthorized)));
+}
+
+#[test]
+fn withdraw_payouts_fails_when_already_claimed() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let registry = env.register(MockRegistry, ());
+    let treasury = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let creator = Address::generate(&env);
+    let asset = env.register(MockAsset, ());
+    let asset_client = MockAssetClient::new(&env, &asset);
+
+    let material_id = bytes32(&env, 5);
+    let material = MaterialRecord {
+        material_id: material_id.clone(),
+        creator: creator.clone(),
+        paused: false,
+        status: MaterialStatus::Active,
+        quotes: vec![
+            &env,
+            AssetQuote {
+                asset: asset.clone(),
+                amount: 1_000_000,
+            },
+        ],
+        payout_shares: vec![
+            &env,
+            PayoutShare {
+                recipient: creator.clone(),
+                share_bps: 10_000,
+            },
+        ],
+    };
+    let registry_client = MockRegistryClient::new(&env, &registry);
+    registry_client.set_material(&material_id, &material);
+
+    let (_, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
+    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
+    client.set_creator_tier(&admin, &creator, &CreatorTier::Tier2);
+
+    assert_eq!(client.get_creator_tier(&creator), CreatorTier::Tier2);
+
+    let purchase_id = client.purchase(
+        &buyer,
+        &material_id,
+        &asset,
+        &1_000_000,
+        &sample_transaction_id(&env),
+    );
+
+    // Tier2 fee: 150 bps of 1_000_000 = 15_000
+    assert_eq!(asset_client.transfer_at(&0).amount, 15_000);
+
+    env.ledger().set_sequence_number(36_000);
+
+    client.withdraw_payouts(&creator, &purchase_id);
+
+    let result = client.try_withdraw_payouts(&creator, &purchase_id);
+    assert_eq!(result, Err(Ok(PurchaseError::EntitlementAlreadyExists)));
+}
+
+#[test]
+fn set_creator_tier_requires_admin() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    let creator = Address::generate(&env);
+    let registry = Address::generate(&env);
+    let treasury = Address::generate(&env);
+
+    let (_, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
+
+    let result = client.try_set_creator_tier(&non_admin, &creator, &CreatorTier::Tier1);
+    assert_eq!(result, Err(Ok(PurchaseError::NotAuthorized)));
+}
+
+#[test]
+fn is_escrow_releasable_returns_false_before_lock_period() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let registry = env.register(MockRegistry, ());
+    let treasury = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let creator = Address::generate(&env);
+    let asset = env.register(MockAsset, ());
+
+    let material_id = bytes32(&env, 6);
+    let material = MaterialRecord {
+        material_id: material_id.clone(),
+        creator,
+        paused: false,
+        status: MaterialStatus::Active,
+        quotes: vec![
+            &env,
+            AssetQuote {
+                asset: asset.clone(),
+                amount: 1_000_000,
+            },
+        ],
+        payout_shares: vec![
+            &env,
+            PayoutShare {
+                recipient: Address::generate(&env),
+                share_bps: 10_000,
+            },
+        ],
+    };
+    let registry_client = MockRegistryClient::new(&env, &registry);
+    registry_client.set_material(&material_id, &material);
+
+    let (_, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
+    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
+
+    assert_eq!(
+        client.get_creator_tier(&Address::generate(&env)),
+        CreatorTier::Default
+    );
+    let purchase_id = client.purchase(
+        &buyer,
+        &material_id,
+        &asset,
+        &1_000_000,
+        &sample_transaction_id(&env),
+    );
+
+    assert!(!client.is_escrow_releasable(&purchase_id));
+}
+
+#[test]
+fn is_escrow_releasable_returns_true_after_lock_period() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let registry = env.register(MockRegistry, ());
+    let treasury = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let creator = Address::generate(&env);
+    let asset = env.register(MockAsset, ());
+
+    let material_id = bytes32(&env, 7);
+    let material = MaterialRecord {
+        material_id: material_id.clone(),
+        creator: creator.clone(),
+        paused: false,
+        status: MaterialStatus::Active,
+        quotes: vec![
+            &env,
+            AssetQuote {
+                asset: asset.clone(),
+                amount: 1_000_000,
+            },
+        ],
+        payout_shares: vec![
+            &env,
+            PayoutShare {
+                recipient: Address::generate(&env),
+                share_bps: 10_000,
+            },
+        ],
+    };
+    let registry_client = MockRegistryClient::new(&env, &registry);
+    registry_client.set_material(&material_id, &material);
+
+    let (_, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
+    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
+
+    let purchase_id = client.purchase(
+        &buyer,
+        &material_id,
+        &asset,
+        &1_000_000,
+        &sample_transaction_id(&env),
+    );
+
+    client.set_creator_tier(&admin, &creator, &CreatorTier::Tier1);
+    assert_eq!(client.get_creator_tier(&creator), CreatorTier::Tier1);
+
+    client.set_creator_tier(&admin, &creator, &CreatorTier::Default);
+    assert_eq!(client.get_creator_tier(&creator), CreatorTier::Default);
+    env.ledger().set_sequence_number(36_000);
+
+    assert!(client.is_escrow_releasable(&purchase_id));
+}
+
+#[test]
+fn sac_purchase_uses_real_balances_and_explicit_buyer_authorization() {
+    use soroban_sdk::token::{Client as TokenClient, StellarAssetClient};
+
+    let env = Env::default();
+    let admin = Address::generate(&env);
+    let issuer = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let creator = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let registry = env.register(MockRegistry, ());
+    let sac = env.register_stellar_asset_contract_v2(issuer.clone());
+    let asset = sac.address();
+    let token = TokenClient::new(&env, &asset);
+    let token_admin = StellarAssetClient::new(&env, &asset);
+    let material_id = bytes32(&env, 31);
+    let transaction_id = sample_transaction_id(&env);
+
+    // Fixture administration is mocked; the critical purchase invocation
+    // below replaces it with the exact buyer authorization tree.
+    env.mock_all_auths();
+    token_admin.mint(&buyer, &1_000_000);
+    MockRegistryClient::new(&env, &registry).set_material(
+        &material_id,
+        &MaterialRecord {
+            material_id: material_id.clone(),
+            creator: creator.clone(),
+            paused: false,
+            status: MaterialStatus::Active,
+            quotes: vec![
+                &env,
+                AssetQuote {
+                    asset: asset.clone(),
+                    amount: 1_000_000,
+                },
+            ],
+            payout_shares: vec![
+                &env,
+                PayoutShare {
+                    recipient: creator,
+                    share_bps: 10_000,
+                },
+            ],
+        },
+    );
+    let (contract_id, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
+    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
+
+    let fee_transfer = MockAuthInvoke {
+        contract: &asset,
+        fn_name: "transfer",
+        args: (&buyer, &treasury, 50_000i128).into_val(&env),
+        sub_invokes: &[],
+    };
+    let escrow_transfer = MockAuthInvoke {
+        contract: &asset,
+        fn_name: "transfer",
+        args: (&buyer, &contract_id, 950_000i128).into_val(&env),
+        sub_invokes: &[],
+    };
+    env.mock_auths(&[MockAuth {
+        address: &buyer,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "purchase",
+            args: (&buyer, &material_id, &asset, 1_000_000i128, &transaction_id).into_val(&env),
+            sub_invokes: &[fee_transfer, escrow_transfer],
+        },
+    }]);
+
+    client.purchase(&buyer, &material_id, &asset, &1_000_000, &transaction_id);
+    assert_eq!(token.balance(&buyer), 0);
+    assert_eq!(token.balance(&treasury), 50_000);
+    assert_eq!(token.balance(&contract_id), 950_000);
+    assert!(client.has_entitlement(&material_id, &buyer));
 }

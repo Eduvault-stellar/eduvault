@@ -4,6 +4,7 @@ import jwt from "jsonwebtoken";
 import { ObjectId } from "mongodb";
 import { getDb } from "@/lib/mongodb";
 import PayoutSettingsPanel from "../components/PayoutSettingsPanel";
+import CreatorProfileSettings from "../components/CreatorProfileSettings";
 
 async function getCurrentUser() {
   const cookieStore = await cookies();
@@ -31,7 +32,8 @@ export default async function SettingsPage() {
   }
 
   return (
-    <div className="mx-auto max-w-7xl px-4 py-10 lg:px-8">
+    <div className="mx-auto max-w-7xl space-y-10 px-4 py-10 lg:px-8">
+      <CreatorProfileSettings initialUser={user} />
       <PayoutSettingsPanel initialUser={user} />
     </div>
   );

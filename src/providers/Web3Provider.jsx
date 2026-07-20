@@ -4,9 +4,15 @@ import { useState } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { WagmiProvider } from 'wagmi';
 
+import dynamic from 'next/dynamic';
+
 import { config } from '@/lib/web3/config';
-import { WalletProvider } from '@/providers/WalletProvider';
 import { TransactionProvider } from '@/providers/TransactionProvider';
+
+const WalletProvider = dynamic(
+  () => import('@/providers/WalletProvider').then((mod) => mod.WalletProvider),
+  { ssr: false }
+);
 
 export default function Web3Provider({ children }) {
   const [queryClient] = useState(

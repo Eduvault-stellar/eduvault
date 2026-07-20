@@ -1,9 +1,9 @@
-import { sanitizeString, normalizeStringList } from "@/lib/api/validation";
+import { sanitizeString, normalizeStringList } from "../api/validation.js";
 import {
   normalizeSubject,
   normalizeCategory,
   normalizeLevel,
-} from "@/lib/backend/taxonomy";
+} from "./taxonomy.js";
 
 const REQUIRED_FIELDS = ["title", "storageKey"];
 const OPTIONAL_FIELDS = [
