@@ -56,9 +56,9 @@ export async function POST(request) {
       const accessToken = generateAccessToken(tokenPayload);
 
       const isProduction = process.env.NODE_ENV === "production";
-      const response = NextResponse.json({ success: true });
+      const authResponse = NextResponse.json({ success: true });
 
-      response.cookies.set("auth_token", accessToken, {
+      authResponse.cookies.set("auth_token", accessToken, {
         httpOnly: true,
         secure: isProduction,
         sameSite: "strict",
@@ -66,7 +66,7 @@ export async function POST(request) {
         maxAge: 15 * 60,
       });
 
-      response.cookies.set("refresh_token", rotation.refreshToken, {
+      authResponse.cookies.set("refresh_token", rotation.refreshToken, {
         httpOnly: true,
         secure: isProduction,
         sameSite: "strict",
@@ -74,11 +74,21 @@ export async function POST(request) {
         maxAge: 7 * 24 * 60 * 60,
       });
 
+      auditLog({
+        event: "token_refresh_success",
+        route: "auth/refresh",
+        method: "POST",
+        status: 200,
+        actor: rotation.userId
+      });
+
+      // Opportunistically clean up expired tokens
+      cleanupExpiredRefreshTokens().catch((err) => console.error(err));
       auditLog({ event: "token_refresh_success", route: "auth/refresh", method: "POST", status: 200, actor: rotation.userId, familyId: rotation.familyId });
 
       cleanupExpiredRefreshTokens().catch(() => {});
 
-      return response;
+      return authResponse;
     }
   );
 }
