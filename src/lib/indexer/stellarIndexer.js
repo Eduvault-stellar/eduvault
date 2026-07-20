@@ -223,7 +223,7 @@ export function createJsonRpcEventSource({ rpcUrl, contractId, fetchImpl = fetch
       : [];
 
   return {
-    async getEvents({ cursor, limit }) {
+    async getEvents({ cursor, limit, startLedger }) {
       const response = await fetchImpl(rpcUrl, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -232,6 +232,7 @@ export function createJsonRpcEventSource({ rpcUrl, contractId, fetchImpl = fetch
           id: 1,
           method: "getEvents",
           params: {
+            ...(cursor ? {} : startLedger ? { startLedger } : {}),
             filters: contractIds.length > 0 ? [{ contractIds }] : [],
             pagination: { cursor, limit },
           },
