@@ -101,10 +101,12 @@ export async function createEntitlement(materialId, buyerAddress, purchaseData =
     createdAt: new Date(),
   };
 
+  const session = purchaseData.session || null;
+
   await db.collection('entitlement_cache').updateOne(
     { materialId, buyerAddress: normalised },
     { $set: entry },
-    { upsert: true }
+    { upsert: true, session }
   );
 
   return { success: true, source: 'purchase-api' };

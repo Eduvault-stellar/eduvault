@@ -1201,7 +1201,6 @@ fn platform_config_struct_works() {
         treasury: treasury.clone(),
         platform_fee_bps: 500,
         paused: false,
-        oracle: None,
     };
 
     assert_eq!(config.registry, registry);
@@ -1410,7 +1409,7 @@ fn empty_transaction_id_is_accepted() {
 }
 
 #[test]
-fn set_oracle_and_get_asset_info_work() {
+fn get_asset_info_works() {
     let env = Env::default();
     env.mock_all_auths();
 
@@ -1418,23 +1417,8 @@ fn set_oracle_and_get_asset_info_work() {
     let registry = Address::generate(&env);
     let treasury = Address::generate(&env);
     let asset = Address::generate(&env);
-    let oracle = Address::generate(&env);
 
     let (_, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
-
-    // Oracle should be None by default
-    let config = client.get_platform_config().unwrap();
-    assert!(config.oracle.is_none());
-
-    // Set oracle
-    client.set_oracle(&admin, &Some(oracle.clone()));
-    let config = client.get_platform_config().unwrap();
-    assert_eq!(config.oracle, Some(oracle.clone()));
-
-    // Clear oracle
-    client.set_oracle(&admin, &None);
-    let config = client.get_platform_config().unwrap();
-    assert!(config.oracle.is_none());
 
     // Asset info
     assert!(client.get_asset_info(&asset).is_none());
@@ -1442,6 +1426,44 @@ fn set_oracle_and_get_asset_info_work() {
     let info = client.get_asset_info(&asset).unwrap();
     assert_eq!(info.kind, AssetKind::Token);
     assert!(info.enabled);
+}
+
+#[test]
+fn migrate_config_v1_to_v2_works() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let registry = Address::generate(&env);
+    let treasury = Address::generate(&env);
+
+    // Install and initialize properly so admin auth works
+    let (contract_id, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
+
+    // Simulate old storage structure
+    let old_config = PlatformConfigV1 {
+        registry: registry.clone(),
+        treasury: treasury.clone(),
+        platform_fee_bps: 500,
+        paused: true,
+        oracle: Some(Address::generate(&env)),
+    };
+
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .persistent()
+            .set(&DataKey::PlatformConfig, &old_config);
+    });
+
+    // Run migration
+    client.migrate_config_v1_to_v2(&admin);
+
+    // Verify new config is successfully read and contains correct values
+    let new_config = client.get_platform_config().unwrap();
+    assert_eq!(new_config.registry, registry);
+    assert_eq!(new_config.treasury, treasury);
+    assert_eq!(new_config.platform_fee_bps, 500);
+    assert!(new_config.paused);
 }
 
 #[test]

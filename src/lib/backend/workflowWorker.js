@@ -18,6 +18,7 @@ import {
 } from "./workflowOrchestrator";
 import { getDb } from "@/lib/mongodb";
 import { COLLECTIONS } from "./schemaContracts";
+import { processOutboxEvents } from "./outboxWorker";
 import { runWithContext } from "../telemetry/context.js";
 import { withSpan } from "../telemetry/tracing.js";
 import { incrementCounter } from "../telemetry/metrics.js";
@@ -202,7 +203,11 @@ export async function runWorker() {
       });
 
       if (workflows.length === 0) {
-        console.log("[Worker] No workflows to process, waiting...");
+        // Also process outbox events before sleeping
+        const outboxCount = await processOutboxEvents();
+        if (outboxCount === 0) {
+          console.log("[Worker] No workflows or outbox events to process, waiting...");
+        }
         await sleep(CONFIG.pollingInterval);
         continue;
       }
@@ -245,6 +250,9 @@ export async function runWorker() {
           }
         );
       }
+
+      // Also process outbox events after workflows
+      await processOutboxEvents();
 
       await sleep(CONFIG.pollingInterval);
     } catch (error) {
