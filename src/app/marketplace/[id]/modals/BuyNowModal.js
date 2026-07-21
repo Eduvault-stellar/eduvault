@@ -83,6 +83,7 @@ export default function BuyNowModal({
   const [selectedAsset, setSelectedAsset] = useState(SUPPORTED_ASSETS[0]);
   const [receiptStatus, setReceiptStatus] = useState("idle");
   const [receipt, setReceipt] = useState(null);
+  const [checkoutIntent, setCheckoutIntent] = useState(null);
   const [checkoutError, setCheckoutError] = useState(null);
   const [downloadError, setDownloadError] = useState(null);
   const [isDownloading, setIsDownloading] = useState(false);
@@ -110,6 +111,7 @@ export default function BuyNowModal({
     setShowWallet(false);
     setReceiptStatus("idle");
     setReceipt(null);
+    setCheckoutIntent(null);
     setCheckoutError(null);
     setDownloadError(null);
     setIsDownloading(false);
@@ -146,6 +148,27 @@ export default function BuyNowModal({
     }
   };
 
+  const createCheckoutIntent = async () => {
+    const response = await fetch("/api/checkout/initiate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        materialId,
+        asset: selectedAsset,
+      }),
+    });
+    const payload = await response.json();
+
+    if (!response.ok) {
+      const error = new Error(payload?.message || payload?.error || "Unable to prepare checkout terms.");
+      error.code = payload?.code;
+      throw error;
+    }
+
+    setCheckoutIntent(payload.checkout);
+    return payload.checkout;
+  };
+
   const handlePay = async () => {
     if (!address) {
       setShowWallet(true);
@@ -157,25 +180,31 @@ export default function BuyNowModal({
       return;
     }
 
-    const txHash = createLocalTxHash();
-    const purchasedAt = new Date().toISOString();
-    const amount = quote?.amount || price;
-    const asset = quote?.asset || selectedAsset.code;
-
     setCheckoutError(null);
     setDownloadError(null);
-    setReceipt({
-      itemName: materialTitle || `Material #${materialId}`,
-      creator: materialCreator,
-      transactionHash: txHash,
-      totalAmount: amount,
-      currency: asset,
-      totalFee: quote?.fee || "0.00",
-      purchasedAt,
-    });
-    setReceiptStatus("signing");
 
     try {
+      const lockedCheckout = await createCheckoutIntent();
+      const terms = lockedCheckout.terms;
+      const txHash = createLocalTxHash();
+      const purchasedAt = new Date().toISOString();
+      const amount = terms.amount.units;
+      const amountDisplay = terms.amount.display;
+      const asset = terms.asset.contract || terms.asset.code;
+
+      setReceipt({
+        itemName: materialTitle || `Material #${materialId}`,
+        creator: materialCreator,
+        transactionHash: txHash,
+        totalAmount: amountDisplay,
+        currency: terms.asset.code,
+        totalFee: terms.feeBreakdown.platformFeeUnits,
+        purchasedAt,
+        checkoutTerms: terms,
+        checkoutIntentHash: lockedCheckout.intentHash,
+      });
+      setReceiptStatus("signing");
+
       await startAccessRequestMutation.mutateAsync({
         materialId,
         buyerAddress: address,
@@ -214,6 +243,8 @@ export default function BuyNowModal({
         email,
         amount,
         asset,
+        checkoutIntentId: lockedCheckout.checkoutId,
+        checkoutIntentSignature: lockedCheckout.signature,
       });
 
       const confirmedHash = result?.purchase?.transactionHash || result?.transactionHash || txHash;
@@ -391,6 +422,8 @@ export default function BuyNowModal({
         totalFee={receipt?.totalFee || quote?.fee}
         totalAmount={receipt?.totalAmount || quote?.amount || price}
         currency={receipt?.currency || quote?.asset || selectedAsset.code}
+        checkoutTerms={receipt?.checkoutTerms || checkoutIntent?.terms}
+        checkoutIntentHash={receipt?.checkoutIntentHash || checkoutIntent?.intentHash}
         purchasedAt={receipt?.purchasedAt}
         errorMessage={checkoutError?.message}
         onClose={handleClose}

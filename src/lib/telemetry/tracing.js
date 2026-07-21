@@ -21,10 +21,11 @@ import { redactFields } from "./redact.js";
 import { logger } from "../logger.js";
 
 let _otelPromise = null;
+const OTEL_API_MODULE = "@opentelemetry/api";
 
 async function getOtel() {
   if (_otelPromise) return _otelPromise;
-  _otelPromise = import(/* webpackIgnore: true */ /* @vite-ignore */ "@opentelemetry/api").catch(
+  _otelPromise = import(/* webpackIgnore: true */ /* @vite-ignore */ OTEL_API_MODULE).catch(
     () => null
   );
   return _otelPromise;

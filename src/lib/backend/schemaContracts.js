@@ -723,3 +723,65 @@ export const COLLECTION_VALIDATORS = Object.freeze({
     },
   },
 });
+
+export const EDITABLE_MATERIAL_FIELDS = Object.freeze([
+  "title",
+  "description",
+  "price",
+  "usageRights",
+  "visibility",
+  "thumbnailUrl",
+  "category",
+  "subject",
+  "level",
+]);
+
+export const IMMUTABLE_MATERIAL_FIELDS = Object.freeze([
+  "userAddress",
+  "creator",
+  "tokenId",
+  "txHash",
+  "chainId",
+  "storageKey",
+  "fileUrl",
+  "metadataUrl",
+  "createdAt",
+]);
+
+export function applyTimestamps(doc, now = new Date()) {
+  return {
+    ...doc,
+    createdAt: doc.createdAt || now,
+    updatedAt: now,
+  };
+}
+
+export function buildMaterialHistoryEntry({
+  materialId,
+  previousDoc = {},
+  update = {},
+  updatedBy = null,
+  changeReason = null,
+  source = "system",
+}) {
+  const changedFields = Object.keys(update).filter((field) =>
+    EDITABLE_MATERIAL_FIELDS.includes(field),
+  );
+  const previousVersion = Number(previousDoc.version || 1);
+
+  return applyTimestamps({
+    materialId,
+    previousVersion,
+    version: previousVersion + 1,
+    changedFields,
+    before: Object.fromEntries(
+      changedFields.map((field) => [field, previousDoc[field] ?? null]),
+    ),
+    after: Object.fromEntries(
+      changedFields.map((field) => [field, update[field] ?? null]),
+    ),
+    updatedBy,
+    changeReason,
+    source,
+  });
+}

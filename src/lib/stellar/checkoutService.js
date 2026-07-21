@@ -1,5 +1,16 @@
 import { fetchFeeStats } from './horizonClient';
-import logger from '@/lib/logger';
+
+const checkoutLogger = {
+  warn(data, message) {
+    console.warn(message, data);
+  },
+  info(data, message) {
+    console.info(message, data);
+  },
+  error(data, message) {
+    console.error(message, data);
+  },
+};
 
 // Base fee stroops (100 stroops = 0.00001 XLM per operation is Stellar's minimum)
 const BASE_FEE_STROOPS = 100;
@@ -31,12 +42,12 @@ export async function detectSurgePricing() {
     const surging = p95 > SURGE_THRESHOLD_STROOPS;
 
     if (surging) {
-      logger.warn({ p95, p99, threshold: SURGE_THRESHOLD_STROOPS }, 'Stellar network surge detected');
+      checkoutLogger.warn({ p95, p99, threshold: SURGE_THRESHOLD_STROOPS }, 'Stellar network surge detected');
     }
 
     return { surging, p95Fee: p95, p99Fee: p99 };
   } catch (err) {
-    logger.warn({ err: err.message }, 'Failed to fetch Horizon fee stats — assuming no surge');
+    checkoutLogger.warn({ err: err.message }, 'Failed to fetch Horizon fee stats — assuming no surge');
     return { surging: false, p95Fee: BASE_FEE_STROOPS, p99Fee: BASE_FEE_STROOPS };
   }
 }
@@ -56,7 +67,7 @@ export async function calculateDynamicFee() {
     const multiplier = p99Fee > SURGE_THRESHOLD_STROOPS * 2 ? HIGH_SURGE_MULTIPLIER : SURGE_MULTIPLIER;
     recommendedFee = Math.min(Math.ceil(p95Fee * multiplier), MAX_FEE_STROOPS);
 
-    logger.info(
+    checkoutLogger.info(
       { p95Fee, p99Fee, multiplier, recommendedFee },
       'Surge fee applied to checkout transaction'
     );
@@ -89,14 +100,14 @@ export function verifyWalletAddressMatch({ sessionAddress, payloadAddress, sessi
     const warnings = (sessionState.addressMismatchWarnings ?? 0) + 1;
     sessionState.addressMismatchWarnings = warnings;
 
-    logger.warn(
+    checkoutLogger.warn(
       { sessionAddress: sessionNorm, payloadAddress: payloadNorm, warnings },
       'Wallet address mismatch detected at checkout'
     );
 
     const clearSession = warnings >= MAX_ADDRESS_WARNINGS;
     if (clearSession) {
-      logger.error(
+      checkoutLogger.error(
         { sessionAddress: sessionNorm, payloadAddress: payloadNorm },
         'Repeated address mismatch — clearing session'
       );

@@ -3,14 +3,18 @@ import { axe } from 'jest-axe';
 import NotificationCenter from '../notifications/NotificationCenter';
 import { describe, it, expect, vi } from 'vitest';
 
-vi.mock('@/hooks/useNotifications', () => ({
-  useNotifications: () => ({
+const useNotificationsMock = vi.hoisted(() =>
+  vi.fn(() => ({
     notifications: [],
     unreadCount: 0,
     markRead: vi.fn(),
     markAllRead: vi.fn(),
     clearAll: vi.fn(),
-  }),
+  }))
+);
+
+vi.mock('@/hooks/useNotifications', () => ({
+  useNotifications: useNotificationsMock,
 }));
 
 describe('NotificationCenter Accessibility', () => {
@@ -28,13 +32,13 @@ describe('NotificationCenter Accessibility', () => {
   });
 
   it('shows unread count in aria-label', () => {
-    vi.mocked(vi.fn).mockImplementationOnce(() => ({
+    useNotificationsMock.mockReturnValueOnce({
       notifications: [{ id: '1', title: 'Test', message: 'Hello', read: false, createdAt: new Date() }],
       unreadCount: 1,
       markRead: vi.fn(),
       markAllRead: vi.fn(),
       clearAll: vi.fn(),
-    }));
+    });
 
     render(<NotificationCenter />);
     const btn = screen.getByRole('button', { name: /1 unread/i });

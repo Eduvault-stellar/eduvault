@@ -38,6 +38,10 @@ export async function POST(request) {
         const response = NextResponse.json({ error: "Invalid or expired refresh token" }, { status: 401 });
         response.cookies.set("auth_token", "", { maxAge: 0, path: "/" });
         response.cookies.set("refresh_token", "", { maxAge: 0, path: "/api/auth/refresh" });
+        return response;
+      }
+
+      const db = await getDb();
       let user = null;
       try {
         user = await db.collection("users").findOne({ _id: new ObjectId(rotation.userId) });

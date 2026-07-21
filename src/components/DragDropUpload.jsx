@@ -51,6 +51,7 @@ export default function DragDropUpload({ onFileSelect, error }) {
   const dropZoneId = "cover-image-dropzone";
 
   return (
+    <>
     <div
       id={dropZoneId}
       role="button"
@@ -71,17 +72,6 @@ export default function DragDropUpload({ onFileSelect, error }) {
           : "border-gray-300 hover:border-blue-400"
       }`}
     >
-      <input
-        ref={inputRef}
-        id="cover-image-upload"
-        type="file"
-        accept="image/*"
-        onChange={handleChange}
-        className="sr-only"
-        aria-hidden="true"
-        tabIndex={-1}
-      />
-
       {error && (
         <div id="thumb-error" role="alert" className="sr-only">
           {error}
@@ -105,5 +95,16 @@ export default function DragDropUpload({ onFileSelect, error }) {
       </p>
       <p className="text-xs text-gray-500">Max size: 5MB (16:9 recommended)</p>
     </div>
+    <input
+      ref={inputRef}
+      id="cover-image-upload"
+      type="file"
+      accept="image/*"
+      onChange={handleChange}
+      className="sr-only"
+      aria-hidden="true"
+      tabIndex={-1}
+    />
+    </>
   );
 }

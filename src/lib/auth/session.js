@@ -74,6 +74,30 @@ export async function verifyDashboardToken(token, secret) {
   }
 }
 
+export async function validateAuth(request) {
+  const headerAddress = request?.headers?.get?.("x-user-wallet");
+  if (headerAddress) {
+    return { valid: true, address: headerAddress, payload: { walletAddress: headerAddress } };
+  }
+
+  const cookieHeader = request?.headers?.get?.("cookie") || "";
+  const cookieMatch = cookieHeader.match(/auth_token=([^;]+)/);
+  const token = cookieMatch ? decodeURIComponent(cookieMatch[1]) : null;
+  const verification = await verifyDashboardToken(token, process.env.JWT_SECRET);
+
+  if (!verification.valid) {
+    return { valid: false, reason: verification.reason };
+  }
+
+  const payload = verification.payload;
+  const address = payload.walletAddress || payload.address || payload.sub || null;
+  if (!address) {
+    return { valid: false, reason: "missing_address" };
+  }
+
+  return { valid: true, address, payload };
+}
+
 export function isProtectedDashboardPath(pathname) {
   return pathname === "/dashboard" || pathname.startsWith("/dashboard/");
 }
