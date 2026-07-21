@@ -1,6 +1,6 @@
-import { verifyDashboardToken } from "@/lib/auth/session";
+import { verifyDashboardToken } from "../auth/session.js";
 import { ObjectId } from "mongodb";
-import { getDb } from "@/lib/mongodb";
+import { getDb } from "../mongodb.js";
 
 export async function getUserFromCookie(request) {
   const cookieHeader = request.headers.get("cookie") || "";

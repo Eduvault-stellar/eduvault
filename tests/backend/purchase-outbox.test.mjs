@@ -10,6 +10,7 @@ dotenv.config({ path: ".env" });
 
 import { insertOutboxEvent, pollOutbox, completeOutboxEvent, failOutboxEvent, OUTBOX_STATUS, OUTBOX_EVENT_TYPES } from "../../src/lib/outbox.js";
 import { processOutboxEvents } from "../../src/lib/backend/outboxWorker.js";
+import { closeMongoConnection } from "../../src/lib/mongodb.js";
 import { PURCHASE_STATES, canTransition } from "../../src/lib/purchases/stateMachine.js";
 // We use a mock webhook sender in tests
 import * as webhookSender from "../../src/lib/webhooks/sender.js";
@@ -43,6 +44,7 @@ describe("Purchase Outbox & State Machine", () => {
   after(async () => {
     if (db) await db.dropDatabase().catch(() => {});
     if (client) await client.close();
+    await closeMongoConnection();
     if (mongoServer) await mongoServer.stop();
   });
 
