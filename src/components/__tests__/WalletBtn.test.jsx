@@ -7,6 +7,12 @@ vi.mock('@/hooks/useWallet', () => ({
   useWallet: vi.fn(),
 }));
 
+vi.mock('@creit-tech/stellar-wallets-kit', () => ({
+  StellarWalletsKit: vi.fn().mockImplementation(() => ({})),
+  KitEventType: {},
+  WalletNetwork: {},
+}));
+
 import { useWallet } from '@/hooks/useWallet';
 import { WalletStatus } from '@/providers/WalletProvider';
 

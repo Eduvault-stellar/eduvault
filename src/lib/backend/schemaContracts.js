@@ -466,87 +466,7 @@ export const REQUIRED_INDEXES = Object.freeze({
 
 // ── Material field contracts ───────────────────────────────────────────────
 
-/**
- * Fields that creators are allowed to update after initial creation.
- */
-export const EDITABLE_MATERIAL_FIELDS = Object.freeze([
-  "title",
-  "description",
-  "price",
-  "usageRights",
-  "visibility",
-  "thumbnailUrl",
-  "category",
-  "subject",
-  "level",
-  "tags",
-]);
 
-/**
- * Fields that must never be modified after the material is created.
- */
-export const IMMUTABLE_MATERIAL_FIELDS = Object.freeze([
-  "userAddress",
-  "tokenId",
-  "txHash",
-  "materialId",
-  "createdAt",
-  "chainId",
-]);
-
-// ── Document helpers ──────────────────────────────────────────────────────
-
-/**
- * Set `createdAt` (if absent) and `updatedAt` on a document.
- * Returns a new object — the original is not mutated.
- */
-export function applyTimestamps(doc) {
-  const now = new Date();
-  return {
-    ...doc,
-    createdAt: doc.createdAt ?? now,
-    updatedAt: now,
-  };
-}
-
-/**
- * Build a history audit entry for a material update.
- *
- * @param {object} params
- * @param {string} params.materialId
- * @param {object} params.previousDoc - The document before the update
- * @param {object} params.update      - The fields being changed
- * @param {string} params.updatedBy   - Wallet address of the actor
- * @param {string} params.changeReason
- * @param {string} params.source      - "creator" | "admin" | "system"
- * @returns {object} A history entry ready for insertion
- */
-export function buildMaterialHistoryEntry({
-  materialId,
-  previousDoc,
-  update,
-  updatedBy,
-  changeReason,
-  source,
-}) {
-  const changedFields = {};
-  for (const key of Object.keys(update)) {
-    changedFields[key] = {
-      from: previousDoc[key] ?? null,
-      to: update[key],
-    };
-  }
-
-  return {
-    materialId,
-    previousVersion: previousDoc.version ?? 1,
-    changedFields,
-    updatedBy,
-    changeReason: changeReason || null,
-    source: source || "creator",
-    updatedAt: new Date(),
-  };
-}
 
 export const COLLECTION_VALIDATORS = Object.freeze({
   users: {
@@ -932,3 +852,65 @@ export const COLLECTION_VALIDATORS = Object.freeze({
     },
   },
 });
+
+export const EDITABLE_MATERIAL_FIELDS = Object.freeze([
+  "title",
+  "description",
+  "price",
+  "usageRights",
+  "visibility",
+  "thumbnailUrl",
+  "category",
+  "subject",
+  "level",
+]);
+
+export const IMMUTABLE_MATERIAL_FIELDS = Object.freeze([
+  "userAddress",
+  "creator",
+  "tokenId",
+  "txHash",
+  "chainId",
+  "storageKey",
+  "fileUrl",
+  "metadataUrl",
+  "createdAt",
+]);
+
+export function applyTimestamps(doc, now = new Date()) {
+  return {
+    ...doc,
+    createdAt: doc.createdAt || now,
+    updatedAt: now,
+  };
+}
+
+export function buildMaterialHistoryEntry({
+  materialId,
+  previousDoc = {},
+  update = {},
+  updatedBy = null,
+  changeReason = null,
+  source = "system",
+}) {
+  const changedFields = Object.keys(update).filter((field) =>
+    EDITABLE_MATERIAL_FIELDS.includes(field),
+  );
+  const previousVersion = Number(previousDoc.version || 1);
+
+  return applyTimestamps({
+    materialId,
+    previousVersion,
+    version: previousVersion + 1,
+    changedFields,
+    before: Object.fromEntries(
+      changedFields.map((field) => [field, previousDoc[field] ?? null]),
+    ),
+    after: Object.fromEntries(
+      changedFields.map((field) => [field, update[field] ?? null]),
+    ),
+    updatedBy,
+    changeReason,
+    source,
+  });
+}

@@ -13,6 +13,7 @@ import {
 } from "@/lib/checkout/intent";
 import { PURCHASE_MANAGER_CONTRACT_ID } from "@/lib/config/chain";
 import { createEntitlement } from "@/lib/entitlement";
+
 import {
   getMaterialAccessStatus,
   isCompletedPurchaseStatus,

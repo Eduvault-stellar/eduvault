@@ -1,6 +1,9 @@
 import { COLLECTIONS } from "../backend/schemaContracts.js";
 import { incrementCounter, setGauge } from "../telemetry/metrics.js";
 import { logger } from "../logger.js";
+import { auditLog } from "../api/audit.js";
+import { runWithContext } from "../telemetry/context.js";
+import { withSpan } from "../telemetry/tracing.js";
 import { decodeContractEvent } from "./eventDecoder.js";
 
 function duplicateKey(error) {
@@ -157,9 +160,19 @@ export async function applyIndexedEvent(db, event, { now = new Date() } = {}) {
 }
 
 export async function runIndexerBatch({ db, eventSource, source = "stellar", limit = 100 }) {
+  return runWithContext({ jobType: "stellar-sync" }, async () => {
+  const startedAt = Date.now();
   const stateId = `${source}:events`;
   const state = await db.collection(COLLECTIONS.syncState).findOne({ _id: stateId });
-  const batch = await eventSource.getEvents({ cursor: state?.cursor || null, limit });
+  let batch;
+  try {
+    batch = await withSpan("stellar.sync.fetch", { source, limit }, () => eventSource.getEvents({ cursor: state?.cursor || null, limit }));
+  } catch (error) {
+    incrementCounter("stellar_sync_batches_total", { source, outcome: "failed" });
+    incrementCounter("rpc_errors_total", { operation: "getEvents" });
+    auditLog({ event: "stellar_sync_failed", action: "fetch", resource: "stellar-sync", source, outcome: "failed", reason: error.message });
+    throw error;
+  }
   const events = batch.events || [];
   let applied = 0;
   let skipped = 0;
@@ -168,7 +181,7 @@ export async function runIndexerBatch({ db, eventSource, source = "stellar", lim
 
   for (const event of events) {
     try {
-      const result = await applyIndexedEvent(db, { ...event, source });
+      const result = await withSpan("stellar.sync.apply", { source, eventType: event.type }, () => applyIndexedEvent(db, { ...event, source }));
       if (result.skipped) {
         skipped += 1;
         // If a dead-letter exists for this event, increment its retry count
@@ -197,6 +210,8 @@ export async function runIndexerBatch({ db, eventSource, source = "stellar", lim
       }
     } catch (err) {
       const id = eventId(event) || `${source}:unknown:${Math.random().toString(36).slice(2, 8)}`;
+      incrementCounter("stellar_sync_events_total", { source, outcome: "failed" });
+      auditLog({ event: "stellar_sync_event_failed", action: "apply", resource: "stellar-event", source, eventId: id, outcome: "failed", reason: err?.message });
       try {
         await db.collection(COLLECTIONS.syncEvents).updateOne(
           { _id: id },
@@ -259,6 +274,9 @@ export async function runIndexerBatch({ db, eventSource, source = "stellar", lim
   setGauge("indexer_last_ledger", { source }, latestLedger);
   incrementCounter("indexer_events_applied_total", { source }, applied);
   incrementCounter("indexer_events_skipped_total", { source }, skipped);
+  incrementCounter("stellar_sync_events_total", { source, outcome: "applied" }, applied);
+  incrementCounter("stellar_sync_events_total", { source, outcome: "skipped" }, skipped);
+  incrementCounter("stellar_sync_batches_total", { source, outcome: "success" });
 
  // Defensive: test doubles for the Mongo collection may not implement
   // countDocuments, only find/insertOne/updateOne/deleteOne. Fall back to
@@ -281,8 +299,10 @@ export async function runIndexerBatch({ db, eventSource, source = "stellar", lim
     { source, applied, skipped, latestLedger, deadLetterCount },
     "[Indexer] Batch processed"
   );
+  auditLog({ event: "stellar_sync_completed", action: "batch", resource: "stellar-sync", source, outcome: "success", status: 200, ledger: latestLedger, durationMs: Date.now() - startedAt });
 
   return { applied, skipped, nextCursor: batch.nextCursor || null };
+  });
 }
 
 export function createJsonRpcEventSource({

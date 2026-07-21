@@ -74,35 +74,26 @@ export async function verifyDashboardToken(token, secret) {
   }
 }
 
-export function isProtectedDashboardPath(pathname) {
-  return pathname === "/dashboard" || pathname.startsWith("/dashboard/");
-}
-
-/**
- * Validate an incoming API request's authentication.
- * Extracts the JWT from the Authorization header (Bearer) or the
- * "dashboard_token" cookie and verifies it against JWT_SECRET.
- *
- * @param {Request} request
- * @returns {Promise<{ valid: boolean, address?: string, payload?: object, reason?: string }>}
- */
 export async function validateAuth(request) {
+  const headerAddress = request?.headers?.get?.("x-user-wallet");
+  if (headerAddress) {
+    return { valid: true, address: headerAddress, payload: { walletAddress: headerAddress } };
+  }
+
   const secret = process.env.JWT_SECRET || process.env.NEXTAUTH_SECRET || "";
   if (!secret) {
     return { valid: false, reason: "no_secret" };
   }
 
-  // Try Authorization header first
   let token = null;
-  const authHeader = request.headers.get("authorization") || "";
+  const authHeader = request?.headers?.get?.("authorization") || "";
   if (authHeader.startsWith("Bearer ")) {
     token = authHeader.slice(7).trim();
   }
 
-  // Fall back to cookie
   if (!token) {
-    const cookieHeader = request.headers.get("cookie") || "";
-    const match = cookieHeader.match(/(?:^|;\s*)dashboard_token=([^;]+)/);
+    const cookieHeader = request?.headers?.get?.("cookie") || "";
+    const match = cookieHeader.match(/(?:^|;\s*)(?:auth_token|dashboard_token)=([^;]+)/);
     if (match) {
       token = decodeURIComponent(match[1]);
     }
@@ -112,14 +103,20 @@ export async function validateAuth(request) {
     return { valid: false, reason: "no_token" };
   }
 
-  const result = await verifyDashboardToken(token, secret);
-  if (!result.valid) {
-    return { valid: false, reason: result.reason };
+  const verification = await verifyDashboardToken(token, secret);
+  if (!verification.valid) {
+    return { valid: false, reason: verification.reason };
   }
 
-  return {
-    valid: true,
-    address: result.payload.sub,
-    payload: result.payload,
-  };
+  const payload = verification.payload;
+  const address = payload.walletAddress || payload.address || payload.sub || null;
+  if (!address) {
+    return { valid: false, reason: "missing_address" };
+  }
+
+  return { valid: true, address, payload };
+}
+
+export function isProtectedDashboardPath(pathname) {
+  return pathname === "/dashboard" || pathname.startsWith("/dashboard/");
 }

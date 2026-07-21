@@ -4,6 +4,17 @@ import { assertRuntimeEnv } from "./src/lib/env.js";
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactCompiler: true,
+  serverExternalPackages: [],
+  webpack: (config, { isServer }) => {
+    if (!isServer) {
+      config.resolve.fallback = {
+        ...config.resolve.fallback,
+        "node:crypto": false,
+        "node:async_hooks": false,
+      };
+    }
+    return config;
+  },
   async headers() {
     return [
       {

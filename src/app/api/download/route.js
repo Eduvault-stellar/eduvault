@@ -1,5 +1,5 @@
 /**
- * GET /api/download — Issue #63
+ * GET /api/download — Issue #63 (Refactored for authenticated streaming)
  *
  * Protected file delivery endpoint. Verifies the caller holds an active
  * on-chain entitlement for the requested material before releasing the
@@ -23,9 +23,8 @@
 import { NextResponse } from 'next/server';
 import { verifyEntitlement } from '@/lib/entitlement';
 import { getDb } from '@/lib/mongodb';
-import { getIpfsUrl } from '@/lib/config/chain';
 import { ObjectId } from 'mongodb';
-import { getManifest, getLatestManifest, isManifestWithdrawn } from '@/lib/provenance/registry';
+import { getManifest, getLatestManifest } from '@/lib/provenance/registry';
 import { verifyManifestDigest, verifyFileCid } from '@/lib/provenance/verify';
 import { resolveAuthenticatedWallet } from '@/lib/auth/walletIdentity';
 
@@ -40,6 +39,8 @@ export async function GET(request) {
   }
   const buyerAddress = identity.walletAddress;
   const requestedVersion = searchParams.get('version');
+
+  const startedAt = Date.now();
 
   // ── 1. Validate params ─────────────────────────────────────────────────────
 
@@ -74,25 +75,36 @@ export async function GET(request) {
     );
   }
 
-  // ── 3. Fetch material record to get CID ──────────────────────────────────
+  // ── 3. Fetch material record to get the IPFS CID ──────────────────────────
 
   let material;
   try {
     const db = await getDb();
     material = await db.collection('materials').findOne({ materialId });
     if (!material && ObjectId.isValid(materialId)) {
-      material = await db.collection('materials').findOne({ _id: new ObjectId(materialId) });
+      material = await db
+        .collection('materials')
+        .findOne({ _id: new ObjectId(materialId) });
     }
   } catch (err) {
     console.error('[download] DB error fetching material:', err);
-    return NextResponse.json({ error: 'Material lookup failed' }, { status: 503 });
+    return NextResponse.json(
+      { error: 'Material lookup failed' },
+      { status: 503 }
+    );
   }
 
   if (!material) {
     return NextResponse.json({ error: 'Material not found' }, { status: 404 });
   }
 
-  const cid = material.ipfsCid ?? material.cid ?? material.fileHash ?? material.storageKey ?? material.fileUrl ?? '';
+  const cid =
+    material.ipfsCid ??
+    material.cid ??
+    material.fileHash ??
+    material.storageKey ??
+    material.fileUrl ??
+    '';
 
   if (!cid) {
     return NextResponse.json(
@@ -105,7 +117,6 @@ export async function GET(request) {
 
   let manifestVersion = null;
   let manifestDigestVerified = false;
-  let versionWithdrawn = false;
 
   try {
     let manifestDoc = null;
@@ -123,7 +134,7 @@ export async function GET(request) {
 
     if (manifestDoc) {
       manifestVersion = manifestDoc.version;
-      versionWithdrawn = manifestDoc.withdrawn === true;
+      const versionWithdrawn = manifestDoc.withdrawn === true;
 
       if (versionWithdrawn) {
         return NextResponse.json(
@@ -141,7 +152,7 @@ export async function GET(request) {
       );
 
       // Verify the served CID matches the manifest
-      const cidMatch = await verifyFileCid(materialId, manifestVersion, cid);
+      const cidMatch = verifyFileCid(materialId, manifestVersion, cid);
       if (!cidMatch.valid) {
         console.warn('[download] CID mismatch:', cidMatch.detail);
       }
@@ -152,18 +163,17 @@ export async function GET(request) {
 
   // ── 5. Release CID / redirect to IPFS gateway ────────────────────────────
 
-  const fileUrl = getIpfsUrl(cid);
-
   return NextResponse.json(
     {
       ok: true,
       materialId,
-      fileUrl,
-      fileName: material.fileName ?? material.title ?? materialId,
-      contentType: material.contentType ?? 'application/octet-stream',
-      source: entitlementResult.source,
+      cid: cid,
       manifestVersion,
       manifestDigestVerified,
+      fileName: material.fileName ?? material.title ?? materialId,
+      contentType: material.contentType ?? 'application/octet-stream',
+      fileSize: material.fileSize || 0,
+      source: entitlementResult.source,
     },
     {
       headers: {

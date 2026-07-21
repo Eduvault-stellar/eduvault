@@ -7,12 +7,44 @@
  * to pass it through every function signature.
  *
  * This is intentionally dependency-free so it works with zero installs.
+ * Uses a simple random hex generator instead of node:crypto so it works
+ * in both server and browser bundled environments.
+ *
+ * NOTE: AsyncLocalStorage is imported lazily so this module can be bundled
+ * by webpack for client components that import the logger.
  */
 
-import { AsyncLocalStorage } from "node:async_hooks";
-import { randomUUID } from "node:crypto";
+let _AsyncLocalStorage = null;
+let _storage = null;
 
-const storage = new AsyncLocalStorage();
+function getStorage() {
+  if (!_storage) {
+    try {
+      // Dynamic import to avoid webpack bundling node:async_hooks for client
+      _AsyncLocalStorage = globalThis.AsyncLocalStorage || null;
+      if (!_AsyncLocalStorage) {
+        _AsyncLocalStorage = eval('require("async_hooks").AsyncLocalStorage');
+      }
+    } catch (e) {
+      // Fallback for browser environments — no-op storage
+      _AsyncLocalStorage = class {
+        getStore() { return null; }
+        run(store, fn) { return fn(); }
+      };
+    }
+    _storage = new _AsyncLocalStorage();
+  }
+  return _storage;
+}
+
+function generateRandomHex(length) {
+  let result = "";
+  const hexChars = "0123456789abcdef";
+  for (let i = 0; i < length; i++) {
+    result += hexChars[Math.floor(Math.random() * 16)];
+  }
+  return result;
+}
 
 /**
  * Generate a W3C traceparent-shaped id pair so this is OpenTelemetry
@@ -20,11 +52,11 @@ const storage = new AsyncLocalStorage();
  * Format reference: https://www.w3.org/TR/trace-context/
  */
 export function generateTraceId() {
-  return randomUUID().replace(/-/g, ""); // 32 hex chars
+  return generateRandomHex(32); // 32 hex chars
 }
 
 export function generateSpanId() {
-  return randomUUID().replace(/-/g, "").slice(0, 16); // 16 hex chars
+  return generateRandomHex(16); // 16 hex chars
 }
 
 export function buildTraceparent(traceId, spanId, sampled = true) {
@@ -56,7 +88,7 @@ export function runWithContext(fields, fn) {
   const spanId = generateSpanId();
 
   const ctx = {
-    correlationId: fields.correlationId || randomUUID(),
+    correlationId: fields.correlationId || generateRandomHex(32),
     traceId,
     spanId,
     parentSpanId: incoming?.spanId || null,
@@ -64,12 +96,12 @@ export function runWithContext(fields, fn) {
     jobType: fields.jobType || null,
   };
 
-  return storage.run(ctx, fn);
+  return getStorage().run(ctx, fn);
 }
 
 /** Read the current context, or null if called outside runWithContext. */
 export function getContext() {
-  return storage.getStore() || null;
+  return getStorage().getStore() || null;
 }
 
 /** Convenience: the traceparent header to forward to downstream calls/jobs. */
