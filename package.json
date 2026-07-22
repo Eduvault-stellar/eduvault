@@ -28,6 +28,8 @@
     "audit:deps:critical": "npm audit --audit-level=critical",
     "scan:secrets": "node scripts/scan-secrets.mjs",
     "indexer:stellar": "node scripts/run-stellar-indexer.mjs",
+    "indexer:stellar:once": "node scripts/run-stellar-indexer.mjs once",
+    "indexer:stellar:recover": "node scripts/run-stellar-indexer.mjs recover",
     "indexer:repair": "node scripts/repair-indexer-projections.mjs",
     "clean:intents": "node scripts/clean-stale-intents.mjs",
     "clean:intents:dry": "DRY_RUN=true node scripts/clean-stale-intents.mjs",
