@@ -707,7 +707,11 @@ fn version_manifest_digest(env: &Env, value: u8) -> BytesN<32> {
 }
 
 fn version_file_cid(env: &Env, version: u32) -> String {
-    String::from_str(env, &format!("QmVersion{}", version))
+    if version == 1 {
+        String::from_str(env, "QmVersion1")
+    } else {
+        String::from_str(env, "QmVersion2")
+    }
 }
 
 #[test]
@@ -725,7 +729,6 @@ fn publishes_version_and_emits_event() {
         &default_quotes(&env, &xlm, &usdc),
         &default_payout_shares(&env),
     );
-
     let digest = version_manifest_digest(&env, 11);
     let file_cid = version_file_cid(&env, 1);
     let file_hash = version_manifest_digest(&env, 21);

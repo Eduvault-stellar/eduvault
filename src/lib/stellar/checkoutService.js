@@ -1,5 +1,9 @@
 import { fetchFeeStats } from './horizonClient';
 
+// NOTE: We intentionally avoid importing @/lib/logger here because this module
+// is transitively bundled into client-side code (via CheckoutInvoice → CartDrawer).
+// The logger depends on telemetry/context.js which uses node:async_hooks and
+// node:crypto — modules unavailable in the browser webpack build.
 const checkoutLogger = {
   warn(data, message) {
     console.warn(message, data);
