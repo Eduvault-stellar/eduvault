@@ -22,6 +22,7 @@
     "test:contracts": "hardhat test",
     "test:integration": "vitest run test/integration",
     "test:backend": "node --test tests/backend/*.test.mjs",
+    "check:ci-env": "node scripts/validate-ci-env.mjs",
     "audit:deps": "npm audit --audit-level=critical",
     "audit:deps:high": "npm audit --audit-level=high",
     "audit:deps:critical": "npm audit --audit-level=critical",
