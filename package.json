@@ -13,16 +13,24 @@
     "nextjs"
   ],
   "private": true,
+  "packageManager": "npm@10.9.4",
+  "engines": {
+    "node": ">=20.16.0"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build --webpack",
     "start": "next start",
     "lint": "eslint",
+    "typecheck": "tsc --noEmit -p tsconfig.check.json",
+    "check:lockfile": "node scripts/check-lockfile.mjs",
+    "check:licenses": "node scripts/check-licenses.mjs",
     "test": "vitest",
     "test:all": "npm run test:contracts && npm run test:backend",
     "test:contracts": "hardhat test",
     "test:integration": "vitest run test/integration",
     "test:backend": "node --test tests/backend/*.test.mjs",
+    "test:smoke": "node scripts/smoke-preview.mjs",
     "check:ci-env": "node scripts/validate-ci-env.mjs",
     "audit:deps": "npm audit --audit-level=critical",
     "audit:deps:high": "npm audit --audit-level=high",
