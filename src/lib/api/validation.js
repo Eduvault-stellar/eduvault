@@ -1,3 +1,4 @@
+import { Address } from "@stellar/stellar-sdk";
 import {
   normalizeSubject,
   normalizeCategory,
@@ -20,7 +21,7 @@ export class ValidationError extends Error {
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const EVM_ADDRESS_PATTERN = /^0x[a-fA-F0-9]{40}$/;
-const STELLAR_ADDRESS_PATTERN = /^G[A-Z2-7]{55}$/;
+const STELLAR_ADDRESS_PATTERN = /^G[A-Z2-7]{55}$/i;
 const CURRENCY_CODE_PATTERN = /^[A-Z][A-Z0-9]{2,11}$/;
 export const PROFILE_LINK_RULES = {
   twitterUrl: { allowedHosts: ["x.com", "twitter.com"], allowSubdomains: true, maxLength: 256 },
@@ -85,10 +86,18 @@ export function validateEmail(email) {
 export function normalizeWalletAddress(address) {
   const clean = sanitizeString(address, { maxLength: 80 });
   if (!clean) return null;
-  if (!EVM_ADDRESS_PATTERN.test(clean) && !STELLAR_ADDRESS_PATTERN.test(clean)) {
-    throw new ValidationError("Invalid wallet address", { field: "walletAddress" });
+  if (EVM_ADDRESS_PATTERN.test(clean)) {
+    return clean.toLowerCase();
   }
-  return clean;
+  if (STELLAR_ADDRESS_PATTERN.test(clean)) {
+    try {
+      Address.fromString(clean.toUpperCase());
+      return clean.toLowerCase();
+    } catch {
+      throw new ValidationError("Invalid wallet address", { field: "walletAddress" });
+    }
+  }
+  throw new ValidationError("Invalid wallet address", { field: "walletAddress" });
 }
 
 export function normalizeCurrencyCode(currency) {
