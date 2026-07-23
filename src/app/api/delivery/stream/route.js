@@ -24,6 +24,7 @@ import { withApiHardening } from '@/lib/api/hardening';
 import { verifyDeliveryToken } from '@/lib/delivery/token';
 import { getMaterialRecord, createUpstreamStream, parseRangeHeader } from '@/lib/delivery/stream';
 import { recordDeliveryAudit } from '@/lib/delivery/audit';
+import { contentDispositionAttachment } from '@/lib/security/input';
 
 export const dynamic = 'force-dynamic';
 
@@ -137,7 +138,7 @@ export async function GET(request) {
       // ── 7. Build response headers ───────────────────────────────────────────
       const headers = {
         'Content-Type': material.contentType,
-        'Content-Disposition': `attachment; filename="${encodeURIComponent(material.fileName)}"`,
+        'Content-Disposition': contentDispositionAttachment(material.fileName),
         'Cache-Control': 'private, no-cache, no-store, must-revalidate',
         'X-Content-Type-Options': 'nosniff',
         'X-Frame-Options': 'DENY',

@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { COLLECTIONS } from "../backend/schemaContracts.js";
 import { incrementCounter, setGauge } from "../telemetry/metrics.js";
 import { logger } from "../logger.js";
@@ -8,6 +10,36 @@ import { decodeContractEvent } from "./eventDecoder.js";
 
 function duplicateKey(error) {
   return error?.code === 11000;
+}
+
+/** Mongo rejects transactions on standalone servers (local docker-compose,
+ *  CI). Detect that once and fall back to unsessioned writes rather than
+ *  dead-lettering every event on a developer machine. */
+function transactionsUnsupported(error) {
+  if (error?.codeName === "IllegalOperation" || error?.code === 20) return true;
+  return /Transaction numbers are only allowed on a replica set member or mongos/i.test(
+    String(error?.message || ""),
+  );
+}
+
+let transactionSupport = "unknown";
+
+/** Dead-letter rows are keyed by event identity so that a repeatedly failing
+ *  event accumulates one row with a rising retryCount. Events that carry no
+ *  stable identity (malformed payloads) still need a deterministic key, so we
+ *  hash the payload instead of generating a random one — a random key would
+ *  write a fresh row per attempt and never reach the retry ceiling. */
+export function deadLetterId(event, source = "stellar") {
+  const identity = eventId(event);
+  if (identity) return identity;
+
+  let serialized;
+  try {
+    serialized = JSON.stringify(event);
+  } catch {
+    serialized = String(event);
+  }
+  return `${source}:unidentified:${createHash("sha256").update(serialized).digest("hex").slice(0, 32)}`;
 }
 
 export function eventId(event) {
@@ -143,7 +175,7 @@ async function applyEventStateMachine(db, event, { now, session }) {
 
 export async function applyIndexedEvent(db, event, { now = new Date() } = {}) {
   const client = db.client;
-  if (!client || typeof client.startSession !== "function") {
+  if (!client || typeof client.startSession !== "function" || transactionSupport === "unavailable") {
     return applyEventStateMachine(db, event, { now, session: null });
   }
 
@@ -153,7 +185,23 @@ export async function applyIndexedEvent(db, event, { now = new Date() } = {}) {
     await session.withTransaction(async () => {
       result = await applyEventStateMachine(db, event, { now, session });
     });
+    transactionSupport = "available";
     return result;
+  } catch (error) {
+    if (!transactionsUnsupported(error)) throw error;
+
+    // Standalone Mongo. The projection writes below are individually
+    // idempotent (upserts keyed on natural keys, guarded by the sync_events
+    // receipt), so losing atomicity costs us a torn write window on crash,
+    // which `repairPartialIndexedEvents` already reconciles. Latch the mode so
+    // we probe once per process rather than per event.
+    transactionSupport = "unavailable";
+    logger.warn(
+      { reason: error?.message },
+      "[Indexer] Mongo transactions unavailable (standalone server); falling back to non-transactional writes",
+    );
+    incrementCounter("indexer_transaction_fallback_total", { source: event.source || "stellar" });
+    return applyEventStateMachine(db, event, { now, session: null });
   } finally {
     await session.endSession();
   }
@@ -182,34 +230,24 @@ export async function runIndexerBatch({ db, eventSource, source = "stellar", lim
   for (const event of events) {
     try {
       const result = await withSpan("stellar.sync.apply", { source, eventType: event.type }, () => applyIndexedEvent(db, { ...event, source }));
-      if (result.skipped) {
-        skipped += 1;
-        // If a dead-letter exists for this event, increment its retry count
-        try {
-          const dlCol = db.collection(COLLECTIONS.deadLetterEvents);
-          const existing = await dlCol.findOne({ _id: result.eventId });
-          if (existing) {
-            const retryCount = (existing.retryCount || 0) + 1;
-            const status = retryCount > maxRetries ? 'failed' : 'retryable';
-            await dlCol.updateOne(
-              { _id: result.eventId },
-              { $set: { retryCount, lastAttemptedAt: new Date(), status } },
-              { upsert: true }
-            );
-          }
-        } catch (e) {
-          // ignore
-        }
-      } else applied += 1;
+      if (result.skipped) skipped += 1;
+      else applied += 1;
 
-      // on success (not skipped), remove any dead-letter record
-      try {
-        if (!result.skipped && result.eventId) await db.collection(COLLECTIONS.deadLetterEvents).deleteOne({ _id: result.eventId });
-      } catch (err) {
-        // ignore cleanup errors
+      // Both outcomes are successes: `skipped` means the event was already
+      // applied (a replay), which is exactly what idempotency is for. Either
+      // way the event is settled, so retire any dead-letter row for it.
+      // Previously the skip path incremented retryCount instead, so replaying
+      // a healthy event drove its dead-letter to a terminal `failed` state.
+      if (result.eventId) {
+        try {
+          await db.collection(COLLECTIONS.deadLetterEvents).deleteOne({ _id: result.eventId });
+        } catch {
+          // Cleanup is best-effort; the row is harmless if it outlives us and
+          // reprocessDeadLetters will retire it on the next pass.
+        }
       }
     } catch (err) {
-      const id = eventId(event) || `${source}:unknown:${Math.random().toString(36).slice(2, 8)}`;
+      const id = deadLetterId(event, source);
       incrementCounter("stellar_sync_events_total", { source, outcome: "failed" });
       auditLog({ event: "stellar_sync_event_failed", action: "apply", resource: "stellar-event", source, eventId: id, outcome: "failed", reason: err?.message });
       try {
@@ -250,7 +288,22 @@ export async function runIndexerBatch({ db, eventSource, source = "stellar", lim
   }
 
   const previousLedger = state?.lastLedger || 0;
-  const latestLedger = batch.lastLedger || previousLedger;
+  // `latestLedger` from the RPC getEvents response is the chain tip as the
+  // server sees it, not the ledger we reached. Keeping the two apart is what
+  // makes real lag computable without the extra getLatestLedger call that
+  // observability-slos.md assumed we'd need.
+  const tipLedger = batch.lastLedger || previousLedger;
+  const processedLedger = events.reduce(
+    (highest, event) => Math.max(highest, Number(event.ledger ?? event.ledgerSequence ?? 0) || 0),
+    state?.lastProcessedLedger || 0,
+  );
+
+  // A short page means the RPC handed us everything it had, so we are current
+  // with the tip even if no events matched our contracts on a quiet chain. A
+  // full page means there is very likely more behind it, and the distance
+  // between the tip and the newest event we applied is the real backlog.
+  const drained = events.length < limit;
+  const ledgerLag = drained ? 0 : Math.max(0, tipLedger - processedLedger);
 
   await db.collection(COLLECTIONS.syncState).updateOne(
     { _id: stateId },
@@ -259,7 +312,9 @@ export async function runIndexerBatch({ db, eventSource, source = "stellar", lim
         _id: stateId,
         source,
         cursor: batch.nextCursor || state?.cursor || null,
-        lastLedger: latestLedger,
+        lastLedger: tipLedger,
+        lastProcessedLedger: processedLedger,
+        ledgerLag,
         updatedAt: new Date(),
       },
       $setOnInsert: { createdAt: new Date() },
@@ -267,11 +322,12 @@ export async function runIndexerBatch({ db, eventSource, source = "stellar", lim
     { upsert: true }
   );
 
-  // Ledger lag: how many ledgers behind this batch left us. A healthy
+  // Ledger lag: how far behind the chain tip this batch left us. A healthy
   // indexer keeps this near zero; a growing value means we're falling
   // behind the chain (acceptance criterion: "indexer ledger lag").
-  setGauge("indexer_ledger_lag", { source }, Math.max(0, latestLedger - previousLedger === 0 ? 0 : 0));
-  setGauge("indexer_last_ledger", { source }, latestLedger);
+  setGauge("indexer_ledger_lag", { source }, ledgerLag);
+  setGauge("indexer_last_ledger", { source }, tipLedger);
+  setGauge("indexer_last_processed_ledger", { source }, processedLedger);
   incrementCounter("indexer_events_applied_total", { source }, applied);
   incrementCounter("indexer_events_skipped_total", { source }, skipped);
   incrementCounter("stellar_sync_events_total", { source, outcome: "applied" }, applied);
@@ -296,12 +352,12 @@ export async function runIndexerBatch({ db, eventSource, source = "stellar", lim
   setGauge("indexer_dead_letter_count", { source }, deadLetterCount);
 
   logger.info(
-    { source, applied, skipped, latestLedger, deadLetterCount },
+    { source, applied, skipped, tipLedger, processedLedger, ledgerLag, deadLetterCount },
     "[Indexer] Batch processed"
   );
-  auditLog({ event: "stellar_sync_completed", action: "batch", resource: "stellar-sync", source, outcome: "success", status: 200, ledger: latestLedger, durationMs: Date.now() - startedAt });
+  auditLog({ event: "stellar_sync_completed", action: "batch", resource: "stellar-sync", source, outcome: "success", status: 200, ledger: tipLedger, durationMs: Date.now() - startedAt });
 
-  return { applied, skipped, nextCursor: batch.nextCursor || null };
+  return { applied, skipped, nextCursor: batch.nextCursor || null, ledgerLag, drained };
   });
 }
 
@@ -371,8 +427,18 @@ export function createJsonRpcEventSource({
   };
 }
 
-export async function reprocessDeadLetters(db, { statuses = ['retryable', 'failed'], limit = 100 } = {}) {
+/**
+ * Retry dead-lettered events.
+ *
+ * Defaults to `retryable` only: `failed` is the terminal state an event
+ * reaches after exhausting INDEXER_MAX_RETRIES, and sweeping it back in on
+ * every pass made that ceiling meaningless. Operators can still opt into
+ * terminal rows explicitly (after fixing whatever poisoned them) by passing
+ * `statuses: ['retryable', 'failed']`.
+ */
+export async function reprocessDeadLetters(db, { statuses = ['retryable'], limit = 100 } = {}) {
   const dlCol = db.collection(COLLECTIONS.deadLetterEvents);
+  const maxRetries = Number(process.env.INDEXER_MAX_RETRIES || 3);
   const items = [];
 
   if (typeof dlCol.find === 'function') {
@@ -384,25 +450,40 @@ export async function reprocessDeadLetters(db, { statuses = ['retryable', 'faile
   }
 
   const reprocessed = [];
+  const exhausted = [];
   for (const entry of items.slice(0, limit)) {
+    if (!entry.raw) {
+      exhausted.push({ id: entry._id, error: 'missing raw event' });
+      continue;
+    }
+
     try {
       await applyIndexedEvent(db, entry.raw);
       await dlCol.deleteOne({ _id: entry._id });
       reprocessed.push({ id: entry._id });
     } catch (err) {
-      // attempt one more immediate retry (helps transient failures during reprocess)
-      try {
-        await applyIndexedEvent(db, entry.raw);
-        await dlCol.deleteOne({ _id: entry._id });
-        reprocessed.push({ id: entry._id });
-        continue;
-      } catch (err2) {
-        await dlCol.updateOne({ _id: entry._id }, { $set: { lastError: String(err2?.message || err2), lastAttemptedAt: new Date() } }, { upsert: true });
-      }
+      // One attempt per pass. The previous version retried twice inline
+      // without recording either try, so a permanently poisoned event burned
+      // two applies per pass forever and its retryCount never moved.
+      const retryCount = (entry.retryCount || 0) + 1;
+      const status = retryCount > maxRetries ? 'failed' : 'retryable';
+      await dlCol.updateOne(
+        { _id: entry._id },
+        {
+          $set: {
+            lastError: String(err?.message || err),
+            lastAttemptedAt: new Date(),
+            retryCount,
+            status,
+          },
+        },
+        { upsert: true },
+      );
+      if (status === 'failed') exhausted.push({ id: entry._id, error: String(err?.message || err) });
     }
   }
 
-  return { reprocessed };
+  return { reprocessed, exhausted };
 }
 
 export async function repairPartialIndexedEvents(db, { limit = 100 } = {}) {

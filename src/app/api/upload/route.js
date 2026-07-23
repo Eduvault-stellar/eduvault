@@ -3,6 +3,7 @@ import { auditLog } from '@/lib/api/audit'
 import { withApiHardening } from '@/lib/api/hardening'
 import {
   normalizeStringList,
+  normalizeImageField,
   sanitizeObject,
   validateUploadFileMetadata,
   validateUploadPayload,
@@ -315,8 +316,8 @@ export async function POST(request) {
         // Include storage reference inside the metadata
         const metadataJSON = {
           ...sanitizedScalarFields,
-          coverImageUrl: results.imgUrl || sanitizedScalarFields.coverImageUrl || null,
-          thumbnailUrl: results.imgUrl || sanitizedScalarFields.thumbnailUrl || null,
+          coverImageUrl: results.imgUrl || normalizeImageField(sanitizedScalarFields.coverImageUrl, "coverImageUrl"),
+          thumbnailUrl: results.imgUrl || normalizeImageField(sanitizedScalarFields.thumbnailUrl, "thumbnailUrl"),
           learningOutcomes: normalizeStringList(previewInputs.learningOutcomes, {
             maxItems: 8,
             maxLength: 180,

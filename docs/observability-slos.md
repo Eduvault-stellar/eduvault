@@ -158,11 +158,14 @@ operation metadata: no request body, file bytes, secrets, or credentials.
 
 ## Known limitations / honest follow-ups
 
-- `indexer_ledger_lag` currently measures ledgers advanced per batch, not
-  true distance from the live chain tip — computing true lag needs an
-  additional RPC call to fetch the current tip ledger per batch, which we
-  deferred to avoid extra RPC load on every indexer cycle. Worth revisiting
-  if lag alerts prove too noisy/quiet in practice.
+- `indexer_ledger_lag` measures true distance from the live chain tip. No extra
+  RPC call is needed: the `getEvents` response already carries `latestLedger`
+  (the tip as the RPC server sees it), which we now keep separate from the
+  highest ledger we actually applied (`indexer_last_processed_ledger`). Lag is
+  reported as 0 when a batch comes back short of `limit`, since a short page
+  means the RPC handed us everything it had and a quiet chain should not alert.
+  Both values are persisted on `sync_state` as `lastLedger` and
+  `lastProcessedLedger`.
 - Tracing runs in local-only mode (no real OTLP exporter wired) until
   `@opentelemetry/api` and an exporter package are installed and
   `OTEL_EXPORTER_OTLP_ENDPOINT` is configured — the code is written to pick

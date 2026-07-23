@@ -14,6 +14,7 @@
 
 import { getDb } from '@/lib/mongodb';
 import { IPFS_GATEWAY_URL } from '@/lib/config/chain';
+import { normalizeDownloadFilename, normalizeExternalUrl } from '@/lib/security/input';
 
 const DEFAULT_UPSTREAM_TIMEOUT_MS = 30_000; // 30s upstream timeout
 const MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024 * 1024; // 5GB hard limit
@@ -60,7 +61,7 @@ export async function getMaterialRecord(materialId) {
 
   return {
     cid,
-    fileName: material.fileName || material.title || materialId,
+    fileName: normalizeDownloadFilename(material.fileName || material.title || materialId),
     contentType: material.contentType || 'application/octet-stream',
     fileSize: material.fileSize || 0,
   };
@@ -75,8 +76,12 @@ export async function getMaterialRecord(materialId) {
  */
 export function buildUpstreamUrl(cid) {
   const gateway = process.env.PRIVATE_IPFS_GATEWAY_URL || IPFS_GATEWAY_URL;
-  if (cid.startsWith('http')) return cid;
-  return `${gateway}/ipfs/${cid}`;
+  const allowedHost = new URL(gateway).hostname;
+  if (cid.startsWith('http')) {
+    return normalizeExternalUrl(cid, { allowedHosts: [allowedHost] });
+  }
+  if (!/^[a-zA-Z0-9]+$/.test(cid || '')) throw new Error('Invalid IPFS content identifier');
+  return `${gateway.replace(/\/$/, '')}/ipfs/${cid}`;
 }
 
 /**

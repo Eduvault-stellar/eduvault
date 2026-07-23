@@ -20,7 +20,7 @@ import {
   currentTraceparent,
 } from "../../src/lib/telemetry/context.js";
 import { redactFields, isDeniedField } from "../../src/lib/telemetry/redact.js";
-import { withSpan, recentSpans, clearRecentSpans } from "../../src/lib/telemetry/tracing.js";
+import { withSpan, recentSpans, clearRecentSpans, disableOtelForTesting } from "../../src/lib/telemetry/tracing.js";
 import {
   incrementCounter,
   recordHistogram,
@@ -36,6 +36,8 @@ import {
 } from "../../src/lib/indexer/stellarIndexer.js";
 import { COLLECTIONS } from "../../src/lib/backend/schemaContracts.js";
 import { createAuditEntry } from "../../src/lib/api/audit.js";
+
+disableOtelForTesting();
 
 beforeEach(() => {
   resetMetrics();
