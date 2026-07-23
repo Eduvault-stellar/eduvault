@@ -340,7 +340,7 @@ export default function UploadWizard() {
         retryable: true,
       });
     }
-  }, [writeError, failTransaction]);
+  }, [writeError]);
 
   // Track transaction confirmation progress
   useEffect(() => {
@@ -351,7 +351,7 @@ export default function UploadWizard() {
         message: "The transaction was broadcast. Waiting for network confirmation.",
       });
     }
-  }, [isConfirmed, markStatus, txHash]);
+  }, [isConfirmed, txHash]);
 
   // Parse receipt on confirmation
   useEffect(() => {
@@ -441,7 +441,7 @@ export default function UploadWizard() {
         retryable: true,
       });
     }
-  }, [confirmTransaction, failTransaction, isConfirmed, isFailed, receipt, uploadResult, createMaterialMutation, title, description, price, usageRights, visibility, address]);
+  }, [isConfirmed, isFailed, receipt, uploadResult, createMaterialMutation, title, description, price, usageRights, visibility, address]);
 
   const handleReset = () => {
     setTitle("");
