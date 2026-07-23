@@ -27,14 +27,34 @@ export async function POST(request) {
     const db = await getDb();
     const users = db.collection("users");
 
-    const duplicateQuery = walletAddress
-      ? { $or: [
+    const escapedEmail = escapeRegExp(email);
+    const emailCondition = {
+      $or: [
+        { email },
+        { email: { $regex: `^${escapedEmail}$`, $options: "i" } },
+      ],
+    };
+
+    let duplicateQuery;
+    if (walletAddress) {
+      const escapedWallet = escapeRegExp(walletAddress);
+      const escapedWalletLower = escapeRegExp(walletAddressLower || walletAddress);
+      duplicateQuery = {
+        $or: [
           { email },
+          { email: { $regex: `^${escapedEmail}$`, $options: "i" } },
           { walletAddress },
           { walletAddress: walletAddressLower },
-          { walletAddressLower }
-        ] }
-      : { email };
+          { walletAddress: { $regex: `^${escapedWallet}$`, $options: "i" } },
+          { walletAddressLower: walletAddress },
+          { walletAddressLower: walletAddressLower },
+          { walletAddressLower: { $regex: `^${escapedWalletLower}$`, $options: "i" } },
+        ],
+      };
+    } else {
+      duplicateQuery = emailCondition;
+    }
+
     const existing = await users.findOne(duplicateQuery);
     if (existing) {
       return NextResponse.json({ error: "Profile already exists" }, { status: 409 });
