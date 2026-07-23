@@ -10,29 +10,29 @@
  * Uses a simple random hex generator instead of node:crypto so it works
  * in both server and browser bundled environments.
  *
- * NOTE: AsyncLocalStorage is imported lazily so this module can be bundled
- * by webpack for client components that import the logger.
+ * `node:async_hooks` is imported directly — next.config.mjs's webpack config
+ * already maps it to `false` for client bundles (see the `resolve.fallback`
+ * entry there), so `AsyncLocalStorage` below is simply `undefined` in the
+ * browser and we fall back to a no-op store. (A previous version tried to
+ * hide a `require("async_hooks")` call behind `eval` for the same reason,
+ * but that silently produced the no-op store in *any* real ESM execution
+ * too — including `node --test` and native ESM in production — not just the
+ * browser, quietly breaking context propagation there.)
  */
 
-let _AsyncLocalStorage = null;
+import { AsyncLocalStorage } from "node:async_hooks";
+
 let _storage = null;
 
 function getStorage() {
   if (!_storage) {
-    try {
-      // Dynamic import to avoid webpack bundling node:async_hooks for client
-      _AsyncLocalStorage = globalThis.AsyncLocalStorage || null;
-      if (!_AsyncLocalStorage) {
-        _AsyncLocalStorage = eval('require("async_hooks").AsyncLocalStorage');
-      }
-    } catch (e) {
-      // Fallback for browser environments — no-op storage
-      _AsyncLocalStorage = class {
+    const Storage =
+      AsyncLocalStorage ||
+      class {
         getStore() { return null; }
         run(store, fn) { return fn(); }
       };
-    }
-    _storage = new _AsyncLocalStorage();
+    _storage = new Storage();
   }
   return _storage;
 }
