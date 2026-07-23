@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { ObjectId } from "mongodb";
 import { getDb } from "@/lib/mongodb";
 import { getPurchaseStatus } from "@/lib/indexer";
 import { resolveAuthenticatedWallet } from "@/lib/auth/walletIdentity";
@@ -16,7 +17,9 @@ export async function GET(request, { params }) {
     const id = params.id;
     const db = await getDb();
 
-    const material = await db.collection("materials").findOne({ _id: id });
+    const material = await db.collection("materials").findOne({
+      _id: ObjectId.isValid(id) ? new ObjectId(id) : id,
+    });
     if (!material) {
       return NextResponse.json({ error: 'Material not found' }, { status: 404 });
     }

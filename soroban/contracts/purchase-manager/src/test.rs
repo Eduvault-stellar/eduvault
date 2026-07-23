@@ -483,6 +483,142 @@ fn successful_purchase_creates_entitlement_and_distributes_multiple_payouts() {
     assert_eq!(duplicate, Err(Ok(PurchaseError::EntitlementAlreadyExists)));
 }
 
+// ============== Event Wire-Shape Tests (#7 cross-check) ==============
+//
+// The three tests above only assert `events().len()` — never the actual
+// topics/data a listener (src/lib/indexer/eventDecoder.js,
+// src/lib/purchases/chainVerifier.js on the JS side) would receive. Those
+// JS modules assume the *entire* event struct arrives positionally inside
+// the event's data vec. But every event here is declared with
+// `#[contractevent(topics = [...])]` plus per-field `#[topic]` markers, and
+// soroban-sdk's contractevent macro moves `#[topic]`-marked fields into the
+// event's *topics* (appended after the literal topic symbols) — they are
+// NOT part of the data vec. This test pins the real, on-chain wire shape so
+// that assumption is checked here rather than discovered in production.
+
+#[test]
+fn purchase_completed_event_has_expected_topics_and_data_shape() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let registry = env.register(MockRegistry, ());
+    let treasury = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let creator = Address::generate(&env);
+    let creator_payout = Address::generate(&env);
+    let collaborator = Address::generate(&env);
+    let asset = env.register(MockAsset, ());
+
+    let material_id = bytes32(&env, 7);
+    let payout_shares =
+        create_payout_shares_for(&env, &creator_payout, 8_000, &collaborator, 2_000);
+    let material = MaterialRecord {
+        material_id: material_id.clone(),
+        creator: creator.clone(),
+        paused: false,
+        status: MaterialStatus::Active,
+        quotes: vec![
+            &env,
+            AssetQuote {
+                asset: asset.clone(),
+                amount: 1_000_000,
+            },
+        ],
+        payout_shares,
+    };
+    let registry_client = MockRegistryClient::new(&env, &registry);
+    registry_client.set_material(&material_id, &material);
+
+    let (contract_id, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
+    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
+
+    // Read before the call: `purchase_internal` reads the same ledger
+    // sequence internally to compute `EscrowCreatedEvent.lock_until_ledger`.
+    let current_ledger = env.ledger().sequence();
+    let transaction_id = sample_transaction_id(&env);
+
+    let purchase_id = client.purchase(&buyer, &material_id, &asset, &1_000_000, &transaction_id);
+    assert_eq!(purchase_id, 0);
+
+    let platform_fee: i128 = 50_000; // 500 bps of 1_000_000
+    let seller_net: i128 = 950_000;
+
+    // PayoutDistributedEvent — topics: purchase_id, material_id, recipient;
+    // data: role, asset, amount, transaction_id.
+    let expected_payout_topics = (
+        Symbol::new(&env, "payout"),
+        Symbol::new(&env, "distributed"),
+        purchase_id,
+        material_id.clone(),
+        treasury.clone(),
+    );
+    let expected_payout_data = (
+        Symbol::new(&env, "platform_fee"),
+        asset.clone(),
+        platform_fee,
+        transaction_id.clone(),
+    );
+
+    // EscrowCreatedEvent — topics: purchase_id, material_id;
+    // data: asset, amount, lock_until_ledger.
+    let expected_escrow_topics = (
+        Symbol::new(&env, "escrow"),
+        Symbol::new(&env, "created"),
+        purchase_id,
+        material_id.clone(),
+    );
+    let expected_escrow_data = (
+        asset.clone(),
+        seller_net,
+        current_ledger + ESCROW_LOCK_PERIOD_LEDGERS,
+    );
+
+    // PurchaseCompletedEvent — topics: purchase_id, material_id, buyer;
+    // data: seller, asset, amount, platform_fee, seller_net_amount,
+    // entitlement_active, transaction_id. This is the shape
+    // src/lib/indexer/eventSchema.js's "purchase.completed" entry and
+    // src/lib/purchases/chainVerifier.js's readPurchaseEvent() must agree
+    // with — buyer/material_id/purchase_id live in topics, not in `event.value`.
+    let expected_purchase_topics = (
+        Symbol::new(&env, "purchase"),
+        Symbol::new(&env, "completed"),
+        purchase_id,
+        material_id.clone(),
+        buyer.clone(),
+    );
+    let expected_purchase_data = (
+        creator.clone(),
+        asset.clone(),
+        1_000_000i128,
+        platform_fee,
+        seller_net,
+        true,
+        transaction_id.clone(),
+    );
+
+    assert_eq!(
+        env.events().all().filter_by_contract(&contract_id),
+        std::vec![
+            (
+                contract_id.clone(),
+                expected_payout_topics.into_val(&env),
+                expected_payout_data.into_val(&env),
+            ),
+            (
+                contract_id.clone(),
+                expected_escrow_topics.into_val(&env),
+                expected_escrow_data.into_val(&env),
+            ),
+            (
+                contract_id.clone(),
+                expected_purchase_topics.into_val(&env),
+                expected_purchase_data.into_val(&env),
+            ),
+        ]
+    );
+}
+
 #[test]
 fn purchase_distribution_gives_final_recipient_rounding_remainder() {
     let env = Env::default();
