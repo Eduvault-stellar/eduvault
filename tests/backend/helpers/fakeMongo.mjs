@@ -47,6 +47,21 @@ function matchesCondition(value, condition) {
         case "$ne":
           if (value === operand) return false;
           break;
+        case "$lt":
+        case "$lte":
+        case "$gt":
+        case "$gte": {
+          // Comparison works for numbers and Dates. A missing value never
+          // satisfies a range predicate, matching Mongo.
+          if (value === undefined || value === null) return false;
+          const a = value instanceof Date ? value.getTime() : value;
+          const b = operand instanceof Date ? operand.getTime() : operand;
+          if (operator === "$lt" && !(a < b)) return false;
+          if (operator === "$lte" && !(a <= b)) return false;
+          if (operator === "$gt" && !(a > b)) return false;
+          if (operator === "$gte" && !(a >= b)) return false;
+          break;
+        }
         case "$type": {
           const check = TYPE_CHECKS[operand];
           if (!check) throw new Error(`fakeMongo: unsupported $type "${operand}"`);

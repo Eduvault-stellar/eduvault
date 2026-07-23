@@ -34,6 +34,9 @@
     "indexer:repair": "node scripts/repair-indexer-projections.mjs",
     "clean:intents": "node scripts/clean-stale-intents.mjs",
     "clean:intents:dry": "DRY_RUN=true node scripts/clean-stale-intents.mjs",
+    "files:cleanup": "node scripts/run-file-cleanup.mjs",
+    "files:orphans": "node scripts/run-file-cleanup.mjs orphans",
+    "files:orphans:apply": "node scripts/run-file-cleanup.mjs orphans:apply",
     "test:migrations": "node --test tests/migrations/*.test.mjs",
     "db:migrate": "node scripts/migrations/migrate-db.mjs",
     "db:indexes": "node scripts/setup-db-indexes.js"
