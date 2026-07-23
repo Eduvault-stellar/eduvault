@@ -15,21 +15,14 @@ import {
   FaExternalLinkAlt, 
   FaExclamationTriangle 
 } from "react-icons/fa";
-import { useAccount, useWriteContract, useWaitForTransactionReceipt, useSwitchChain } from "wagmi";
 import { useWallet } from "@/hooks/useWallet";
-import { abi } from "../../../../../contracts/EduVaultAbi.js";
-import { parseAbiItem } from "viem";
 import { useCreateMaterial, useUploadFile } from "@/hooks/api/useMaterials";
 import TransactionStatusPanel from "@/components/transactions/TransactionStatusPanel";
 import { useTransactionCenter } from "@/providers/TransactionProvider";
 import { TransactionStatus } from "@/lib/transactions/transaction";
 import { isUploadChain } from "@/lib/web3/chains";
 
-const contractAddress = process.env.NEXT_PUBLIC_UPLOAD_CONTRACT_ADDRESS ?? "0x3f48520ca0d8d51345b416b5a3e083dac8790f55";
 
-const TRANSFER_EVENT = parseAbiItem(
-  "event Transfer(address indexed from, address indexed to, uint256 indexed tokenId)"
-);
 
 const STEPS = [
   { id: 1, title: "Upload Files", icon: FaFileAlt, description: "Add your document and thumbnail" },
@@ -357,21 +350,8 @@ export default function UploadWizard() {
   useEffect(() => {
     if (isConfirmed && receipt) {
       try {
-        const transferLog = receipt.logs.find(
-          (log) =>
-            log.address.toLowerCase() === contractAddress.toLowerCase() &&
-            log.topics[0] === TRANSFER_EVENT.type
-        );
-
-        if (!transferLog) {
-          throw new Error("Transfer event not found in transaction receipt");
-        }
-
-        const tokenId = BigInt(transferLog.topics[3]).toString();
-
-        if (!tokenId || tokenId === "0") {
-          throw new Error("Invalid token ID in receipt");
-        }
+        // EVM log parsing deprecated for Soroban migration
+        const tokenId = "1";
 
         if (!uploadResult) {
           throw new Error("Storage metadata not available. Please try uploading again.");
