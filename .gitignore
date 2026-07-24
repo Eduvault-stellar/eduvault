@@ -53,6 +53,8 @@ soroban/contracts/purchase-manager/test_snapshots/test/rejects_unauthorized_plat
 soroban/contracts/purchase-manager/test_snapshots/test/purchase_fails_for_invalid_material.1.json
 diff.txt
 soroban/contracts/material-registry/test_snapshots/test/updates_sale_terms_and_status_and_supports_quote_lookup.1.json
+# Generated from docs/openapi.yaml.
+public/openapi.yaml
 soroban/contracts/material-registry/test_snapshots/test/update_sale_terms_rejects_unapproved_asset.1.json
 soroban/contracts/material-registry/test_snapshots/test/transfers_upgrade_admin.1.json
 soroban/contracts/material-registry/test_snapshots/test/set_asset_allowed_stores_info_and_emits_event.1.json

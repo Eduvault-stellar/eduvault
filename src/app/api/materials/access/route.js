@@ -1,5 +1,6 @@
 import { getMaterialAccessStatus, createPendingAccessRequest } from "../../../../lib/purchases/access.js";
 import { resolveAuthenticatedWallet } from "../../../../lib/auth/walletIdentity.js";
+import { withApiContract } from "../../../../lib/api/contract.js";
 
 export const dynamic = 'force-dynamic';
 
@@ -31,7 +32,7 @@ export async function accessStatus(db, materialId, buyerAddress) {
  * GET /api/materials/access?materialId=&buyerAddress=
  * Returns a simple access status for a material for a buyer.
  */
-export async function GET(request) {
+async function getMaterialAccess(request) {
   try {
     const { searchParams } = new URL(request.url);
     const materialId = searchParams.get('materialId') || '';
@@ -68,7 +69,7 @@ export async function GET(request) {
  * Starts a learner access request without granting access. Payment completion
  * must be recorded separately through /api/purchase.
  */
-export async function POST(request) {
+async function requestMaterialAccess(request) {
   try {
     const body = await request.json();
     const materialId = body?.materialId || '';
@@ -100,3 +101,6 @@ export async function POST(request) {
     return NextResponse.json({ error: 'Failed to start access request', detail: String(err?.message || err) }, { status: 500 });
   }
 }
+
+export const GET = (request) => withApiContract(request, {}, () => getMaterialAccess(request));
+export const POST = (request) => withApiContract(request, {}, () => requestMaterialAccess(request));

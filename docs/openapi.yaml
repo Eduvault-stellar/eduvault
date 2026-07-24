@@ -5,8 +5,16 @@ info:
   version: "1.0.0"
   description: |
     REST API for the EduVault decentralised learning-material marketplace.
-    All write endpoints require a valid `auth_token` cookie issued by the
+    Authenticated write endpoints require a valid `auth_token` cookie issued by the
     `/api/auth` login flow (HS256 JWT signed with `JWT_SECRET`).
+    Clients send `X-API-Version: 1`. Breaking changes require a major version
+    and migration notes. Deprecated operations emit `Deprecation`, `Sunset`,
+    and successor `Link` headers for at least 180 days before removal.
+  x-version-policy:
+    support-window-days: 180
+    breaking-change: major-version-and-migration-required
+    removal-requires: [deprecation-telemetry, sunset-date, successor]
+  x-contract-baseline: 1
 
 servers:
   - url: "http://localhost:3000"
@@ -22,14 +30,19 @@ components:
       name: auth_token
 
   schemas:
-    Error:
+    Problem:
       type: object
+      additionalProperties: false
       properties:
-        error:
-          type: string
-        details:
-          type: object
-      required: [error]
+        type: { type: string, format: uri }
+        title: { type: string }
+        status: { type: integer, minimum: 400, maximum: 599 }
+        detail: { type: string }
+        instance: { type: string }
+        code: { type: string, pattern: "^[a-z0-9_]+$" }
+        correlationId: { type: [string, "null"] }
+      required: [type, title, status, detail, instance, code, correlationId]
+      example: { type: "https://eduvault.invalid/problems/invalid_request", title: Bad Request, status: 400, detail: Invalid request, instance: /api/materials, code: invalid_request, correlationId: 01JABC }
 
     Material:
       type: object
@@ -63,6 +76,7 @@ components:
           type: string
           format: date-time
       required: [title, price]
+      example: { _id: "6650abc", title: Algebra Notes, price: 4.5 }
 
     MaterialInput:
       type: object
@@ -88,6 +102,7 @@ components:
           type: string
           format: uri
       required: [title, price]
+      example: { title: Algebra Notes, price: 4.5 }
 
     MaterialImportRecord:
       type: object
@@ -161,6 +176,7 @@ components:
                       type: string
                     message:
                       type: string
+      example: { dryRun: true, total: 1, valid: 1, invalid: 0, imported: 0 }
 
     UserProfile:
       type: object
@@ -186,6 +202,7 @@ components:
         createdAt:
           type: string
           format: date-time
+      example: { _id: "6650def", walletAddress: GABC, displayName: Ada }
 
     Purchase:
       type: object
@@ -207,15 +224,111 @@ components:
         updatedAt:
           type: string
           format: date-time
+      example: { _id: "6650aaa", buyerAddress: GABC, materialId: "6650abc", status: confirmed }
+
+    PurchaseResult:
+      type: object
+      properties:
+        success: { type: boolean }
+        purchaseId: { type: string }
+        purchase: { $ref: "#/components/schemas/Purchase" }
+        access: { $ref: "#/components/schemas/AccessStatus" }
+        transactionHash: { type: string }
+      required: [purchase, access, transactionHash]
+      example: { success: true, purchaseId: "6650aaa", transactionHash: abc123 }
 
     Entitlement:
       type: object
       properties:
-        materialId:
-          type: string
-        grantedAt:
-          type: string
-          format: date-time
+        hasAccess: { type: boolean }
+        source: { type: string }
+      required: [hasAccess, source]
+      example: { hasAccess: true, source: purchase }
+
+    AccessStatus:
+      type: object
+      properties:
+        status: { type: string }
+        hasAccess: { type: boolean }
+        accessGranted: { type: boolean }
+        source: { type: string }
+      required: [hasAccess]
+      example: { status: active, hasAccess: true, accessGranted: true, source: purchase }
+
+    Feedback:
+      type: object
+      properties:
+        materialId: { type: string }
+        score: { type: integer, minimum: 1, maximum: 5 }
+        comment: { type: string }
+        createdAt: { type: string, format: date-time }
+      required: [materialId, score]
+      example: { materialId: "6650abc", score: 5, comment: Clear explanations }
+
+    FeedbackResult:
+      type: object
+      properties:
+        feedback: { $ref: "#/components/schemas/Feedback" }
+        averageScore: { type: number }
+        feedbackCount: { type: integer }
+      required: [feedback, averageScore, feedbackCount]
+      example: { feedback: { materialId: "6650abc", score: 5 }, averageScore: 5, feedbackCount: 1 }
+
+    ProfileResult:
+      type: object
+      properties:
+        success: { type: boolean }
+        exists: { type: boolean }
+        user:
+          anyOf:
+            - { $ref: "#/components/schemas/UserProfile" }
+            - { type: "null" }
+        emailSent: { type: boolean }
+      required: [user]
+      example: { exists: true, user: { _id: "6650def", displayName: Ada } }
+
+    Status:
+      type: object
+      properties:
+        success: { type: boolean }
+        saved: { type: boolean }
+        unsaved: { type: boolean }
+        id: { type: string }
+        materialId: { type: string }
+      example: { success: true }
+
+    Download:
+      type: object
+      properties:
+        success: { type: boolean }
+        downloadUrl: { type: string, format: uri }
+        fileName: { type: string }
+        contentType: { type: string }
+        source: { type: string }
+      required: [success, downloadUrl, fileName, contentType, source]
+      example: { success: true, downloadUrl: "https://gateway.pinata.cloud/ipfs/cid", fileName: notes.pdf, contentType: application/pdf, source: purchase }
+
+  responses:
+    Unauthorized:
+      description: Not authenticated
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    BadRequest:
+      description: Validation error
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    RateLimited:
+      description: Too many requests
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    Problem:
+      description: RFC 9457 problem response
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
 
 security:
   - cookieAuth: []
@@ -229,6 +342,11 @@ paths:
       summary: List the authenticated user's materials
       operationId: listMyMaterials
       tags: [Materials]
+      security: [{ cookieAuth: [] }]
+      x-api-version: 1
+      x-idempotency: none
+      x-pagination: none
+      x-example: "#/components/schemas/Material/example"
       responses:
         "200":
           description: Array of material documents
@@ -243,18 +361,25 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Error"
+                $ref: "#/components/schemas/Problem"
         "429":
           description: Rate limited
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Error"
+                $ref: "#/components/schemas/Problem"
+        default:
+          $ref: "#/components/responses/Problem"
 
     post:
       summary: Create a new material listing
       operationId: createMaterial
       tags: [Materials]
+      security: [{ cookieAuth: [] }]
+      x-api-version: 1
+      x-idempotency: none
+      x-pagination: none
+      x-example: "#/components/schemas/MaterialInput/example"
       requestBody:
         required: true
         content:
@@ -273,17 +398,60 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Error"
+                $ref: "#/components/schemas/Problem"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "429":
           $ref: "#/components/responses/RateLimited"
+        default:
+          $ref: "#/components/responses/Problem"
+
+    put:
+      summary: Replace editable material fields
+      operationId: replaceMaterial
+      tags: [Materials]
+      security: [{ cookieAuth: [] }]
+      x-api-version: 1
+      x-idempotency: material-version
+      x-pagination: none
+      x-example: "#/components/schemas/MaterialInput/example"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MaterialInput" }
+      responses:
+        "200": { description: Updated material, content: { application/json: { schema: { $ref: "#/components/schemas/Material" } } } }
+        default: { $ref: "#/components/responses/Problem" }
+
+    patch:
+      summary: Update editable material fields
+      operationId: updateMaterial
+      tags: [Materials]
+      security: [{ cookieAuth: [] }]
+      x-api-version: 1
+      x-idempotency: material-version
+      x-pagination: none
+      x-example: "#/components/schemas/MaterialInput/example"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MaterialInput" }
+      responses:
+        "200": { description: Updated material, content: { application/json: { schema: { $ref: "#/components/schemas/Material" } } } }
+        default: { $ref: "#/components/responses/Problem" }
 
   /api/materials/import:
     post:
       summary: Validate or import structured material records
       operationId: importMaterials
       tags: [Materials]
+      security: [{ cookieAuth: [] }]
+      x-api-version: 1
+      x-idempotency: none
+      x-pagination: none
+      x-example: "#/components/schemas/MaterialImportResponse/example"
       requestBody:
         required: true
         content:
@@ -323,6 +491,164 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "429":
           $ref: "#/components/responses/RateLimited"
+        default:
+          $ref: "#/components/responses/Problem"
+
+  /api/materials/access:
+    get:
+      summary: Get material access status
+      operationId: getMaterialAccess
+      tags: [Entitlements]
+      security: [{ cookieAuth: [] }]
+      x-api-version: 1
+      x-idempotency: none
+      x-pagination: none
+      x-example: { materialId: "6650abc" }
+      responses:
+        "200": { description: Access status, content: { application/json: { schema: { $ref: "#/components/schemas/AccessStatus" } } } }
+        default: { $ref: "#/components/responses/Problem" }
+    post:
+      summary: Start a material access request
+      operationId: requestMaterialAccess
+      tags: [Entitlements]
+      security: [{ cookieAuth: [] }]
+      x-api-version: 1
+      x-idempotency: material-and-wallet
+      x-pagination: none
+      x-example: { materialId: "6650abc" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [materialId], properties: { materialId: { type: string } } }
+      responses:
+        "200": { description: Existing access, content: { application/json: { schema: { $ref: "#/components/schemas/AccessStatus" } } } }
+        "202": { description: Pending access, content: { application/json: { schema: { $ref: "#/components/schemas/AccessStatus" } } } }
+        default: { $ref: "#/components/responses/Problem" }
+
+  /api/materials/{id}/feedback:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    get:
+      summary: Get material feedback
+      operationId: getMaterialFeedback
+      tags: [Materials]
+      security: []
+      x-api-version: 1
+      x-idempotency: none
+      x-pagination: none
+      x-example: "#/components/schemas/Feedback/example"
+      responses:
+        "200": { description: Feedback summary, content: { application/json: { schema: { type: object, required: [items, averageScore, feedbackCount], properties: { items: { type: array, items: { $ref: "#/components/schemas/Feedback" } }, averageScore: { type: number }, feedbackCount: { type: integer } } } } } }
+        default: { $ref: "#/components/responses/Problem" }
+    post:
+      summary: Submit material feedback
+      operationId: submitMaterialFeedback
+      tags: [Materials]
+      security: [{ cookieAuth: [] }]
+      x-api-version: 1
+      x-idempotency: material-and-wallet
+      x-pagination: none
+      x-example: { score: 5, comment: Clear explanations }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [score], properties: { score: { type: integer, minimum: 1, maximum: 5 }, comment: { type: string, maxLength: 2000 } } }
+      responses:
+        "200": { description: Submitted feedback, content: { application/json: { schema: { $ref: "#/components/schemas/FeedbackResult" } } } }
+        default: { $ref: "#/components/responses/Problem" }
+
+  /api/materials/download/{id}:
+    get:
+      summary: Get an authorized material download
+      operationId: getMaterialDownload
+      tags: [Materials]
+      security: [{ cookieAuth: [] }]
+      x-api-version: 1
+      x-idempotency: none
+      x-pagination: none
+      x-example: "#/components/schemas/Download/example"
+      responses:
+        "200": { description: Download reference, content: { application/json: { schema: { $ref: "#/components/schemas/Download" } } } }
+        default: { $ref: "#/components/responses/Problem" }
+
+  /api/materials/history:
+    get:
+      summary: Get material edit history
+      operationId: getMaterialHistory
+      tags: [Materials]
+      security: [{ cookieAuth: [] }]
+      x-api-version: 1
+      x-idempotency: none
+      x-pagination: none
+      x-example: { id: "6650abc" }
+      responses:
+        "200": { description: Material history, content: { application/json: { schema: { type: array, items: { type: object, required: [materialId, previousVersion, version, changedFields], properties: { materialId: { type: string }, previousVersion: { type: integer }, version: { type: integer }, changedFields: { type: array, items: { type: string } }, changeReason: { type: string }, updatedAt: { type: string, format: date-time } } } } } } }
+        default: { $ref: "#/components/responses/Problem" }
+
+  /api/materials/{id}/report:
+    post:
+      summary: Report a material
+      operationId: reportMaterial
+      tags: [Materials]
+      security: [{ cookieAuth: [] }]
+      x-api-version: 1
+      x-idempotency: material-and-wallet
+      x-pagination: none
+      x-example: { reason: copyright, description: Duplicate upload }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [reason], properties: { reason: { type: string }, description: { type: string } } }
+      responses:
+        "201": { description: Submitted report, content: { application/json: { schema: { type: object, required: [success, reportId, message], properties: { success: { type: boolean }, reportId: { type: string }, message: { type: string } } } } } }
+        default: { $ref: "#/components/responses/Problem" }
+
+  /api/saved-materials:
+    get:
+      summary: List saved materials
+      operationId: listSavedMaterials
+      tags: [Materials]
+      security: [{ cookieAuth: [] }]
+      x-api-version: 1
+      x-idempotency: none
+      x-pagination: none
+      x-example: { items: [] }
+      responses:
+        "200": { description: Saved materials, content: { application/json: { schema: { type: object, required: [items], properties: { items: { type: array, items: { type: object, properties: { id: { type: string }, savedAt: { type: string, format: date-time }, material: { $ref: "#/components/schemas/Material" } } } } } } } } }
+        default: { $ref: "#/components/responses/Problem" }
+    post:
+      summary: Save a material
+      operationId: saveMaterial
+      tags: [Materials]
+      security: [{ cookieAuth: [] }]
+      x-api-version: 1
+      x-idempotency: material-and-wallet
+      x-pagination: none
+      x-example: { materialId: "6650abc" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [materialId], properties: { materialId: { type: string } } }
+      responses:
+        "200": { description: Saved, content: { application/json: { schema: { $ref: "#/components/schemas/Status" } } } }
+        "201": { description: Saved, content: { application/json: { schema: { $ref: "#/components/schemas/Status" } } } }
+        default: { $ref: "#/components/responses/Problem" }
+    delete:
+      summary: Unsave a material
+      operationId: unsaveMaterial
+      tags: [Materials]
+      security: [{ cookieAuth: [] }]
+      x-api-version: 1
+      x-idempotency: material-and-wallet
+      x-pagination: none
+      x-example: { materialId: "6650abc" }
+      responses:
+        "200": { description: Removed save, content: { application/json: { schema: { $ref: "#/components/schemas/Status" } } } }
+        default: { $ref: "#/components/responses/Problem" }
 
   # ---------------------------------------------------------------------------
   # Market materials (public browse)
@@ -333,17 +659,21 @@ paths:
       operationId: browseMarketMaterials
       tags: [Market]
       security: []
+      x-api-version: 1
+      x-idempotency: none
+      x-pagination: { strategy: page, parameters: [page, pageSize] }
+      x-example: "#/components/schemas/Material/example"
       parameters:
         - name: category
           in: query
           schema:
             type: string
-        - name: cursor
+        - name: page
           in: query
-          description: Pagination cursor (MongoDB ObjectId of the last seen item)
           schema:
-            type: string
-        - name: limit
+            type: integer
+            minimum: 1
+        - name: pageSize
           in: query
           schema:
             type: integer
@@ -365,6 +695,8 @@ paths:
                   nextCursor:
                     type: string
                     nullable: true
+        default:
+          $ref: "#/components/responses/Problem"
 
   # ---------------------------------------------------------------------------
   # Upload
@@ -374,6 +706,11 @@ paths:
       summary: Upload a material file to Pinata / IPFS
       operationId: uploadMaterialFile
       tags: [Upload]
+      security: [{ cookieAuth: [] }]
+      x-api-version: 1
+      x-idempotency: content-hash
+      x-pagination: none
+      x-example: { file: notes.pdf }
       requestBody:
         required: true
         content:
@@ -402,6 +739,8 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        default:
+          $ref: "#/components/responses/Problem"
 
   # ---------------------------------------------------------------------------
   # Purchase
@@ -411,6 +750,11 @@ paths:
       summary: List the authenticated user's purchases
       operationId: listPurchases
       tags: [Purchase]
+      security: [{ cookieAuth: [] }]
+      x-api-version: 1
+      x-idempotency: none
+      x-pagination: none
+      x-example: "#/components/schemas/Purchase/example"
       responses:
         "200":
           description: Purchase history
@@ -422,11 +766,18 @@ paths:
                   $ref: "#/components/schemas/Purchase"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        default:
+          $ref: "#/components/responses/Problem"
 
     post:
       summary: Record a material purchase after on-chain payment
       operationId: recordPurchase
       tags: [Purchase]
+      security: [{ cookieAuth: [] }]
+      x-api-version: 1
+      x-idempotency: checkout-intent
+      x-pagination: none
+      x-example: { materialId: "6650abc", checkoutIntentId: "6650fed", transactionHash: abc123 }
       requestBody:
         required: true
         content:
@@ -436,34 +787,46 @@ paths:
               properties:
                 materialId:
                   type: string
-                signedXdr:
+                checkoutIntentId:
+                  type: string
+                checkoutIntentSignature:
+                  type: string
+                transactionHash:
                   type: string
                 email:
                   type: string
-              required: [materialId]
+                  format: email
+              required: [materialId, checkoutIntentId, transactionHash]
       responses:
         "201":
           description: Purchase recorded
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Purchase"
+                $ref: "#/components/schemas/PurchaseResult"
         "200":
           description: Existing purchase returned when the buyer already owns the material
           content:
             application/json:
               schema:
-                type: object
+                $ref: "#/components/schemas/PurchaseResult"
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        default:
+          $ref: "#/components/responses/Problem"
 
   /api/transactions/history:
     get:
       summary: Aggregate account purchase and Stellar transaction history
       operationId: listTransactionHistory
       tags: [Purchase]
+      security: [{ cookieAuth: [] }]
+      x-api-version: 1
+      x-idempotency: none
+      x-pagination: { strategy: page, parameters: [page, limit] }
+      x-example: { page: 1, limit: 20 }
       parameters:
         - name: page
           in: query
@@ -503,49 +866,89 @@ paths:
                       type: object
         "401":
           $ref: "#/components/responses/Unauthorized"
+        default:
+          $ref: "#/components/responses/Problem"
 
   # ---------------------------------------------------------------------------
   # Entitlements
   # ---------------------------------------------------------------------------
   /api/entitlements:
     get:
-      summary: List materials the authenticated user is entitled to download
-      operationId: listEntitlements
+      summary: Check a buyer's entitlement to a material
+      operationId: checkEntitlement
       tags: [Entitlements]
+      security: []
+      x-api-version: 1
+      x-idempotency: none
+      x-pagination: none
+      x-example: "#/components/schemas/Entitlement/example"
+      parameters:
+        - { name: materialId, in: query, required: true, schema: { type: string } }
+        - { name: buyerAddress, in: query, required: true, schema: { type: string } }
       responses:
         "200":
-          description: List of entitlements
+          description: Entitlement status
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/Entitlement"
+                $ref: "#/components/schemas/Entitlement"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        default:
+          $ref: "#/components/responses/Problem"
 
   # ---------------------------------------------------------------------------
   # User profile
   # ---------------------------------------------------------------------------
   /api/profile:
     get:
-      summary: Get the authenticated user's profile
+      summary: Look up a user profile
       operationId: getProfile
       tags: [Profile]
+      security: []
+      x-api-version: 1
+      x-idempotency: none
+      x-pagination: none
+      x-example: "#/components/schemas/UserProfile/example"
       responses:
         "200":
           description: User profile
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/UserProfile"
+                $ref: "#/components/schemas/ProfileResult"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        default:
+          $ref: "#/components/responses/Problem"
+
+    post:
+      summary: Create a profile
+      operationId: createProfile
+      tags: [Profile]
+      security: []
+      x-api-version: 1
+      x-idempotency: wallet-or-email
+      x-pagination: none
+      x-example: { displayName: Ada, walletAddress: GABC }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UserProfile" }
+      responses:
+        "200": { description: Created profile, content: { application/json: { schema: { $ref: "#/components/schemas/ProfileResult" } } } }
+        default: { $ref: "#/components/responses/Problem" }
 
     patch:
       summary: Update the authenticated user's profile
       operationId: updateProfile
       tags: [Profile]
+      security: [{ cookieAuth: [] }]
+      x-api-version: 1
+      x-idempotency: wallet
+      x-pagination: none
+      x-example: { displayName: Ada }
       requestBody:
         required: true
         content:
@@ -581,28 +984,10 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/UserProfile"
+                $ref: "#/components/schemas/ProfileResult"
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
-
-  responses:
-    Unauthorized:
-      description: Not authenticated
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/Error"
-    BadRequest:
-      description: Validation error
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/Error"
-    RateLimited:
-      description: Too many requests
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/Error"
+        default:
+          $ref: "#/components/responses/Problem"

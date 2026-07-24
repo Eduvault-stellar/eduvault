@@ -1,4 +1,5 @@
 import { ObjectId } from "mongodb";
+import { PAYLOAD_SCHEMA_VERSION } from "./backend/payloadVersions.js";
 
 export const OUTBOX_STATUS = {
   PENDING: "pending",
@@ -15,6 +16,7 @@ export const OUTBOX_EVENT_TYPES = {
 export async function insertOutboxEvent(db, session, { type, payload, idempotencyKey }) {
   const collection = db.collection("outbox");
   const event = {
+    schemaVersion: PAYLOAD_SCHEMA_VERSION,
     type,
     payload,
     idempotencyKey,

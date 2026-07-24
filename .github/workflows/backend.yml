@@ -5,6 +5,9 @@ on:
     paths:
       - "src/app/api/**"
       - "src/lib/**"
+      - "src/services/**"
+      - "docs/openapi.yaml"
+      - "scripts/check-api-contracts.mjs"
       - "package.json"
       - "package-lock.json"
       - "pnpm-lock.yaml"
@@ -20,6 +23,9 @@ on:
     paths:
       - "src/app/api/**"
       - "src/lib/**"
+      - "src/services/**"
+      - "docs/openapi.yaml"
+      - "scripts/check-api-contracts.mjs"
       - "package.json"
       - "package-lock.json"
       - "pnpm-lock.yaml"
@@ -44,6 +50,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -55,6 +63,12 @@ jobs:
       - name: Install dependencies
         run: npm install
 
+      - name: Check API contracts
+        run: |
+          git show "origin/${{ github.base_ref || github.event.repository.default_branch }}:docs/openapi.yaml" > "$RUNNER_TEMP/openapi-base.yaml"
+          npm run check:api-contracts
+        env:
+          API_CONTRACT_BASE_FILE: ${{ runner.temp }}/openapi-base.yaml
       - name: Lint backend
         run: npm run lint --if-present -- src/app/api src/lib
 

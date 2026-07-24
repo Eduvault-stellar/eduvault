@@ -14,7 +14,9 @@
   ],
   "private": true,
   "scripts": {
+    "predev": "node scripts/sync-openapi.mjs",
     "dev": "next dev",
+    "prebuild": "node scripts/sync-openapi.mjs",
     "build": "next build --webpack",
     "start": "next start",
     "lint": "eslint",
@@ -23,6 +25,7 @@
     "test:contracts": "hardhat test",
     "test:integration": "vitest run test/integration",
     "test:backend": "node --test tests/backend/*.test.mjs",
+    "check:api-contracts": "node scripts/check-api-contracts.mjs",
     "check:ci-env": "node scripts/validate-ci-env.mjs",
     "audit:deps": "npm audit --audit-level=critical",
     "audit:deps:high": "npm audit --audit-level=high",
