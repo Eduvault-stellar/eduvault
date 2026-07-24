@@ -18,17 +18,23 @@ function buildManifest() {
   const testnetPurchase = process.env.PURCHASE_MANAGER_CONTRACT_ID_TESTNET
     || process.env.NEXT_PUBLIC_PURCHASE_MANAGER_CONTRACT_ID
     || "";
+  const testnetTrustlessWork = process.env.TRUSTLESS_WORK_CONTRACT_ID_TESTNET
+    || process.env.NEXT_PUBLIC_TRUSTLESS_WORK_CONTRACT_ID
+    || "";
   const mainnetRegistry = process.env.MATERIAL_REGISTRY_CONTRACT_ID_MAINNET || "";
   const mainnetPurchase = process.env.PURCHASE_MANAGER_CONTRACT_ID_MAINNET || "";
+  const mainnetTrustlessWork = process.env.TRUSTLESS_WORK_CONTRACT_ID_MAINNET || "";
 
   return {
     [Networks.TESTNET]: {
       materialRegistry: testnetRegistry,
       purchaseManager: testnetPurchase,
+      trustlessWork: testnetTrustlessWork,
     },
     [Networks.PUBLIC]: {
       materialRegistry: mainnetRegistry,
       purchaseManager: mainnetPurchase,
+      trustlessWork: mainnetTrustlessWork,
     },
   };
 }
@@ -52,6 +58,9 @@ export function resolveContractKind(contractId, networkPassphrase, overrides) {
   }
   if (deployment.purchaseManager && deployment.purchaseManager === contractId) {
     return "purchaseManager";
+  }
+  if (deployment.trustlessWork && deployment.trustlessWork === contractId) {
+    return "trustlessWork";
   }
   return null;
 }
