@@ -40,7 +40,7 @@ jobs:
           cache-dependency-path: package-lock.json
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci
 
       - name: Validate CI environment configuration
         run: npm run check:ci-env
