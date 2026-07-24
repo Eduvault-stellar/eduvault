@@ -19,8 +19,14 @@ jobs:
       # These are deliberately non-production values. CI validates the same
       # required settings as a deployment without exposing repository secrets
       # to pull-request workflows.
+      #
+      # NOTE: NODE_ENV is intentionally NOT set here at the job level — `npm
+      # install` treats a globally-set NODE_ENV=production as "skip
+      # devDependencies" (eslint, vitest, etc. never get installed, breaking
+      # every later step). It's set per-step below only where it's actually
+      # needed (the CI-env validation step, which checks production-only
+      # rules).
       CI: "true"
-      NODE_ENV: production
       NEXT_PUBLIC_APP_URL: https://ci.eduvault.invalid
       MONGODB_URI: mongodb+srv://ci-user:ci-password@ci.example.invalid/eduvault-ci
       MONGODB_DB: eduvault-ci
@@ -44,6 +50,8 @@ jobs:
 
       - name: Validate CI environment configuration
         run: npm run check:ci-env
+        env:
+          NODE_ENV: production
 
       - name: Lint
         run: npm run lint
@@ -56,3 +64,6 @@ jobs:
 
       - name: Run backend tests
         run: npm run test:backend
+
+      - name: Run integration tests
+        run: npm run test:integration

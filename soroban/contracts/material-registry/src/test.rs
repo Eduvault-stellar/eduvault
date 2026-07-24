@@ -4,7 +4,7 @@ extern crate std;
 
 use super::*;
 use soroban_sdk::testutils::{Address as _, Events as _};
-use soroban_sdk::{vec, Event, IntoVal};
+use soroban_sdk::{vec, Event, IntoVal, Symbol};
 use std::format;
 
 fn install_and_init_contract(
@@ -189,6 +189,63 @@ fn registers_material_and_emits_registered_event() {
 
     assert_eq!(registered_events.events().len(), 1);
     let _ = contract_id;
+}
+
+// ============== Event Wire-Shape Test (#7 cross-check) ==============
+//
+// The test above only asserts `events().len()` — never the actual
+// topics/data a listener (src/lib/indexer/eventDecoder.js on the JS side)
+// would receive. `MaterialRegisteredEvent` is declared with
+// `#[contractevent(topics = ["material", "registered"])]` plus per-field
+// `#[topic]` markers on `material_id`/`creator` — soroban-sdk's
+// contractevent macro moves those into the event's *topics* (appended after
+// the two literal topic symbols), not into the data vec. This pins the real
+// on-chain wire shape (see the equivalent purchase.completed test in
+// purchase-manager/src/test.rs for the fuller rationale).
+#[test]
+fn material_registered_event_has_expected_topics_and_data_shape() {
+    let env = Env::default();
+    let (contract_id, client, _admin, xlm, usdc) = install_and_init_contract(&env);
+    env.mock_all_auths();
+
+    let creator = Address::generate(&env);
+    let metadata_uri_value = metadata_uri(&env);
+    let metadata_hash = bytes32(&env, 11);
+    let rights_hash = bytes32(&env, 22);
+    let quotes = default_quotes(&env, &xlm, &usdc);
+    let payout_shares = default_payout_shares(&env);
+
+    let material_id = client.register_material(
+        &creator,
+        &metadata_uri_value,
+        &metadata_hash,
+        &rights_hash,
+        &quotes,
+        &payout_shares,
+    );
+
+    // topics: material_id, creator; data: metadata_uri, metadata_hash,
+    // rights_hash, status, quotes, payout_shares — in struct declaration
+    // order, per `data_format = "vec"`.
+    let expected_topics = (
+        Symbol::new(&env, "material"),
+        Symbol::new(&env, "registered"),
+        material_id.clone(),
+        creator.clone(),
+    );
+    let expected_data = (
+        metadata_uri_value.clone(),
+        metadata_hash.clone(),
+        rights_hash.clone(),
+        MaterialStatus::Active,
+        quotes.clone(),
+        payout_shares.clone(),
+    );
+
+    assert_eq!(
+        env.events().all(),
+        std::vec![(contract_id.clone(), expected_topics.into_val(&env), expected_data.into_val(&env))]
+    );
 }
 
 #[test]

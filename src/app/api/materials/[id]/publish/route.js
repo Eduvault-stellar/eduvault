@@ -1,6 +1,7 @@
 export const dynamic = "force-dynamic";
 
 import { NextResponse } from "next/server";
+import { ObjectId } from "mongodb";
 import { getDb } from "@/lib/mongodb";
 import { getUserFromCookie } from "@/lib/api/auth";
 import { auditLog } from "@/lib/api/audit";
@@ -8,6 +9,12 @@ import {
   validatePublishRequest,
   getPublishingChecklist,
 } from "@/lib/publishing/checklist";
+
+function findMaterialById(db, materialId) {
+  return db.collection("materials").findOne({
+    _id: ObjectId.isValid(materialId) ? new ObjectId(materialId) : materialId,
+  });
+}
 
 /**
  * POST /api/materials/[id]/publish
@@ -39,7 +46,7 @@ export async function POST(request, { params }) {
 
     // ── Resolve material ──────────────────────────────────────────────────
     const db = await getDb();
-    const material = await db.collection("materials").findOne({ _id: materialId });
+    const material = await findMaterialById(db, materialId);
     if (!material) {
       auditLog({ event: "publish_not_found", route: "material-publish", method: "POST", status: 404, materialId });
       return NextResponse.json({ error: "Material not found" }, { status: 404 });
@@ -101,7 +108,7 @@ export async function POST(request, { params }) {
     }
 
     await db.collection("materials").updateOne(
-      { _id: materialId },
+      { _id: ObjectId.isValid(materialId) ? new ObjectId(materialId) : materialId },
       { $set: updatePayload }
     );
 
@@ -152,7 +159,7 @@ export async function GET(request, { params }) {
     }
 
     const db = await getDb();
-    const material = await db.collection("materials").findOne({ _id: materialId });
+    const material = await findMaterialById(db, materialId);
 
     // Return checklist even if material not found (shows all fields as missing)
     const checklist = getPublishingChecklist(material);

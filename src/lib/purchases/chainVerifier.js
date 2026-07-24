@@ -31,7 +31,7 @@ async function readPurchaseEvent(transactionHash, ledger, fetchImpl = fetch) {
     throw new PurchaseVerificationError("wrong_event", "Transaction did not emit purchase.completed");
   }
   const fields = native(event.value);
-  return { contractId: event.contractId, materialId: Buffer.from(fields[1]).toString("hex"), buyer: String(fields[2]), asset: String(fields[4]), amount: BigInt(fields[5]) };
+  return { contractId: event.contractId, materialId: Buffer.from(fields[1]).toString("hex"), buyer: String(fields[2]), asset: String(fields[4]), amount: BigInt(fields[5]).toString() };
 }
 
 export async function verifyPurchaseTransaction({ transactionHash, buyerAddress, materialId, asset, amount, rpcClient, fetchImpl }) {
@@ -50,6 +50,6 @@ export async function verifyPurchaseTransaction({ transactionHash, buyerAddress,
   if (event.buyer.toLowerCase() !== buyerAddress.toLowerCase()) throw new PurchaseVerificationError("wrong_buyer", "Purchase buyer does not match the authenticated wallet", 403);
   if (event.materialId !== String(materialId).toLowerCase()) throw new PurchaseVerificationError("wrong_material", "Purchase material does not match");
   if (asset && event.asset !== asset) throw new PurchaseVerificationError("wrong_asset", "Purchase asset does not match quote");
-  if (amount != null && event.amount !== BigInt(amount)) throw new PurchaseVerificationError("wrong_amount", "Purchase amount does not match quote");
+  if (amount != null && BigInt(event.amount) !== BigInt(amount)) throw new PurchaseVerificationError("wrong_amount", "Purchase amount does not match quote");
   return { transactionHash, ledger: transaction.ledger, ...event };
 }
