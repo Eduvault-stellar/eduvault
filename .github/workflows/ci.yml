@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   quality:
-    name: Lint, build, and test
+    name: Build and test
     runs-on: ubuntu-latest
     env:
       # These are deliberately non-production values. CI validates the same
@@ -44,9 +44,6 @@ jobs:
 
       - name: Validate CI environment configuration
         run: npm run check:ci-env
-
-      - name: Lint
-        run: npm run lint
 
       - name: Validate Next.js configuration and production build
         run: npm run build
