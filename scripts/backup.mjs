@@ -1,4 +1,3 @@
-
 #!/usr/bin/env node
 /**
  * New, comprehensive backup script for EduVault.
@@ -13,10 +12,13 @@
  */
 
 import { execFile } from "node:child_process";
-import { createReadStream, unlinkSync, statSync, writeFileSync } from "node:fs";
+import { createReadStream, createWriteStream, unlinkSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import { createGzip } from "node:zlib";
+import { pipeline } from "node:stream/promises";
+import crypto from "node:crypto";
 
 const execFileAsync = promisify(execFile);
 
@@ -40,43 +42,6 @@ function requireEnv(name) {
 }
 
 // ---------------------------------------------------------------------------
-// Main
-// ---------------------------------------------------------------------------
-async function runBackup() {
-  const MONGODB_URI = requireEnv("MONGODB_URI");
-  const ENCRYPTION_KEY = requireEnv("BACKUP_ENCRYPTION_KEY");
-  const S3_BUCKET = requireEnv("BACKUP_S3_BUCKET");
-
-  const now = new Date();
-  const datestamp = now.toISOString().replace(/[:.]/g, "-").slice(0, 19);
-  const tempDir = tmpdir();
-
-  // --- File Paths ---
-  const manifestPath = join(tempDir, `manifest-${datestamp}.json`);
-  const mongoDumpPath = join(tempDir, `eduvault-mongo-${datestamp}.gz`);
-  const bundlePath = join(tempDir, `eduvault-backup-${datestamp}.tar.gz`);
-  const encryptedBundlePath = bundlePath + ".enc";
-
-  log("info", "EduVault backup started", { datestamp });
-
-  // Step 1: Create Manifest
-  try {
-    log("info", "Generating backup manifest...");
-    const { stdout } = await execFileAsync("node", ["scripts/create-backup-manifest.mjs"]);
-    writeFileSync(manifestPath, stdout);
-    log("info", "Manifest generated successfully", { path: manifestPath });
-  } catch (err) {
-    log("error", "Failed to generate manifest", { error: err.message, stderr: err.stderr });
-    process.exit(1);
-  }
-
-  const { createGzip } = require("node:zlib");
-const { pipeline } = require("node:stream/promises");
-const crypto = require("node:crypto");
-
-// ... (logging and env validation)
-
-// ---------------------------------------------------------------------------
 // Step 2: mongodump
 // ---------------------------------------------------------------------------
 async function runMongodump(uri, path) {
@@ -91,7 +56,7 @@ async function runMongodump(uri, path) {
     log("info", "mongodump completed", { archive: path, bytes: size });
   } catch (err) {
     log("error", "mongodump failed", { error: err.message, stderr: err.stderr });
-    throw err; // Re-throw to be caught by main try/catch
+    throw err;
   }
 }
 
@@ -99,18 +64,17 @@ async function runMongodump(uri, path) {
 // Step 3: Bundle artifacts
 // ---------------------------------------------------------------------------
 async function createBundle(bundlePath, files) {
-    log("info", "Creating backup bundle", { bundle: bundlePath, files });
-    // Using tar command to create a gzipped tarball
-    const tarFiles = files.map(f => f.split('\\').pop());
-    const cwd = files[0].substring(0, files[0].lastIndexOf('\\'));
-    try {
-        await execFileAsync("tar", ["-czvf", bundlePath, ...tarFiles], { cwd });
-        const size = statSync(bundlePath).size;
-        log("info", "Bundle created successfully", { bundle: bundlePath, bytes: size });
-    } catch (err) {
-        log("error", "Failed to create bundle", { error: err.message, stderr: err.stderr });
-        throw err;
-    }
+  log("info", "Creating backup bundle", { bundle: bundlePath, files });
+  try {
+    const fileNames = files.map(f => f.split("/").pop());
+    const cwd = files[0].substring(0, files[0].lastIndexOf("/"));
+    await execFileAsync("tar", ["-czvf", bundlePath, ...fileNames], { cwd });
+    const size = statSync(bundlePath).size;
+    log("info", "Bundle created successfully", { bundle: bundlePath, bytes: size });
+  } catch (err) {
+    log("error", "Failed to create bundle", { error: err.message, stderr: err.stderr });
+    throw err;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -118,9 +82,8 @@ async function createBundle(bundlePath, files) {
 // ---------------------------------------------------------------------------
 async function encryptBundle(inputPath, outputPath, key) {
   log("info", "Encrypting bundle", { input: inputPath, output: outputPath });
-  const iv = crypto.randomBytes(12); // GCM standard IV size
+  const iv = crypto.randomBytes(12);
   const salt = crypto.randomBytes(64);
-  const authTagLength = 16;
 
   const derivedKey = crypto.pbkdf2Sync(key, salt, 100000, 32, "sha512");
   const cipher = crypto.createCipheriv("aes-256-gcm", derivedKey, iv);
@@ -134,7 +97,8 @@ async function encryptBundle(inputPath, outputPath, key) {
   await pipeline(input, cipher, output);
 
   const authTag = cipher.getAuthTag();
-  output.end(authTag);
+  output.write(authTag);
+  output.end();
 
   log("info", "Encryption complete", { output: outputPath });
 }
@@ -145,7 +109,9 @@ async function encryptBundle(inputPath, outputPath, key) {
 async function uploadToS3(bucket, key, path) {
   let S3Client, PutObjectCommand;
   try {
-    ({ S3Client, PutObjectCommand } = await import("@aws-sdk/client-s3"));
+    const aws = await import("@aws-sdk/client-s3");
+    S3Client = aws.S3Client;
+    PutObjectCommand = aws.PutObjectCommand;
   } catch {
     log("warn", "@aws-sdk/client-s3 not installed — skipping S3 upload. Install it to enable off-site storage.");
     return;
@@ -173,7 +139,7 @@ async function uploadToS3(bucket, key, path) {
         Bucket: bucket,
         Key: key,
         Body: createReadStream(path),
-        ContentType: "application/octet-stream", // It's an encrypted binary file
+        ContentType: "application/octet-stream",
         Metadata: {
           source: "eduvault-backup-script",
           created: new Date().toISOString(),
@@ -206,12 +172,35 @@ function cleanup(files) {
 // Main
 // ---------------------------------------------------------------------------
 async function runBackup() {
-  // ... (env validation and path setup)
+  const MONGODB_URI = requireEnv("MONGODB_URI");
+  const ENCRYPTION_KEY = requireEnv("BACKUP_ENCRYPTION_KEY");
+  const S3_BUCKET = requireEnv("BACKUP_S3_BUCKET");
+
+  const now = new Date();
+  const datestamp = now.toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const tempDir = tmpdir();
+
+  // --- File Paths ---
+  const manifestPath = join(tempDir, `manifest-${datestamp}.json`);
+  const mongoDumpPath = join(tempDir, `eduvault-mongo-${datestamp}.gz`);
+  const bundlePath = join(tempDir, `eduvault-backup-${datestamp}.tar.gz`);
+  const encryptedBundlePath = bundlePath + ".enc";
+
+  log("info", "EduVault backup started", { datestamp });
 
   const filesToCleanup = [];
 
   try {
-    // ... (Step 1: Create Manifest)
+    // Step 1: Create Manifest
+    try {
+      log("info", "Generating backup manifest...");
+      const { stdout } = await execFileAsync("node", ["scripts/create-backup-manifest.mjs"]);
+      writeFileSync(manifestPath, stdout);
+      log("info", "Manifest generated successfully", { path: manifestPath });
+    } catch (err) {
+      log("error", "Failed to generate manifest", { error: err.message, stderr: err.stderr });
+      throw err;
+    }
     filesToCleanup.push(manifestPath);
 
     // Step 2: Run mongodump
@@ -227,9 +216,10 @@ async function runBackup() {
     filesToCleanup.push(encryptedBundlePath);
 
     // Step 5: Upload to S3
-    const s3Key = `backups/${datestamp.slice(0, 7)}/${encryptedBundlePath.split('\\').pop()}`;
+    const s3Key = `backups/${datestamp.slice(0, 7)}/${encryptedBundlePath.split("/").pop()}`;
     await uploadToS3(S3_BUCKET, s3Key, encryptedBundlePath);
 
+    log("info", "EduVault backup finished successfully");
   } catch (err) {
     log("error", "Backup process failed", { error: err.message });
     process.exit(1);
@@ -237,13 +227,6 @@ async function runBackup() {
     // Step 6: Cleanup
     cleanup(filesToCleanup);
   }
-
-  log("info", "EduVault backup finished successfully");
-}
-// ... (main execution)
-
-
-  log("info", "EduVault backup finished successfully");
 }
 
 (async () => {
