@@ -126,6 +126,52 @@ export const EVENT_SCHEMAS = Object.freeze({
       { name: "amount", type: "any" },
     ],
   },
+  "escrow.funded": {
+    contract: "trustlessWork",
+    schemaVersion: 1,
+    fields: [
+      { name: "escrowId", type: "bytes32Hex" },
+      { name: "engager", type: "address" },
+      { name: "amount", type: "i128" },
+      { name: "asset", type: "address" },
+    ],
+  },
+  "escrow.released": {
+    contract: "trustlessWork",
+    schemaVersion: 1,
+    fields: [
+      { name: "escrowId", type: "bytes32Hex" },
+      { name: "recipient", type: "address" },
+      { name: "amount", type: "i128" },
+    ],
+  },
+  "escrow.refunded": {
+    contract: "trustlessWork",
+    schemaVersion: 1,
+    fields: [
+      { name: "escrowId", type: "bytes32Hex" },
+      { name: "engager", type: "address" },
+      { name: "amount", type: "i128" },
+    ],
+  },
+  "escrow.disputed": {
+    contract: "trustlessWork",
+    schemaVersion: 1,
+    fields: [
+      { name: "escrowId", type: "bytes32Hex" },
+      { name: "engager", type: "address" },
+      { name: "reason", type: "string" },
+    ],
+  },
+  "milestone.approved": {
+    contract: "trustlessWork",
+    schemaVersion: 1,
+    fields: [
+      { name: "escrowId", type: "bytes32Hex" },
+      { name: "milestoneId", type: "u64" },
+      { name: "approver", type: "address" },
+    ],
+  },
 });
 
 /** `topic[0]:topic[1]` -> schema key, e.g. `"material:registered"` -> `"material.registered"`. */
