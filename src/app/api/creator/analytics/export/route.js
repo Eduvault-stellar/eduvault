@@ -1,105 +1,142 @@
 import { NextResponse } from "next/server";
 import { getDb } from "@/lib/mongodb";
-import { getUserFromCookie } from "@/lib/api/auth";
+import { withAuthorization } from "@/lib/auth/authorize";
+import { withApiHardening } from "@/lib/api/api-hardening";
+import { auditLog } from "@/lib/api/audit";
+import { errorResponse } from "@/lib/api/error-response";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-export async function GET(request) {
-  try {
-    const user = await getUserFromCookie(request);
-    if (!user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+export const GET = withApiHardening(
+  async (request) => {
+    return withAuthorization(
+      async (authorizedRequest) => {
+        const { userId } = authorizedRequest;
+        const creatorAddress = userId;
 
-    const creatorAddress = user.walletAddress || user.address || user.id;
-    if (!creatorAddress) {
-      return NextResponse.json({ error: "No wallet address on account" }, { status: 400 });
-    }
+        if (!creatorAddress) {
+          auditLog({
+            event: "creator_analytics_export_failed",
+            route: "creator/analytics/export",
+            method: "GET",
+            status: 400,
+            reason: "No wallet address on account",
+            actor: userId,
+          });
+          return errorResponse({
+            status: 400,
+            detail: "No wallet address on account",
+            instance: "/api/creator/analytics/export",
+          });
+        }
 
-    const db = await getDb();
-    
-    // 1. Fetch materials to get material IDs
-    const materials = await db.collection("materials")
-      .find({ userAddress: creatorAddress }, { projection: { materialId: 1, _id: 1 } })
-      .toArray();
+        try {
+          const db = await getDb();
 
-    const materialIdStrings = [...new Set(materials.flatMap(m => [String(m._id), String(m.materialId)].filter(Boolean)))];
+          // 1. Fetch materials to get material IDs
+          const materials = await db
+            .collection("materials")
+            .find({ userAddress: creatorAddress }, { projection: { materialId: 1, _id: 1 } })
+            .toArray();
 
-    // 2. Fetch purchases for these materials
-    let purchases = [];
-    if (materialIdStrings.length > 0) {
-      purchases = await db.collection("purchases")
-        .find({ materialId: { $in: materialIdStrings } })
-        .sort({ purchasedAt: -1, createdAt: -1 })
-        .toArray();
-    }
+          const materialIdStrings = [
+            ...new Set(materials.flatMap((m) => [String(m._id), String(m.materialId)].filter(Boolean))),
+          ];
 
-    // 3. Fetch payouts for this creator
-    const payouts = await db.collection("payouts")
-      .find({ creatorAddress })
-      .sort({ createdAt: -1 })
-      .toArray();
+          // 2. Fetch purchases for these materials
+          let purchases = [];
+          if (materialIdStrings.length > 0) {
+            purchases = await db
+              .collection("purchases")
+              .find({ materialId: { $in: materialIdStrings } })
+              .sort({ purchasedAt: -1, createdAt: -1 })
+              .toArray();
+          }
 
-    // 4. Combine and format records
-    const records = [];
+          // 3. Fetch payouts for this creator
+          const payouts = await db
+            .collection("payouts")
+            .find({ creatorAddress })
+            .sort({ createdAt: -1 })
+            .toArray();
 
-    // Map purchases
-    for (const p of purchases) {
-      const date = new Date(p.purchasedAt || p.createdAt || p.updatedAt || 0).toISOString();
-      records.push({
-        date,
-        itemId: String(p.materialId || "Unknown"),
-        buyerWallet: String(p.buyerAddress || "Unknown"),
-        price: p.amount || 0,
-        paidAsset: p.currency || "XLM",
-        status: p.status || "completed"
-      });
-    }
+          // 4. Combine and format records
+          const records = [];
 
-    // Map payouts
-    for (const p of payouts) {
-      const date = new Date(p.createdAt || p.updatedAt || 0).toISOString();
-      records.push({
-        date,
-        itemId: "Payout",
-        buyerWallet: "EduVault",
-        price: `-${p.amount || 0}`,
-        paidAsset: p.currency || "XLM",
-        status: p.status || "completed"
-      });
-    }
+          // Map purchases
+          for (const p of purchases) {
+            const date = new Date(p.purchasedAt || p.createdAt || p.updatedAt || 0).toISOString();
+            records.push({
+              date,
+              itemId: String(p.materialId || "Unknown"),
+              buyerWallet: String(p.buyerAddress || "Unknown"),
+              price: p.amount || 0,
+              paidAsset: p.currency || "XLM",
+              status: p.status || "completed",
+            });
+          }
 
-    // Sort combined records by date descending
-    records.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+          // Map payouts
+          for (const p of payouts) {
+            const date = new Date(p.createdAt || p.updatedAt || 0).toISOString();
+            records.push({
+              date,
+              itemId: "Payout",
+              buyerWallet: "EduVault",
+              price: `-${p.amount || 0}`,
+              paidAsset: p.currency || "XLM",
+              status: p.status || "completed",
+            });
+          }
 
-    // 5. Generate CSV
-    const headers = ["Date", "Item ID", "Buyer Wallet", "Price", "Paid Asset", "Status"];
-    const csvRows = [headers.join(",")];
+          // Sort combined records by date descending
+          records.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
-    for (const r of records) {
-      const row = [
-        r.date,
-        `"${r.itemId}"`,
-        `"${r.buyerWallet}"`,
-        r.price,
-        r.paidAsset,
-        r.status
-      ];
-      csvRows.push(row.join(","));
-    }
+          // 5. Generate CSV
+          const headers = ["Date", "Item ID", "Buyer Wallet", "Price", "Paid Asset", "Status"];
+          const csvRows = [headers.join(",")];
 
-    const csvString = csvRows.join("\n");
+          for (const r of records) {
+            const row = [
+              r.date,
+              `"${r.itemId}"`,
+              `"${r.buyerWallet}"`,
+              r.price,
+              r.paidAsset,
+              r.status,
+            ];
+            csvRows.push(row.join(","));
+          }
 
-    return new NextResponse(csvString, {
-      headers: {
-        "Content-Type": "text/csv",
-        "Content-Disposition": `attachment; filename="analytics-${creatorAddress}.csv"`,
+          const csvString = csvRows.join("\n");
+
+          return new NextResponse(csvString, {
+            headers: {
+              "Content-Type": "text/csv",
+              "Content-Disposition": `attachment; filename="analytics-${creatorAddress}.csv"`,
+            },
+          });
+        } catch (error) {
+          auditLog({
+            event: "creator_analytics_export_failed",
+            route: "creator/analytics/export",
+            method: "GET",
+            status: 500,
+            reason: error.message,
+            actor: userId,
+          });
+          return errorResponse({
+            status: 500,
+            detail: "Failed to export creator analytics.",
+            instance: "/api/creator/analytics/export",
+          });
+        }
       },
-    });
-
-  } catch (error) {
-    console.error("[analytics/export] GET error:", error);
-    return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
-  }
-}
+      {
+        checkOwnership: async () => true, // Any authenticated user can export their own analytics
+      }
+    )(request);
+  },
+  { route: "creator-analytics-export", rateLimit: { limit: 10, windowMs: 60_000 } }
+);
