@@ -9,6 +9,7 @@ export const COLLECTIONS = Object.freeze({
   progress: "progress",
   deadLetterEvents: "dead_letter_events",
   materialHistory: "material_history",
+  materialStatusHistory: "material_status_history",
   savedMaterials: "saved_materials",
   migrationConflicts: "_migration_conflicts",
 
@@ -282,6 +283,14 @@ export const REQUIRED_INDEXES = Object.freeze({
     {
       name: "material_history_updated_by",
       keys: { updatedBy: 1 },
+      options: {},
+    },
+  ],
+
+  material_status_history: [
+    {
+      name: "material_status_history_material_created_at",
+      keys: { materialId: 1, createdAt: -1 },
       options: {},
     },
   ],

@@ -20,9 +20,17 @@ export const mockCollections = {
         findOne: vi.fn(),
         insertOne: vi.fn(),
         updateOne: vi.fn(),
+        findOneAndUpdate: vi.fn(),
     },
     users: {
         findOne: vi.fn(),
+    },
+    material_status_history: {
+        insertOne: vi.fn(),
+        find: vi.fn(() => ({ sort: () => ({ toArray: async () => [] }) })),
+    },
+    purchases: {
+        countDocuments: vi.fn(async () => 0),
     },
 };
 

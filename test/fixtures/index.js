@@ -29,6 +29,7 @@ export const materials = {
         _id: "mat_pub_456",
         title: "Published Microeconomics Notes",
         description: "Complete notes.",
+        userAddress: users.creator.walletAddress,
         creatorWallet: users.creator.walletAddress,
         status: "published",
         price: "15",
