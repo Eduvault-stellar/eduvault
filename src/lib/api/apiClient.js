@@ -2,7 +2,11 @@
  * A lightweight fetch wrapper for public and authenticated API calls.
  */
 export async function apiClient(endpoint, { body, ...customConfig } = {}) {
-  const headers = { 'Content-Type': 'application/json' };
+  const headers = {
+    'Content-Type': 'application/json',
+    'Accept': 'application/vnd.eduvault.v1+json',
+    'X-API-Version': '1',
+  };
 
   const config = {
     method: body ? 'POST' : 'GET',
@@ -24,6 +28,12 @@ export async function apiClient(endpoint, { body, ...customConfig } = {}) {
 
   try {
     const response = await fetch(endpoint, config);
+    const serverVersion = response.headers.get('api-version');
+    if (serverVersion && serverVersion !== '1') {
+      throw Object.assign(new Error(`Unsupported server API version: ${serverVersion}`), {
+        code: 'unsupported_api_version',
+      });
+    }
     
     // Handle successful responses
     if (response.ok) {
@@ -47,19 +57,20 @@ export async function apiClient(endpoint, { body, ...customConfig } = {}) {
       errorData = { error: 'Unknown server error' };
     }
 
-    const error = new Error(errorData.error || `HTTP error! status: ${response.status}`);
+    const error = new Error(errorData.detail || errorData.error || `HTTP error! status: ${response.status}`);
     error.status = response.status;
+    error.code = errorData.code;
+    error.correlationId = errorData.correlationId;
     error.data = errorData;
     
     console.error(`API Error [${response.status}] at ${endpoint}:`, error.message);
     throw error;
   } catch (err) {
     // If it's already an error object with status, just rethrow it
-    if (err.status) throw err;
+    if (err.status || err.code) throw err;
     
     const wrappedError = new Error(err.message || 'Network request failed');
     console.error(`API Network Error at ${endpoint}:`, wrappedError.message);
     throw wrappedError;
   }
 }
-

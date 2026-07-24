@@ -2,8 +2,9 @@ export const dynamic = "force-dynamic";
 
 import { NextResponse } from 'next/server'
 import { verifyEntitlement } from '@/lib/entitlement'
+import { withApiContract } from '@/lib/api/contract'
 
-export async function GET(req) {
+async function getEntitlement(req) {
   try {
     const { searchParams } = new URL(req.url)
     const buyerAddress = searchParams.get('buyerAddress')
@@ -30,3 +31,5 @@ export async function GET(req) {
     )
   }
 }
+
+export const GET = (request) => withApiContract(request, {}, () => getEntitlement(request));

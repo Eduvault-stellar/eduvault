@@ -9,6 +9,7 @@ import { getDb } from "@/lib/mongodb";
 import { COLLECTIONS, applyTimestamps } from "./schemaContracts";
 import { currentCorrelationId, currentTraceparent } from "../telemetry/context.js";
 import { incrementCounter, recordHistogram } from "../telemetry/metrics.js";
+import { PAYLOAD_SCHEMA_VERSION } from "./payloadVersions.js";
 
 // Workflow states
 export const WORKFLOW_STATES = {
@@ -46,6 +47,7 @@ export async function createWorkflow({ type, userAddress, metadata = {} }) {
   };
 
   const workflow = applyTimestamps({
+    schemaVersion: PAYLOAD_SCHEMA_VERSION,
     type,
     userAddress: userAddress.toLowerCase(),
     state: WORKFLOW_STATES.PENDING,

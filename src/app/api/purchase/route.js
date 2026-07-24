@@ -23,8 +23,15 @@ import { verifyPurchaseTransaction, PurchaseVerificationError } from "@/lib/purc
 import { PURCHASE_STATES } from "@/lib/purchases/stateMachine";
 import { getLatestManifest } from "@/lib/provenance/registry";
 import { insertOutboxEvent, OUTBOX_EVENT_TYPES } from "@/lib/outbox";
+import { withApiContract } from "@/lib/api/contract";
 
 const STELLAR_NETWORK = process.env.NEXT_PUBLIC_STELLAR_NETWORK || "TESTNET";
+
+function publicPurchase(purchase) {
+  const safe = { ...purchase };
+  delete safe.signedXdr;
+  return safe;
+}
 
 function jsonError(error) {
   return NextResponse.json(
@@ -162,7 +169,7 @@ function buildPurchaseFields({ body, intent, versionBinding, chainReceipt }) {
   };
 }
 
-export async function GET(req) {
+async function getPurchases(req) {
   try {
     const user = await getUserFromCookie(req);
     if (!user) {
@@ -177,14 +184,14 @@ export async function GET(req) {
       .sort({ createdAt: -1 })
       .toArray();
 
-    return NextResponse.json(purchases);
+    return NextResponse.json(purchases.map(publicPurchase));
   } catch (err) {
     console.error("GET /api/purchase error:", err);
     return NextResponse.json({ error: "Server error" }, { status: 500 });
   }
 }
 
-export async function POST(req) {
+async function recordPurchase(req) {
   let session = null;
 
   try {
@@ -255,7 +262,7 @@ export async function POST(req) {
           status: 200,
           body: {
             message: "Already purchased",
-            purchase: existing,
+            purchase: publicPurchase(existing),
             access,
             transactionHash: existing.transactionHash,
           },
@@ -339,7 +346,7 @@ export async function POST(req) {
         body: {
           success: true,
           purchaseId: purchase._id,
-          purchase,
+          purchase: publicPurchase(purchase),
           access,
           transactionHash,
           checkoutIntentHash: intent.intentHash,
@@ -361,3 +368,6 @@ export async function POST(req) {
     }
   }
 }
+
+export const GET = (request) => withApiContract(request, {}, () => getPurchases(request));
+export const POST = (request) => withApiContract(request, {}, () => recordPurchase(request));

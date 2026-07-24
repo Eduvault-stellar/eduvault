@@ -23,6 +23,7 @@ import { runWithContext } from "../telemetry/context.js";
 import { withSpan } from "../telemetry/tracing.js";
 import { incrementCounter } from "../telemetry/metrics.js";
 import { logger } from "../logger.js";
+import { upcastPayload } from "./payloadVersions.js";
 
 // Configuration
 const CONFIG = {
@@ -214,7 +215,8 @@ export async function runWorker() {
 
       console.log(`[Worker] Processing ${workflows.length} workflow(s)...`);
 
-      for (const workflow of workflows) {
+      for (const storedWorkflow of workflows) {
+        const workflow = upcastPayload("workflow", storedWorkflow);
         // Resume the trace that started on the HTTP request which created
         // this workflow (stamped in createWorkflow), instead of starting a
         // disconnected new one. Falls back to a fresh trace for older
