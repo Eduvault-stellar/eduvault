@@ -86,7 +86,15 @@ test("runIndexerBatch stores cursor progress", async () => {
     },
   });
 
-  assert.deepEqual(result, { applied: 0, skipped: 0, nextCursor: "cursor-2" });
+  // An empty page is a short page, so the indexer reports itself drained and
+  // caught up rather than lagging by the full height of the chain.
+  assert.deepEqual(result, {
+    applied: 0,
+    skipped: 0,
+    nextCursor: "cursor-2",
+    ledgerLag: 0,
+    drained: true,
+  });
   assert.equal((await db.collection("sync_state").findOne({ _id: "stellar:events" })).cursor, "cursor-2");
 });
 

@@ -1,7 +1,7 @@
 import { cpus } from "node:os";
 import { MongoClient } from "mongodb";
-import { ensureChallengeIndexes } from "@/lib/auth/challenge";
-import { updatePressureSignal } from "@/lib/capacity/shed";
+import { ensureChallengeIndexes } from "./auth/challenge.js";
+import { updatePressureSignal } from "./capacity/shed.js";
 
 const globalForMongo = globalThis;
 

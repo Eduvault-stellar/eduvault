@@ -1,4 +1,4 @@
-import { getUserFromCookie } from "@/lib/api/auth";
+import { getUserFromCookie } from "../api/auth.js";
 import { normalizeWalletAddress } from "./walletAddress.js";
 
 export { normalizeWalletAddress } from "./walletAddress.js";

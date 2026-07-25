@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import connectToDatabase from "@/lib/mongodb";
 import { withAuthorization } from "@/lib/auth/authorize";
+import { getDb } from "@/lib/mongodb";
+import { validateAuth } from "@/lib/auth/session";
 
 /**
  * POST /api/verification/student
@@ -57,7 +59,7 @@ export const POST = withAuthorization(
       );
     }
 
-    const { db } = await connectToDatabase();
+    const db = await getDb();
 
     // Check for existing pending or approved verification
     const existingVerification = await db
@@ -146,6 +148,16 @@ export const GET = withAuthorization(async (request) => {
   const { userId } = request; // userId is now available from withAuthorization
   try {
     const { db } = await connectToDatabase();
+    const authResult = await validateAuth(request);
+    if (!authResult.valid) {
+      return NextResponse.json(
+        { error: "Authentication required" },
+        { status: 401 },
+      );
+    }
+
+    const { address } = authResult;
+    const db = await getDb();
 
     const verification = await db.collection("student_verifications").findOne(
       { walletAddress: userId.toLowerCase() }, // Use userId from auth

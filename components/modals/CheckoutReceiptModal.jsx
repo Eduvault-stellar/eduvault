@@ -11,6 +11,7 @@ import {
   FaSpinner,
   FaTimes,
 } from "react-icons/fa";
+import useFocusTrap from "@/hooks/useFocusTrap";
 
 const STATE_COPY = {
   signing: {

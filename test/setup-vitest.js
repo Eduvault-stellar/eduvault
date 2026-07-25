@@ -18,3 +18,10 @@ vi.mock("@opentelemetry/api", () => ({
   },
   SpanStatusCode: { OK: 0, ERROR: 1 },
 }));
+
+globalThis.localstorage = {
+  getItem: vi.fn(),
+  setItem: vi.fn(),
+  removeItem: vi.fn(),
+  clear: vi.fn(),
+};

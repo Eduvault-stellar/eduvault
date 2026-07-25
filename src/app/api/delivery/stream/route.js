@@ -25,6 +25,7 @@ import { verifyDeliveryToken } from '@/lib/delivery/token';
 import { getMaterialRecord, createUpstreamStream, parseRangeHeader } from '@/lib/delivery/stream';
 import { recordDeliveryAudit } from '@/lib/delivery/audit';
 import { errorResponse } from "@/lib/api/errorResponse";
+import { contentDispositionAttachment } from '@/lib/security/input';
 
 export const dynamic = 'force-dynamic';
 
@@ -83,6 +84,37 @@ export const GET = withApiHardening(
     if (!material || !material.cid) {
       await recordDeliveryAudit({
         event: 'delivery_stream_error',
+      // ── 7. Build response headers ───────────────────────────────────────────
+      const headers = {
+        'Content-Type': material.contentType,
+        'Content-Disposition': contentDispositionAttachment(material.fileName),
+        'Cache-Control': 'private, no-cache, no-store, must-revalidate',
+        'X-Content-Type-Options': 'nosniff',
+        'X-Frame-Options': 'DENY',
+        'Accept-Ranges': 'bytes',
+      };
+
+      let statusCode = 200;
+
+      if (range) {
+        statusCode = 206;
+        const contentStart = range.start;
+        const contentEnd =
+          range.end !== Infinity
+            ? range.end
+            : material.fileSize > 0
+              ? material.fileSize - 1
+              : 0;
+        const contentLength = contentEnd - contentStart + 1;
+        headers['Content-Range'] = `bytes ${contentStart}-${contentEnd}/${material.fileSize || contentLength}`;
+        headers['Content-Length'] = String(contentLength);
+      } else if (material.fileSize > 0) {
+        headers['Content-Length'] = String(material.fileSize);
+      }
+
+      // ── 8. Audit the stream start (non-blocking) ────────────────────────────
+      recordDeliveryAudit({
+        event: 'delivery_stream_started',
         actor: verification.payload?.ba,
         buyerAddress,
         materialId,
@@ -178,3 +210,5 @@ export const GET = withApiHardening(
     },
   }
 );
+  );
+}

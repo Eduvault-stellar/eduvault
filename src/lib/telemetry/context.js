@@ -23,10 +23,9 @@ function getStorage() {
       // Dynamic import to avoid webpack bundling node:async_hooks for client
       _AsyncLocalStorage = globalThis.AsyncLocalStorage || null;
       if (!_AsyncLocalStorage) {
-        // eslint-disable-next-line no-eval
         _AsyncLocalStorage = eval('require("async_hooks").AsyncLocalStorage');
       }
-    } catch {
+    } catch (e) {
       // Fallback for browser environments — no-op storage
       _AsyncLocalStorage = class {
         getStore() { return null; }

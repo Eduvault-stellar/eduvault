@@ -1,7 +1,8 @@
 export const dynamic = "force-dynamic";
 
 import { ObjectId } from "mongodb";
-import { NextResponse } from "next/server";
+import { getDb, getMongoClientPromise as getClientPromise } from '@/lib/mongodb';
+import { NextResponse } from 'next/server';
 import { getUserFromCookie } from "@/lib/api/auth";
 import { findMaterial } from "@/lib/checkout/discountVerifier";
 import {
@@ -12,7 +13,7 @@ import {
 } from "@/lib/checkout/intent";
 import { PURCHASE_MANAGER_CONTRACT_ID } from "@/lib/config/chain";
 import { createEntitlement } from "@/lib/entitlement";
-import { getDb, getClientPromise } from "@/lib/mongodb";
+
 import {
   getMaterialAccessStatus,
   isCompletedPurchaseStatus,
@@ -244,6 +245,11 @@ export async function POST(req) {
       const existing = await db.collection("purchases").findOne({ buyerAddress, materialId }, { session });
 
       if (existing && isCompletedPurchaseStatus(existing.status)) {
+        await createEntitlement(materialId, buyerAddress, {
+          purchaseId: String(existing._id),
+          transactionHash: existing.transactionHash,
+          session,
+        });
         const access = await getMaterialAccessStatus(db, materialId, buyerAddress);
         purchaseResponse = {
           status: 200,

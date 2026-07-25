@@ -20,9 +20,18 @@ export const COLLECTIONS = Object.freeze({
   schemaMigrations: "_schema_migrations",
   migrationLock: "_migration_lock",
 
+  // Webhooks
+  webhooks: "webhooks",
+  webhookDeliveries: "webhook_deliveries",
+
   // Content provenance.
   manifests: "material_manifests",
   digestAnchors: "manifest_digest_anchors",
+
+  // Escrow / Trustless Work.
+  escrows: "escrows",
+  milestones: "milestones",
+  payouts: "payouts",
 });
 
 export const REQUIRED_INDEXES = Object.freeze({
@@ -379,6 +388,50 @@ export const REQUIRED_INDEXES = Object.freeze({
     },
   ],
 
+  webhooks: [
+    {
+      name: "webhooks_user_id",
+      keys: { userId: 1 },
+      options: {},
+    },
+    {
+      name: "webhooks_url_unique",
+      keys: { url: 1 },
+      options: {
+        unique: true,
+      },
+    },
+  ],
+
+  webhook_deliveries: [
+    {
+      name: "webhook_deliveries_webhook_id_created_at",
+      keys: { webhookId: 1, createdAt: -1 },
+      options: {},
+    },
+    {
+      name: "webhook_deliveries_pending_next_attempt",
+      keys: { status: 1, nextAttemptAt: 1 },
+      options: {
+        partialFilterExpression: {
+          status: "pending",
+        },
+      },
+    },
+    {
+      name: "webhook_deliveries_user_id_created_at",
+      keys: { userId: 1, createdAt: -1 },
+      options: {},
+    },
+    {
+      name: "webhook_deliveries_event_id_webhook_id_unique",
+      keys: { eventId: 1, webhookId: 1 },
+      options: {
+        unique: true,
+      },
+    },
+  ],
+
   material_manifests: [
     {
       name: "manifests_material_version_unique",
@@ -414,7 +467,63 @@ export const REQUIRED_INDEXES = Object.freeze({
       },
     },
   ],
+
+  escrows: [
+    {
+      name: "escrows_escrow_id_unique",
+      keys: { escrowId: 1 },
+      options: { unique: true },
+    },
+    {
+      name: "escrows_contract_id_created_at",
+      keys: { contractId: 1, createdAt: -1 },
+      options: {},
+    },
+    {
+      name: "escrows_chain_tx_hash_unique",
+      keys: { chainTxHash: 1 },
+      options: {
+        unique: true,
+        partialFilterExpression: { chainTxHash: { $type: "string" } },
+      },
+    },
+  ],
+
+  milestones: [
+    {
+      name: "milestones_milestone_id_unique",
+      keys: { milestoneId: 1 },
+      options: { unique: true },
+    },
+    {
+      name: "milestones_escrow_id",
+      keys: { escrowId: 1 },
+      options: {},
+    },
+  ],
+
+  payouts: [
+    {
+      name: "payouts_payout_id_unique",
+      keys: { payoutId: 1 },
+      options: { unique: true },
+    },
+    {
+      name: "payouts_recipient_created_at",
+      keys: { recipient: 1, createdAt: -1 },
+      options: {},
+    },
+    {
+      name: "payouts_escrow_id",
+      keys: { escrowId: 1 },
+      options: {},
+    },
+  ],
 });
+
+// ── Material field contracts ───────────────────────────────────────────────
+
+
 
 export const COLLECTION_VALIDATORS = Object.freeze({
   users: {
@@ -634,6 +743,86 @@ export const COLLECTION_VALIDATORS = Object.freeze({
     },
   },
 
+  webhooks: {
+    $jsonSchema: {
+      bsonType: "object",
+      required: ["userId", "url", "secrets", "status", "createdAt", "updatedAt"],
+      properties: {
+        userId: {
+          bsonType: "string",
+          minLength: 1,
+        },
+        url: {
+          bsonType: "string",
+          minLength: 1,
+        },
+        secrets: {
+          bsonType: "array",
+          items: {
+            bsonType: "object",
+            required: ["key", "createdAt"],
+            properties: {
+              key: { bsonType: "string" },
+              createdAt: { bsonType: "date" },
+              expiresAt: { bsonType: ["date", "null"] },
+            },
+          },
+        },
+        status: {
+          enum: ["active", "disabled"],
+        },
+        createdAt: {
+          bsonType: "date",
+        },
+        updatedAt: {
+          bsonType: "date",
+        },
+      },
+    },
+  },
+
+  webhook_deliveries: {
+    $jsonSchema: {
+      bsonType: "object",
+      required: ["webhookId", "userId", "eventId", "eventType", "payload", "status", "attempts", "createdAt", "updatedAt"],
+      properties: {
+        webhookId: {
+          bsonType: ["string", "objectId"],
+        },
+        userId: {
+          bsonType: "string",
+          minLength: 1,
+        },
+        eventId: {
+          bsonType: "string",
+          minLength: 1,
+        },
+        eventType: {
+          bsonType: "string",
+          minLength: 1,
+        },
+        payload: {
+          bsonType: "object",
+        },
+        status: {
+          enum: ["pending", "success", "failed", "dead_letter"],
+        },
+        attempts: {
+          bsonType: "array",
+        },
+        nextAttemptAt: {
+          bsonType: ["date", "null"],
+        },
+        createdAt: {
+          bsonType: "date",
+        },
+        updatedAt: {
+          bsonType: "date",
+        },
+      },
+    },
+  },
+
   material_manifests: {
     $jsonSchema: {
       bsonType: "object",
@@ -667,6 +856,12 @@ export const COLLECTION_VALIDATORS = Object.freeze({
         },
         previousVersionDigest: {
           bsonType: ["string", "null"],
+        },
+        chainTxHash: {
+          bsonType: ["string", "null"],
+        },
+        createdAt: {
+          bsonType: "date",
         },
         verified: {
           bsonType: "bool",
@@ -716,9 +911,59 @@ export const COLLECTION_VALIDATORS = Object.freeze({
         verified: {
           bsonType: "bool",
         },
-        createdAt: {
-          bsonType: "date",
-        },
+      },
+    },
+  },
+
+  escrows: {
+    $jsonSchema: {
+      bsonType: "object",
+      required: ["escrowId", "status", "createdAt", "updatedAt"],
+      properties: {
+        escrowId: { bsonType: "string", minLength: 1 },
+        contractId: { bsonType: ["string", "null"] },
+        status: { enum: ["pending", "funded", "released", "refunded", "disputed"] },
+        amount: { bsonType: ["string", "null"] },
+        asset: { bsonType: ["string", "null"] },
+        engager: { bsonType: ["string", "null"] },
+        chainTxHash: { bsonType: ["string", "null"] },
+        createdAt: { bsonType: "date" },
+        updatedAt: { bsonType: "date" },
+      },
+    },
+  },
+
+  milestones: {
+    $jsonSchema: {
+      bsonType: "object",
+      required: ["milestoneId", "escrowId", "status", "createdAt", "updatedAt"],
+      properties: {
+        milestoneId: { bsonType: "string", minLength: 1 },
+        escrowId: { bsonType: "string", minLength: 1 },
+        status: { enum: ["pending", "approved", "rejected", "completed"] },
+        description: { bsonType: ["string", "null"] },
+        amount: { bsonType: ["string", "null"] },
+        chainTxHash: { bsonType: ["string", "null"] },
+        createdAt: { bsonType: "date" },
+        updatedAt: { bsonType: "date" },
+      },
+    },
+  },
+
+  payouts: {
+    $jsonSchema: {
+      bsonType: "object",
+      required: ["payoutId", "escrowId", "recipient", "amount", "status", "createdAt", "updatedAt"],
+      properties: {
+        payoutId: { bsonType: "string", minLength: 1 },
+        escrowId: { bsonType: "string", minLength: 1 },
+        recipient: { bsonType: "string", minLength: 1 },
+        amount: { bsonType: "string" },
+        asset: { bsonType: ["string", "null"] },
+        status: { enum: ["pending", "claimed"] },
+        chainTxHash: { bsonType: ["string", "null"] },
+        createdAt: { bsonType: "date" },
+        updatedAt: { bsonType: "date" },
       },
     },
   },

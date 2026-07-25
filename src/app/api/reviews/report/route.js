@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import connectToDatabase from "@/lib/mongodb";
+import { getDb } from "@/lib/mongodb";
+import { validateAuth } from "@/lib/auth/session";
 import { ObjectId } from "mongodb";
 import { withAuthorization } from "@/lib/auth/authorize";
 import { isAdmin } from "@/lib/auth/policies";
@@ -31,7 +33,7 @@ export const POST = withAuthorization(
       );
     }
 
-    const { db } = await connectToDatabase();
+    const db = await getDb();
 
     // Verify the review exists
     const review = await db.collection("reviews").findOne({
@@ -202,3 +204,41 @@ export const GET = withAuthorization(
     },
   },
 );
+
+    const { address } = authResult;
+    const { searchParams } = new URL(request.url);
+    const status = searchParams.get("status") || "pending";
+
+    const db = await getDb();
+
+    // Check if user is admin (you'll need to implement admin check)
+    // For now, we'll return reports created by the authenticated user
+    const query = {
+      reportedBy: address.toLowerCase(),
+      ...(status !== "all" && { status }),
+    };
+
+    const reports = await db
+      .collection("reported_reviews")
+      .find(query)
+      .sort({ reportedAt: -1 })
+      .limit(50)
+      .toArray();
+
+    return NextResponse.json({
+      success: true,
+      reports: reports.map((r) => ({
+        ...r,
+        _id: r._id.toString(),
+        reviewId: r.reviewId.toString(),
+        materialId: r.materialId.toString(),
+      })),
+    });
+  } catch (error) {
+    console.error("Error fetching reported reviews:", error);
+    return NextResponse.json(
+      { error: "Failed to fetch reported reviews", details: error.message },
+      { status: 500 },
+    );
+  }
+}
