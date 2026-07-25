@@ -31,6 +31,13 @@ on:
       - "postcss.config.mjs"
       - ".github/workflows/frontend.yml"
 
+permissions:
+  contents: read
+
+concurrency:
+  group: frontend-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/develop' }}
+
 jobs:
   frontend:
     name: Lint And Build Frontend
