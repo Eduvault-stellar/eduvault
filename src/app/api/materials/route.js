@@ -8,6 +8,7 @@ import { getUserFromCookie } from "@/lib/api/auth";
 import { getDb } from "@/lib/mongodb";
 import { ObjectId } from "mongodb";
 import { buildMaterialHistoryEntry, EDITABLE_MATERIAL_FIELDS } from "@/lib/backend/schemaContracts";
+import { MATERIAL_STATUS } from "@/lib/materials/materialLifecycle";
 
 export const runtime = "nodejs";
 
@@ -64,6 +65,7 @@ export async function POST(request) {
           userAddress,
           userAddressLower: userAddress.toLowerCase(),
           ...material,
+          status: MATERIAL_STATUS.DRAFT,
           version: 1,
           createdAt: new Date(),
           updatedAt: new Date(),

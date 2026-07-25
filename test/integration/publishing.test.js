@@ -11,6 +11,8 @@ describe('Material Publishing Flow', () => {
         mockCollections.materials.insertOne.mockClear();
         mockCollections.materials.updateOne.mockClear();
         mockCollections.materials.findOne.mockClear();
+        mockCollections.materials.findOneAndUpdate.mockClear();
+        mockCollections.material_status_history.insertOne.mockClear();
     });
 
     it('successfully creates a draft material record', async () => {
@@ -46,7 +48,10 @@ describe('Material Publishing Flow', () => {
 
     it('successfully publishes a draft material', async () => {
         mockCollections.materials.findOne.mockResolvedValue(materials.draft);
-        mockCollections.materials.updateOne.mockResolvedValue({ modifiedCount: 1 });
+        mockCollections.materials.findOneAndUpdate.mockResolvedValue({
+            ...materials.draft,
+            status: 'published',
+        });
 
         const req = new Request(`http://localhost/api/materials/${materials.draft._id}/publish`, {
             method: 'POST',
@@ -61,6 +66,26 @@ describe('Material Publishing Flow', () => {
         expect(res.status).toBe(200);
         expect(data).toHaveProperty('success', true);
         expect(data).toHaveProperty('status', 'published');
-        expect(mockCollections.materials.updateOne).toHaveBeenCalled();
+        expect(mockCollections.materials.findOneAndUpdate).toHaveBeenCalled();
+        expect(mockCollections.material_status_history.insertOne).toHaveBeenCalledWith(
+            expect.objectContaining({ previousStatus: 'draft', nextStatus: 'published' })
+        );
+    });
+
+    it('is idempotent when publishing an already-published material', async () => {
+        mockCollections.materials.findOne.mockResolvedValue(materials.published);
+
+        const req = new Request(`http://localhost/api/materials/${materials.published._id}/publish`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-user-wallet': users.creator.walletAddress },
+        });
+
+        const res = await PublishMaterial(req, { params: { id: materials.published._id } });
+        const data = await res.json();
+
+        expect(res.status).toBe(200);
+        expect(data).toHaveProperty('alreadyPublished', true);
+        expect(mockCollections.materials.findOneAndUpdate).not.toHaveBeenCalled();
+        expect(mockCollections.material_status_history.insertOne).not.toHaveBeenCalled();
     });
 });
