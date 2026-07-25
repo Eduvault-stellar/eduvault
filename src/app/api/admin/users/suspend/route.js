@@ -6,6 +6,7 @@ import { ObjectId } from 'mongodb'
 import { getDb } from '@/lib/mongodb'
 import { verifyDashboardToken } from '@/lib/auth/session'
 import { auditLog } from '@/lib/api/audit'
+import { withApiHardening } from '@/lib/api/hardening'
 import { sendSuspensionEmail, sendReactivationEmail } from '@/lib/email/suspensionNotifier'
 
 async function getAdminUser(request) {
@@ -31,6 +32,14 @@ async function getAdminUser(request) {
  * Suspends or reactivates a user account and dispatches a notification email.
  */
 export async function POST(request) {
+  return withApiHardening(
+    request,
+    { route: "admin-users-suspend", rateLimit: { limit: 10, windowMs: 60_000 } },
+    async () => suspendPost(request)
+  );
+}
+
+async function suspendPost(request) {
   try {
     const admin = await getAdminUser(request)
     if (!admin) {

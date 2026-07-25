@@ -3,6 +3,7 @@ export const maxDuration = 60;
 
 import { NextResponse } from "next/server";
 import { getDb } from "@/lib/mongodb";
+import { withApiHardening } from "@/lib/api/hardening";
 import {
   runIndexerBatch,
   createJsonRpcEventSource,
@@ -30,6 +31,14 @@ function isAuthorised(request) {
 }
 
 export async function POST(request) {
+  return withApiHardening(
+    request,
+    { route: "indexer", rateLimit: { limit: 10, windowMs: 60_000 } },
+    async () => indexerBatchPost(request)
+  );
+}
+
+async function indexerBatchPost(request) {
   if (!isAuthorised(request)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -84,6 +93,14 @@ export async function POST(request) {
 }
 
 export async function GET(request) {
+  return withApiHardening(
+    request,
+    { route: "indexer", rateLimit: { limit: 30, windowMs: 60_000 } },
+    async () => indexerStatusGet(request)
+  );
+}
+
+async function indexerStatusGet(request) {
   if (!isAuthorised(request)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }

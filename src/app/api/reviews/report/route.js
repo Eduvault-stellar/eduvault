@@ -2,12 +2,21 @@ import { NextResponse } from "next/server";
 import { getDb } from "@/lib/mongodb";
 import { validateAuth } from "@/lib/auth/session";
 import { ObjectId } from "mongodb";
+import { withApiHardening } from "@/lib/api/hardening";
 
 /**
  * POST /api/reviews/report
  * Allows creators to flag reviews on their materials for moderation
  */
 export async function POST(request) {
+  return withApiHardening(
+    request,
+    { route: "reviews-report", rateLimit: { limit: 10, windowMs: 60_000 } },
+    async () => reportReview(request)
+  );
+}
+
+async function reportReview(request) {
   try {
     // Authenticate user
     const authResult = await validateAuth(request);
@@ -145,6 +154,14 @@ export async function POST(request) {
  * Get reported reviews (admin only)
  */
 export async function GET(request) {
+  return withApiHardening(
+    request,
+    { route: "reviews-report", rateLimit: { limit: 30, windowMs: 60_000 } },
+    async () => listReportedReviews(request)
+  );
+}
+
+async function listReportedReviews(request) {
   try {
     const authResult = await validateAuth(request);
     if (!authResult.valid) {

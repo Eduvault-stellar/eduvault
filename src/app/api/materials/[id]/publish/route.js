@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 import { getDb } from "@/lib/mongodb";
 import { getUserFromCookie } from "@/lib/api/auth";
 import { auditLog } from "@/lib/api/audit";
+import { withApiHardening } from "@/lib/api/hardening";
 import {
   validatePublishRequest,
   getPublishingChecklist,
@@ -18,6 +19,14 @@ import {
  *   3. The material has all required fields populated (publishing checklist).
  */
 export async function POST(request, { params }) {
+  return withApiHardening(
+    request,
+    { route: "material-publish", rateLimit: { limit: 10, windowMs: 60_000 } },
+    async () => publishMaterial(request, params)
+  );
+}
+
+async function publishMaterial(request, params) {
   try {
     const materialId = params?.id;
     if (!materialId) {
@@ -135,6 +144,14 @@ export async function POST(request, { params }) {
  * Useful for the UI to show required/recommended fields before submission.
  */
 export async function GET(request, { params }) {
+  return withApiHardening(
+    request,
+    { route: "material-publish", rateLimit: { limit: 60, windowMs: 60_000 } },
+    async () => getPublishChecklist(request, params)
+  );
+}
+
+async function getPublishChecklist(request, params) {
   try {
     const materialId = params?.id;
     if (!materialId) {

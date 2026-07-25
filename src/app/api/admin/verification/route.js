@@ -5,6 +5,7 @@ import { NextResponse } from "next/server";
 import { getDb } from "@/lib/mongodb";
 import { getUserFromCookie } from "@/lib/api/auth";
 import { auditLog } from "@/lib/api/audit";
+import { withApiHardening } from "@/lib/api/hardening";
 
 async function getAdminUser(request) {
   const user = await getUserFromCookie(request);
@@ -13,6 +14,14 @@ async function getAdminUser(request) {
 }
 
 export async function POST(request) {
+  return withApiHardening(
+    request,
+    { route: "admin-verification", rateLimit: { limit: 10, windowMs: 60_000 } },
+    async () => verificationDecisionPost(request)
+  );
+}
+
+async function verificationDecisionPost(request) {
   try {
     const admin = await getAdminUser(request);
     if (!admin) {
@@ -97,29 +106,35 @@ export async function POST(request) {
 }
 
 export async function GET(request) {
-  try {
-    const admin = await getAdminUser(request);
-    if (!admin) {
-      return NextResponse.json(
-        { error: "Unauthorized. Admin access required." },
-        { status: 403 }
-      );
+  return withApiHardening(
+    request,
+    { route: "admin-verification", rateLimit: { limit: 30, windowMs: 60_000 } },
+    async () => {
+      try {
+        const admin = await getAdminUser(request);
+        if (!admin) {
+          return NextResponse.json(
+            { error: "Unauthorized. Admin access required." },
+            { status: 403 }
+          );
+        }
+
+        const db = await getDb();
+        const applications = await db
+          .collection("verification_applications")
+          .find({ status: "pending" })
+          .sort({ createdAt: -1 })
+          .limit(50)
+          .toArray();
+
+        return NextResponse.json({ applications });
+      } catch (error) {
+        console.error("[admin/verification] GET error:", error);
+        return NextResponse.json(
+          { error: "Internal Server Error" },
+          { status: 500 }
+        );
+      }
     }
-
-    const db = await getDb();
-    const applications = await db
-      .collection("verification_applications")
-      .find({ status: "pending" })
-      .sort({ createdAt: -1 })
-      .limit(50)
-      .toArray();
-
-    return NextResponse.json({ applications });
-  } catch (error) {
-    console.error("[admin/verification] GET error:", error);
-    return NextResponse.json(
-      { error: "Internal Server Error" },
-      { status: 500 }
-    );
-  }
+  );
 }

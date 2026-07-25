@@ -1,11 +1,20 @@
 import { NextResponse } from "next/server";
 import { getDb } from "@/lib/mongodb";
 import { getUserFromCookie } from "@/lib/api/auth";
+import { withApiHardening } from "@/lib/api/hardening";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 export async function GET(request) {
+  return withApiHardening(
+    request,
+    { route: "creator-analytics-export", rateLimit: { limit: 5, windowMs: 60_000 } },
+    async () => exportCreatorAnalytics(request)
+  );
+}
+
+async function exportCreatorAnalytics(request) {
   try {
     const user = await getUserFromCookie(request);
     if (!user) {

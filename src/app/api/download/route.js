@@ -22,6 +22,7 @@
 
 import { NextResponse } from 'next/server';
 import { verifyEntitlement } from '@/lib/entitlement';
+import { withApiHardening } from '@/lib/api/hardening';
 import { getDb } from '@/lib/mongodb';
 import { ObjectId } from 'mongodb';
 import { getManifest, getLatestManifest } from '@/lib/provenance/registry';
@@ -31,6 +32,14 @@ import { resolveAuthenticatedWallet } from '@/lib/auth/walletIdentity';
 export const dynamic = 'force-dynamic';
 
 export async function GET(request) {
+  return withApiHardening(
+    request,
+    { route: "download", rateLimit: { limit: 60, windowMs: 60_000 } },
+    () => handleDownload(request)
+  );
+}
+
+async function handleDownload(request) {
   const { searchParams } = new URL(request.url);
   const materialId = searchParams.get('materialId') ?? '';
   const identity = await resolveAuthenticatedWallet(request);

@@ -1,12 +1,21 @@
 import { NextResponse } from "next/server";
 import { getDb } from "@/lib/mongodb";
 import { validateAuth } from "@/lib/auth/session";
+import { withApiHardening } from "@/lib/api/hardening";
 
 /**
  * POST /api/verification/student
  * Submit student verification application with documents
  */
 export async function POST(request) {
+  return withApiHardening(
+    request,
+    { route: "verification-student", rateLimit: { limit: 5, windowMs: 60 * 60_000 } },
+    async () => submitStudentVerification(request)
+  );
+}
+
+async function submitStudentVerification(request) {
   try {
     // Authenticate user
     const authResult = await validateAuth(request);
@@ -158,6 +167,14 @@ export async function POST(request) {
  * Check student verification status for authenticated user
  */
 export async function GET(request) {
+  return withApiHardening(
+    request,
+    { route: "verification-student", rateLimit: { limit: 30, windowMs: 60_000 } },
+    async () => getStudentVerificationStatus(request)
+  );
+}
+
+async function getStudentVerificationStatus(request) {
   try {
     const authResult = await validateAuth(request);
     if (!authResult.valid) {

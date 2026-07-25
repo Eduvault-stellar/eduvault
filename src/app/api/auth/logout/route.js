@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { getUserFromCookie } from '@/lib/api/auth';
 import { revokeRefreshTokenFamilyByToken, revokeRefreshTokensForUser } from '@/lib/auth/tokenService';
 import { auditLog } from '@/lib/api/audit';
+import { withApiHardening } from '@/lib/api/hardening';
 
 function getRefreshTokenFromCookie(request) {
   const cookieHeader = request.headers.get('cookie') || '';
@@ -10,6 +11,14 @@ function getRefreshTokenFromCookie(request) {
 }
 
 export async function POST(request) {
+  return withApiHardening(
+    request,
+    { route: "auth-logout", rateLimit: { limit: 30, windowMs: 60_000 } },
+    async () => logoutPost(request)
+  );
+}
+
+async function logoutPost(request) {
   try {
     const user = await getUserFromCookie(request);
     const refreshToken = getRefreshTokenFromCookie(request);

@@ -8,18 +8,22 @@ import { withSpan } from "@/lib/telemetry/tracing";
 import { incrementCounter, recordHistogram } from "@/lib/telemetry/metrics";
 import { acquireSlot } from "@/lib/capacity/concurrency";
 import { preRequestShed } from "@/lib/capacity/shed";
-import { getRouteBudget } from "@/lib/capacity/budgets";
+import { resolveRouteBudget } from "@/lib/capacity/budgets";
 import { createDisconnectSignal } from "@/lib/capacity/backpressure";
+import { resolveTrustedClientIp } from "@/lib/security/clientAddress";
 
 function clientKey(request) {
-  const forwardedFor = process.env.TRUST_PROXY === "true" ? request.headers.get("x-forwarded-for") : null;
-  return forwardedFor?.split(",")[0]?.trim() || request.headers.get("x-real-ip") || "local";
+  return resolveTrustedClientIp(request, { fallback: "local" });
 }
 
 export async function withApiHardening(request, options, handler) {
   const route = options.route;
   const method = request.method || "GET";
-  const budget = getRouteBudget(method, route);
+  // Capacity limiters (shed/concurrency/budgets) are keyed off the actual
+  // request path — `route` is a human-readable label used for telemetry and
+  // audit logs, and rarely matches the "/api/..." keys those limiters use.
+  const pathname = request.nextUrl?.pathname || new URL(request.url).pathname;
+  const budget = resolveRouteBudget(method, { pathname, label: route });
 
   return runWithContext(
     {
@@ -29,7 +33,7 @@ export async function withApiHardening(request, options, handler) {
     },
     async () => {
       // ── Load shedding check ────────────────────────────────────────
-      const { shed, response: shedResponse } = preRequestShed(method, route);
+      const { shed, response: shedResponse } = preRequestShed(method, pathname);
       if (shed && shedResponse) {
         auditLog({ event: "load_shed", route, method, status: shedResponse.status });
         incrementCounter("http_requests_total", { route, method, outcome: "load_shed" });
@@ -84,7 +88,7 @@ export async function withApiHardening(request, options, handler) {
       }
 
       // ── Concurrency admission ──────────────────────────────────────
-      const { acquired, release, overload } = await acquireSlot(method, route);
+      const { acquired, release, overload } = await acquireSlot(method, pathname);
 
       if (!acquired && overload) {
         auditLog({ event: "concurrency_rejected", route, method, status: overload.status });
