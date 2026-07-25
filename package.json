@@ -31,6 +31,8 @@
     "indexer:stellar": "node scripts/run-stellar-indexer.mjs",
     "indexer:stellar:once": "node scripts/run-stellar-indexer.mjs once",
     "indexer:stellar:recover": "node scripts/run-stellar-indexer.mjs recover",
+    "indexer:escrow": "node scripts/run-escrow-indexer.mjs",
+    "indexer:escrow:once": "node scripts/run-escrow-indexer.mjs once",
     "indexer:repair": "node scripts/repair-indexer-projections.mjs",
     "clean:intents": "node scripts/clean-stale-intents.mjs",
     "clean:intents:dry": "DRY_RUN=true node scripts/clean-stale-intents.mjs",
