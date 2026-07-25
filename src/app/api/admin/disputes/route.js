@@ -5,6 +5,7 @@ import { NextResponse } from "next/server";
 import { getDb } from "@/lib/mongodb";
 import { withAuthorization } from "@/lib/auth/authorize";
 import { isAdmin } from "@/lib/auth/policies";
+import { errorResponse } from "@/lib/api/errorResponse";
 
 export const GET = withAuthorization(
   async (request) => {
@@ -20,7 +21,7 @@ export const GET = withAuthorization(
       return NextResponse.json({ disputes });
     } catch (error) {
       console.error("[admin/disputes] GET error:", error);
-      return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
+      return errorResponse("Internal Server Error", 500);
     }
   },
   {
@@ -36,7 +37,7 @@ export const PATCH = withAuthorization(
       const { userId } = request;
       const { disputeId, status, resolution } = await request.json();
       if (!disputeId || !status) {
-        return NextResponse.json({ error: "disputeId and status are required" }, { status: 400 });
+        return errorResponse("disputeId and status are required", 400);
       }
 
       const db = await getDb();
@@ -54,13 +55,13 @@ export const PATCH = withAuthorization(
       );
 
       if (result.matchedCount === 0) {
-        return NextResponse.json({ error: "Dispute not found" }, { status: 404 });
+        return errorResponse("Dispute not found", 404);
       }
 
       return NextResponse.json({ success: true });
     } catch (error) {
       console.error("[admin/disputes] PATCH error:", error);
-      return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
+      return errorResponse("Internal Server Error", 500);
     }
   },
   {

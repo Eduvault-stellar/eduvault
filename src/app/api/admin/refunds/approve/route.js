@@ -5,6 +5,7 @@ import { auditLog } from '@/lib/api/audit';
 import { ObjectId } from 'mongodb';
 import { withAuthorization } from "@/lib/auth/authorize";
 import { isAdmin } from "@/lib/auth/policies";
+import { errorResponse } from "@/lib/api/errorResponse";
 
 export const POST = withAuthorization(
   async (request) => {
@@ -14,7 +15,7 @@ export const POST = withAuthorization(
       const { refundId } = body;
 
       if (!refundId) {
-        return NextResponse.json({ error: 'Missing refundId' }, { status: 400 });
+        return errorResponse('Missing refundId', 400);
       }
 
       const db = await getDb();
@@ -23,11 +24,11 @@ export const POST = withAuthorization(
       const refundRecord = await refundCollection.findOne({ _id: new ObjectId(refundId) });
 
       if (!refundRecord) {
-        return NextResponse.json({ error: 'Refund record not found' }, { status: 404 });
+        return errorResponse('Refund record not found', 404);
       }
 
       if (refundRecord.status === 'approved') {
-        return NextResponse.json({ error: 'Refund is already approved' }, { status: 400 });
+        return errorResponse('Refund is already approved', 400);
       }
 
       // Interact with the smart contract
@@ -63,12 +64,12 @@ export const POST = withAuthorization(
 
         return NextResponse.json({ success: true, transactionHash: onChainResult.hash });
       } else {
-        return NextResponse.json({ error: 'On-chain refund approval failed' }, { status: 500 });
+        return errorResponse('On-chain refund approval failed', 500);
       }
 
     } catch (error) {
       console.error('POST /api/admin/refunds/approve error:', error);
-      return NextResponse.json({ error: error.message || 'Server error' }, { status: 500 });
+      return errorResponse(error.message || 'Server error', 500);
     }
   },
   {

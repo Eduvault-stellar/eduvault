@@ -3,6 +3,7 @@ import { getDb } from "@/lib/mongodb";
 import { auditLog } from "@/lib/api/audit";
 import { withAuthorization } from "@/lib/auth/authorize";
 import { isAdmin } from "@/lib/auth/policies";
+import { errorResponse } from "@/lib/api/errorResponse";
 
 export const POST = withAuthorization(
   async (request) => {
@@ -12,9 +13,9 @@ export const POST = withAuthorization(
       const { applicationId, action } = body;
 
       if (!applicationId || !["approve", "reject"].includes(action)) {
-        return NextResponse.json(
-          { error: "applicationId and valid action (approve/reject) are required" },
-          { status: 400 }
+        return errorResponse(
+          "applicationId and valid action (approve/reject) are required",
+          400
         );
       }
 
@@ -24,16 +25,13 @@ export const POST = withAuthorization(
 
       const application = await applications.findOne({ _id: applicationId });
       if (!application) {
-        return NextResponse.json(
-          { error: "Application not found" },
-          { status: 404 }
-        );
+        return errorResponse("Application not found", 404);
       }
 
       if (application.status !== "pending") {
-        return NextResponse.json(
-          { error: `Application is already ${application.status}` },
-          { status: 400 }
+        return errorResponse(
+          `Application is already ${application.status}`,
+          400
         );
       }
 
@@ -75,10 +73,7 @@ export const POST = withAuthorization(
       return NextResponse.json({ success: true, status: newStatus });
     } catch (error) {
       console.error("[admin/verification] POST error:", error);
-      return NextResponse.json(
-        { error: error.message || "Internal Server Error" },
-        { status: 500 }
-      );
+      return errorResponse(error.message || "Internal Server Error", 500);
     }
   },
   {
@@ -102,10 +97,7 @@ export const GET = withAuthorization(
       return NextResponse.json({ applications });
     } catch (error) {
       console.error("[admin/verification] GET error:", error);
-      return NextResponse.json(
-        { error: "Internal Server Error" },
-        { status: 500 }
-      );
+      return errorResponse("Internal Server Error", 500);
     }
   },
   {

@@ -3,140 +3,130 @@ import { getDb } from "@/lib/mongodb";
 import { withAuthorization } from "@/lib/auth/authorize";
 import { withApiHardening } from "@/lib/api/api-hardening";
 import { auditLog } from "@/lib/api/audit";
-import { errorResponse } from "@/lib/api/error-response";
+import { errorResponse } from "@/lib/api/errorResponse";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 export const GET = withApiHardening(
-  async (request) => {
-    return withAuthorization(
-      async (authorizedRequest) => {
-        const { userId } = authorizedRequest;
-        const creatorAddress = userId;
+  withAuthorization(
+    async (authorizedRequest) => {
+      const { userId } = authorizedRequest;
+      const creatorAddress = userId;
 
-        if (!creatorAddress) {
-          auditLog({
-            event: "creator_analytics_export_failed",
-            route: "creator/analytics/export",
-            method: "GET",
-            status: 400,
-            reason: "No wallet address on account",
-            actor: userId,
-          });
-          return errorResponse({
-            status: 400,
-            detail: "No wallet address on account",
-            instance: "/api/creator/analytics/export",
-          });
-        }
-
-        try {
-          const db = await getDb();
-
-          // 1. Fetch materials to get material IDs
-          const materials = await db
-            .collection("materials")
-            .find({ userAddress: creatorAddress }, { projection: { materialId: 1, _id: 1 } })
-            .toArray();
-
-          const materialIdStrings = [
-            ...new Set(materials.flatMap((m) => [String(m._id), String(m.materialId)].filter(Boolean))),
-          ];
-
-          // 2. Fetch purchases for these materials
-          let purchases = [];
-          if (materialIdStrings.length > 0) {
-            purchases = await db
-              .collection("purchases")
-              .find({ materialId: { $in: materialIdStrings } })
-              .sort({ purchasedAt: -1, createdAt: -1 })
-              .toArray();
-          }
-
-          // 3. Fetch payouts for this creator
-          const payouts = await db
-            .collection("payouts")
-            .find({ creatorAddress })
-            .sort({ createdAt: -1 })
-            .toArray();
-
-          // 4. Combine and format records
-          const records = [];
-
-          // Map purchases
-          for (const p of purchases) {
-            const date = new Date(p.purchasedAt || p.createdAt || p.updatedAt || 0).toISOString();
-            records.push({
-              date,
-              itemId: String(p.materialId || "Unknown"),
-              buyerWallet: String(p.buyerAddress || "Unknown"),
-              price: p.amount || 0,
-              paidAsset: p.currency || "XLM",
-              status: p.status || "completed",
-            });
-          }
-
-          // Map payouts
-          for (const p of payouts) {
-            const date = new Date(p.createdAt || p.updatedAt || 0).toISOString();
-            records.push({
-              date,
-              itemId: "Payout",
-              buyerWallet: "EduVault",
-              price: `-${p.amount || 0}`,
-              paidAsset: p.currency || "XLM",
-              status: p.status || "completed",
-            });
-          }
-
-          // Sort combined records by date descending
-          records.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-
-          // 5. Generate CSV
-          const headers = ["Date", "Item ID", "Buyer Wallet", "Price", "Paid Asset", "Status"];
-          const csvRows = [headers.join(",")];
-
-          for (const r of records) {
-            const row = [
-              r.date,
-              `"${r.itemId}"`,
-              `"${r.buyerWallet}"`,
-              r.price,
-              r.paidAsset,
-              r.status,
-            ];
-            csvRows.push(row.join(","));
-          }
-
-          const csvString = csvRows.join("\n");
-
-          return new NextResponse(csvString, {
-            headers: {
-              "Content-Type": "text/csv",
-              "Content-Disposition": `attachment; filename="analytics-${creatorAddress}.csv"`,
-            },
-          });
-        } catch (error) {
-          auditLog({
-            event: "creator_analytics_export_failed",
-            route: "creator/analytics/export",
-            method: "GET",
-            status: 500,
-            reason: error.message,
-            actor: userId,
-          });
-          return errorResponse({
-            status: 500,
-            detail: "Failed to export creator analytics.",
-            instance: "/api/creator/analytics/export",
-          });
-        }
-      },
-      {
-        checkOwnership: async () => true, // Any authenticated user can export their own analytics
+      if (!creatorAddress) {
+        auditLog({
+          event: "creator_analytics_export_failed",
+          route: "creator/analytics/export",
+          method: "GET",
+          status: 400,
+          reason: "No wallet address on account",
+          actor: userId,
+        });
+        return errorResponse("No wallet address on account", 400);
       }
-    )(request);
-  },
+
+      try {
+        const db = await getDb();
+
+        // 1. Fetch materials to get material IDs
+        const materials = await db
+          .collection("materials")
+          .find({ userAddress: creatorAddress }, { projection: { materialId: 1, _id: 1 } })
+          .toArray();
+
+        const materialIdStrings = [
+          ...new Set(materials.flatMap((m) => [String(m._id), String(m.materialId)].filter(Boolean))),
+        ];
+
+        // 2. Fetch purchases for these materials
+        let purchases = [];
+        if (materialIdStrings.length > 0) {
+          purchases = await db
+            .collection("purchases")
+            .find({ materialId: { $in: materialIdStrings } })
+            .sort({ purchasedAt: -1, createdAt: -1 })
+            .toArray();
+        }
+
+        // 3. Fetch payouts for this creator
+        const payouts = await db
+          .collection("payouts")
+          .find({ creatorAddress })
+          .sort({ createdAt: -1 })
+          .toArray();
+
+        // 4. Combine and format records
+        const records = [];
+
+        // Map purchases
+        for (const p of purchases) {
+          const date = new Date(p.purchasedAt || p.createdAt || p.updatedAt || 0).toISOString();
+          records.push({
+            date,
+            itemId: String(p.materialId || "Unknown"),
+            buyerWallet: String(p.buyerAddress || "Unknown"),
+            price: p.amount || 0,
+            paidAsset: p.currency || "XLM",
+            status: p.status || "completed",
+          });
+        }
+
+        // Map payouts
+        for (const p of payouts) {
+          const date = new Date(p.createdAt || p.updatedAt || 0).toISOString();
+          records.push({
+            date,
+            itemId: "Payout",
+            buyerWallet: "EduVault",
+            price: `-${p.amount || 0}`,
+            paidAsset: p.currency || "XLM",
+            status: p.status || "completed",
+          });
+        }
+
+        // Sort combined records by date descending
+        records.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+        // 5. Generate CSV
+        const headers = ["Date", "Item ID", "Buyer Wallet", "Price", "Paid Asset", "Status"];
+        const csvRows = [headers.join(",")];
+
+        for (const r of records) {
+          const row = [
+            r.date,
+            `"${r.itemId}"`,
+            `"${r.buyerWallet}"`,
+            r.price,
+            r.paidAsset,
+            r.status,
+          ];
+          csvRows.push(row.join(","));
+        }
+
+        const csvString = csvRows.join("\n");
+
+        return new NextResponse(csvString, {
+          headers: {
+            "Content-Type": "text/csv",
+            "Content-Disposition": `attachment; filename="analytics-${creatorAddress}.csv"`,
+          },
+        });
+      } catch (error) {
+        auditLog({
+          event: "creator_analytics_export_failed",
+          route: "creator/analytics/export",
+          method: "GET",
+          status: 500,
+          reason: error.message,
+          actor: userId,
+        });
+        return errorResponse("Failed to export creator analytics.", 500);
+      }
+    },
+    {
+      checkOwnership: async () => true, // Any authenticated user can export their own analytics
+    }
+  ),
   { route: "creator-analytics-export", rateLimit: { limit: 10, windowMs: 60_000 } }
 );

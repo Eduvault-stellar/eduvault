@@ -5,6 +5,7 @@ import { auditLog } from '@/lib/api/audit'
 import { sendSuspensionEmail, sendReactivationEmail } from '@/lib/email/suspensionNotifier'
 import { withAuthorization } from "@/lib/auth/authorize";
 import { isAdmin } from "@/lib/auth/policies";
+import { errorResponse } from "@/lib/api/errorResponse";
 
 /**
  * POST /api/admin/users/suspend
@@ -26,19 +27,19 @@ export const POST = withAuthorization(
       const { userId, action, reason } = body
 
       if (!userId || !action) {
-        return NextResponse.json({ error: 'userId and action are required.' }, { status: 400 })
+        return errorResponse('userId and action are required.', 400)
       }
 
       if (!['suspend', 'reactivate'].includes(action)) {
-        return NextResponse.json({ error: 'action must be "suspend" or "reactivate".' }, { status: 400 })
+        return errorResponse('action must be "suspend" or "reactivate".', 400)
       }
 
       if (action === 'suspend' && !reason) {
-        return NextResponse.json({ error: 'reason is required when suspending an account.' }, { status: 400 })
+        return errorResponse('reason is required when suspending an account.', 400)
       }
 
       if (!ObjectId.isValid(userId)) {
-        return NextResponse.json({ error: 'Invalid userId.' }, { status: 400 })
+        return errorResponse('Invalid userId.', 400)
       }
 
       const db = await getDb()
@@ -46,7 +47,7 @@ export const POST = withAuthorization(
       const targetUser = await users.findOne({ _id: new ObjectId(userId) })
 
       if (!targetUser) {
-        return NextResponse.json({ error: 'User not found.' }, { status: 404 })
+        return errorResponse('User not found.', 404)
       }
 
       const isSuspending = action === 'suspend'
@@ -97,7 +98,7 @@ export const POST = withAuthorization(
       return NextResponse.json({ success: true, status: newStatus, emailSent })
     } catch (err) {
       auditLog({ event: 'user_suspend_error', route: 'admin/users/suspend', method: 'POST', status: 500, reason: err.message })
-      return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 })
+      return errorResponse('Internal Server Error', 500)
     }
   },
   {

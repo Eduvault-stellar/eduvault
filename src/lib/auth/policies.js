@@ -30,13 +30,12 @@ export function isPayoutProvider(payload) {
 /**
  * Checks if the authenticated user is a grantee.
  *
- * @param {string} userId The ID of the authenticated user (wallet address).
+ * @param {object} payload The authenticated user's payload (e.g., from JWT).
  * @returns {boolean} True if the user is a grantee, false otherwise.
  */
-export function isGrantee(userId) {
-  // TODO: Implement actual grantee check.
-  // For now, this is a placeholder.
-  return false;
+export function isGrantee(payload) {
+  // Assuming a 'grantee' role is indicated in the user's payload.
+  return payload && payload.role === 'grantee';
 }
 
 /**
