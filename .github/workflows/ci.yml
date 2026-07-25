@@ -39,9 +39,12 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
 
-      - name: Install dependencies
+      - name: Install Dependencies
         run: npm install --legacy-peer-deps
 
+      - name: Run Build and Tests
+        run: npm run build --if-present
+        
       - name: Validate CI environment configuration
         run: npm run check:ci-env
 
