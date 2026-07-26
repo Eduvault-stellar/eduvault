@@ -103,7 +103,7 @@ export const POST = withAuthorization(
       return NextResponse.json({ error: "Authentication required" }, { status: 401 });
     }
 
-    const userAddress = user.walletAddress || user.address || user.id;
+    // removed duplicate const
     if (!userAddress) {
       auditLog({ event: "publish_no_address", route: "material-publish", method: "POST", status: 400, actor: user.sub, materialId });
       return NextResponse.json({ error: "No wallet address on account" }, { status: 400 });

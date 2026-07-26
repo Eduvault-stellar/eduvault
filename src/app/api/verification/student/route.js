@@ -59,7 +59,7 @@ export const POST = withAuthorization(
       );
     }
 
-    const db = await getDb();
+    // removed duplicate getDb
 
     // Check for existing pending or approved verification
     const existingVerification = await db
