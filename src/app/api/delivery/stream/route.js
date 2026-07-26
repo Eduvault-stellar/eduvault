@@ -84,7 +84,11 @@ export const GET = withApiHardening(
     if (!material || !material.cid) {
       await recordDeliveryAudit({
         event: 'delivery_stream_error',
-      // ── 7. Build response headers ───────────────────────────────────────────
+      });
+      return errorResponse('Material not found.', 404);
+    }
+
+    // ── 7. Build response headers ───────────────────────────────────────────
       const headers = {
         'Content-Type': material.contentType,
         'Content-Disposition': contentDispositionAttachment(material.fileName),

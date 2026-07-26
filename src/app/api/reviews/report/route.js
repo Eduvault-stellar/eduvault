@@ -232,7 +232,7 @@ export const GET = withAuthorization(
         _id: r._id.toString(),
         reviewId: r.reviewId.toString(),
         materialId: r.materialId.toString(),
-      })),
+      }))
     });
   } catch (error) {
     console.error("Error fetching reported reviews:", error);

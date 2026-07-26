@@ -67,7 +67,6 @@ export const GET = withApiHardening(
       403
     );
   }
-  }
 
   // ── 3. Fetch material record to get the IPFS CID ──────────────────────────
 

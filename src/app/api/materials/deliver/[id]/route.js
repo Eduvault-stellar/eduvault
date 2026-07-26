@@ -128,7 +128,6 @@ export const GET = withApiHardening(
           },
         }
       );
-    },
-    {}
+    }
   );
 }

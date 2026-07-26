@@ -14,12 +14,7 @@ export const GET = withApiHardening(
 
     if (!buyerAddress || !materialId) {
       return errorResponse('Missing buyerAddress or materialId', 400);
-    },
-  {
-    route: 'entitlements',
-    rateLimit: { limit: 100, windowMs: 60_000 }, // 100 requests/min per IP
-  }
-);
+    }
 
     const { hasAccess, source } = await verifyEntitlement(materialId, buyerAddress)
 
@@ -31,3 +26,9 @@ export const GET = withApiHardening(
     console.error('Entitlement Check Error:', error)
     return errorResponse('Internal Server Error', 500);
   }
+  },
+  {
+    route: 'entitlements',
+    rateLimit: { limit: 100, windowMs: 60_000 }, // 100 requests/min per IP
+  }
+);
