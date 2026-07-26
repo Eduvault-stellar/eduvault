@@ -97,11 +97,11 @@
     "mongodb-memory-server": "^11.2.0",
     "node-localstorage": "^3.0.5",
     "tailwindcss": "^4.2.3",
-    "typescript": "^6.0.3",
+    "typescript": "^5.9.3",
     "vitest": "^4.1.8"
   },
   "overrides": {
-    "undici": "^6.13.0",
+    "undici": "^6.28.0",
     "uuid": "^14.0.0",
     "rpc-websockets": "^9.3.8",
     "jayson": "^4.3.0",
