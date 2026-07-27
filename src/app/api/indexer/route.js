@@ -2,6 +2,8 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 import { NextResponse } from "next/server";
+import { withApiHardening } from '@/lib/api/hardening';
+import { errorResponse } from '@/lib/api/errorResponse';
 import { getDb } from "@/lib/mongodb";
 import { withApiHardening } from "@/lib/api/hardening";
 import {
@@ -39,9 +41,16 @@ export async function POST(request) {
 }
 
 async function indexerBatchPost(request) {
+export const POST = withApiHardening(
+  async (request) => {
   if (!isAuthorised(request)) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+    return errorResponse("Unauthorized", 401);
+    },
+    {
+      route: 'indexer-get',
+      rateLimit: { limit: 10, windowMs: 60_000 }, // 10 requests/min per IP
+    }
+  );
 
   const contractIds = [
     PURCHASE_MANAGER_CONTRACT_ID,
@@ -59,10 +68,7 @@ async function indexerBatchPost(request) {
     db = await getDb();
   } catch (err) {
     console.error("[indexer] DB connection failed:", err);
-    return NextResponse.json(
-      { error: "Database unavailable" },
-      { status: 503 }
-    );
+    return errorResponse("Database unavailable", 503);
   }
 
   try {
@@ -85,12 +91,13 @@ async function indexerBatchPost(request) {
     });
   } catch (err) {
     console.error("[indexer] batch error:", err);
-    return NextResponse.json(
-      { error: "Indexer batch failed", detail: err.message },
-      { status: 500 }
-    );
+    return errorResponse(`Indexer batch failed: ${err.message}`, 500);
+  },
+  {
+    route: 'indexer-post',
+    rateLimit: { limit: 10, windowMs: 60_000 }, // 10 requests/min per IP
   }
-}
+);
 
 export async function GET(request) {
   return withApiHardening(
@@ -101,8 +108,10 @@ export async function GET(request) {
 }
 
 async function indexerStatusGet(request) {
+export const GET = withApiHardening(
+  async (request) => {
   if (!isAuthorised(request)) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return errorResponse("Unauthorized", 401);
   }
 
   try {
@@ -118,9 +127,6 @@ async function indexerStatusGet(request) {
       updatedAt: state?.updatedAt ?? null,
     });
   } catch (err) {
-    return NextResponse.json(
-      { error: "Failed to read sync state" },
-      { status: 500 }
-    );
+    return errorResponse("Failed to read sync state", 500);
   }
 }

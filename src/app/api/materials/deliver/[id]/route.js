@@ -3,37 +3,36 @@ export const dynamic = "force-dynamic";
 import { getDb } from "@/lib/mongodb";
 import { NextResponse } from "next/server";
 import { ObjectId } from "mongodb";
-import { getUserFromCookie } from "@/lib/api/auth";
 import { withApiHardening } from "@/lib/api/hardening";
 import { auditLog } from "@/lib/api/audit";
 import { verifyEntitlement } from "@/lib/entitlement";
 import { getIpfsUrl } from "@/lib/config/chain";
 import { normalizeBuyerAddress } from "@/lib/purchases/access";
+import { withAuthorization } from "@/lib/api/withAuthorization";
+import { errorResponse } from "@/lib/api/errorResponse";
 
-export async function GET(req, { params }) {
-  return withApiHardening(
-    req,
-    { route: "material-deliver", rateLimit: { limit: 60, windowMs: 60_000 } },
-    async () => {
+export const GET = withApiHardening(
+  async (request, { params }) => {
+    return withAuthorization(async ({ userId, fullUser }) => {
       const { id } = await params;
 
       // ── 1. Validate material ID format ─────────────────────────────────
       if (!id || !ObjectId.isValid(id)) {
         auditLog({ event: "deliver_invalid_id", route: "material-deliver", method: "GET", status: 400, materialId: id });
-        return NextResponse.json({ error: "Invalid material ID" }, { status: 400 });
+        return errorResponse("Invalid material ID", 400);
       }
 
       // ── 2. Authenticate ────────────────────────────────────────────────
-      const user = await getUserFromCookie(req);
-      if (!user) {
+      // Authentication is handled by withAuthorization HOC
+      if (!userId) {
         auditLog({ event: "deliver_auth_failed", route: "material-deliver", method: "GET", status: 401 });
-        return NextResponse.json({ error: "Authentication required" }, { status: 401 });
+        return errorResponse("Authentication required", 401);
       }
 
-      const userAddress = normalizeBuyerAddress(user.walletAddress || user.address || user.id);
+      const userAddress = normalizeBuyerAddress(fullUser.walletAddress || fullUser.address || userId);
       if (!userAddress) {
-        auditLog({ event: "deliver_no_address", route: "material-deliver", method: "GET", status: 400, actor: user.sub });
-        return NextResponse.json({ error: "No wallet address on account" }, { status: 400 });
+        auditLog({ event: "deliver_no_address", route: "material-deliver", method: "GET", status: 400, actor: userId });
+        return errorResponse("No wallet address on account", 400);
       }
 
       // ── 3. Resolve material ────────────────────────────────────────────
@@ -43,12 +42,12 @@ export async function GET(req, { params }) {
         material = await db.collection("materials").findOne({ _id: new ObjectId(id) });
       } catch (err) {
         auditLog({ event: "deliver_db_error", route: "material-deliver", method: "GET", status: 500, materialId: id });
-        return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+        return errorResponse("Internal server error", 500);
       }
 
       if (!material) {
         auditLog({ event: "deliver_not_found", route: "material-deliver", method: "GET", status: 404, materialId: id });
-        return NextResponse.json({ error: "Material not found" }, { status: 404 });
+        return errorResponse("Material not found", 404);
       }
 
       // ── 4. Verify access ───────────────────────────────────────────────
@@ -80,14 +79,11 @@ export async function GET(req, { params }) {
           route: "material-deliver",
           method: "GET",
           status: 403,
-          actor: user.sub,
+          actor: userId,
           walletAddress: userAddress,
           materialId: id,
         });
-        return NextResponse.json(
-          { error: "Access denied. You do not have permission to access this material." },
-          { status: 403 }
-        );
+        return errorResponse("Access denied. You do not have permission to access this material.", 403);
       }
 
       // ── 5. Resolve file reference ──────────────────────────────────────
@@ -98,10 +94,10 @@ export async function GET(req, { params }) {
           route: "material-deliver",
           method: "GET",
           status: 404,
-          actor: user.sub,
+          actor: userId,
           materialId: id,
         });
-        return NextResponse.json({ error: "Material has no associated file" }, { status: 404 });
+        return errorResponse("Material has no associated file", 404);
       }
 
       const fileUrl = getIpfsUrl(cid);
@@ -112,7 +108,7 @@ export async function GET(req, { params }) {
         route: "material-deliver",
         method: "GET",
         status: 200,
-        actor: user.sub,
+        actor: userId,
         walletAddress: userAddress,
         materialId: id,
       });
@@ -132,6 +128,7 @@ export async function GET(req, { params }) {
           },
         }
       );
-    }
+    },
+    {}
   );
 }

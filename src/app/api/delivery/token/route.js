@@ -15,173 +15,158 @@
  */
 
 import { NextResponse } from 'next/server';
-import { getUserFromCookie } from '@/lib/api/auth';
 import { withApiHardening } from '@/lib/api/hardening';
 import { verifyEntitlement } from '@/lib/entitlement';
 import { issueDeliveryToken } from '@/lib/delivery/token';
 import { getMaterialRecord } from '@/lib/delivery/stream';
 import { recordDeliveryAudit } from '@/lib/delivery/audit';
 import { normalizeBuyerAddress } from '@/lib/purchases/access';
+import { withAuthorization } from "@/lib/auth/authorize";
+import { errorResponse } from "@/lib/api/error-response";
 
 export const dynamic = 'force-dynamic';
 
-export async function POST(request) {
-  return withApiHardening(
-    request,
-    {
-      route: 'delivery-token',
-      rateLimit: { limit: 30, windowMs: 60_000 }, // 30 tokens/min per client
-    },
-    async () => {
-      const startedAt = Date.now();
+export const POST = withApiHardening(
+  async (request) => {
+    return withAuthorization(
+      async (authorizedRequest) => {
+        const startedAt = Date.now();
+        const { userId, fullUser } = authorizedRequest;
 
-      try {
-        // ── 1. Authenticate ──────────────────────────────────────────────────
-        const user = await getUserFromCookie(request);
-        if (!user) {
-          await recordDeliveryAudit({
-            event: 'delivery_token_denied',
-            result: 'unauthenticated',
-            statusCode: 401,
-          });
-          return NextResponse.json(
-            { error: 'Authentication required' },
-            { status: 401 }
-          );
-        }
-
-        const buyerAddress = normalizeBuyerAddress(
-          user.walletAddress || user.address || user.id
-        );
-        if (!buyerAddress) {
-          await recordDeliveryAudit({
-            event: 'delivery_token_denied',
-            actor: user.sub,
-            result: 'no_wallet_address',
-            statusCode: 400,
-          });
-          return NextResponse.json(
-            { error: 'No wallet address on account' },
-            { status: 400 }
-          );
-        }
-
-        // ── 2. Parse request body ────────────────────────────────────────────
-        let body;
         try {
-          body = await request.json();
-        } catch {
-          return NextResponse.json(
-            { error: 'Invalid JSON body' },
-            { status: 400 }
-          );
-        }
+          const buyerAddress = normalizeBuyerAddress(userId);
+          if (!buyerAddress) {
+            await recordDeliveryAudit({
+              event: 'delivery_token_denied',
+              actor: userId,
+              result: 'no_wallet_address',
+              statusCode: 400,
+            });
+            return errorResponse('No wallet address on account', 400);
+          }
 
-        const { materialId, singleUse = false, ttlSeconds } = body;
+          // ── 2. Parse request body ────────────────────────────────────────────
+          let body;
+          try {
+            body = await authorizedRequest.json();
+          } catch {
+            return errorResponse('Invalid JSON body', 400);
+          }
 
-        if (!materialId || typeof materialId !== 'string') {
-          return NextResponse.json(
-            { error: 'materialId is required' },
-            { status: 400 }
-          );
-        }
+          const { materialId, singleUse = false, ttlSeconds } = body;
 
-        // ── 3. Verify entitlement ────────────────────────────────────────────
-        const entitlement = await verifyEntitlement(materialId, buyerAddress);
-        if (!entitlement.hasAccess) {
-          await recordDeliveryAudit({
-            event: 'delivery_token_denied',
-            actor: user.sub,
+          if (!materialId || typeof materialId !== 'string') {
+            return errorResponse('materialId is required', 400);
+          }
+
+          // Entitlement check is now handled by checkOwnership in withAuthorization
+          // ── 4. Get material record (validate it exists) ──────────────────────
+          const material = await getMaterialRecord(materialId);
+          if (!material) {
+            await recordDeliveryAudit({
+              event: 'delivery_token_denied',
+              actor: userId,
+              buyerAddress,
+              materialId,
+              result: 'material_not_found',
+              statusCode: 404,
+            });
+            return errorResponse('Material not found', 404);
+          }
+
+          // ── 5. Issue delivery token ──────────────────────────────────────────
+          const clientIp =
+            request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
+            request.headers.get('x-real-ip') ||
+            null;
+
+          const { token, expiresAt } = await issueDeliveryToken({
             buyerAddress,
             materialId,
-            result: 'no_entitlement',
-            statusCode: 403,
+            ttlSeconds: ttlSeconds || 15 * 60,
+            singleUse,
+            ipRestriction: null, // IP binding is optional; set via env if needed
           });
+
+          // ── 6. Audit ─────────────────────────────────────────────────────────
+          await recordDeliveryAudit({
+            event: 'delivery_token_issued',
+            actor: userId,
+            buyerAddress,
+            materialId,
+            result: 'success',
+            statusCode: 200,
+            durationMs: Date.now() - startedAt,
+            userAgent: request.headers.get('user-agent') || null,
+            clientIp,
+          });
+
+          // ── 7. Return token (NOT the CID or gateway URL) ─────────────────────
           return NextResponse.json(
             {
-              error: 'Access denied',
-              detail: 'You do not hold an active entitlement for this material.',
+              success: true,
+              token,
+              expiresAt,
+              materialId,
+              fileName: material.fileName,
+              contentType: material.contentType,
+              fileSize: material.fileSize,
+              // No CID, no gateway URL — the token is the only access credential
             },
-            { status: 403 }
+            {
+              headers: {
+                'Cache-Control': 'private, no-store',
+                'X-Token-Expires': String(expiresAt),
+              },
+            }
           );
-        }
-
-        // ── 4. Get material record (validate it exists) ──────────────────────
-        const material = await getMaterialRecord(materialId);
-        if (!material) {
+        } catch (err) {
           await recordDeliveryAudit({
-            event: 'delivery_token_denied',
-            actor: user.sub,
-            buyerAddress,
-            materialId,
-            result: 'material_not_found',
-            statusCode: 404,
+            event: 'delivery_token_error',
+            result: 'error',
+            errorReason: err.message,
+            statusCode: 500,
+            durationMs: Date.now() - startedAt,
+            actor: userId,
           });
-          return NextResponse.json(
-            { error: 'Material not found' },
-            { status: 404 }
-          );
+          return errorResponse('Failed to issue delivery token', 500);
         }
-
-        // ── 5. Issue delivery token ──────────────────────────────────────────
-        const clientIp =
-          request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
-          request.headers.get('x-real-ip') ||
-          null;
-
-        const { token, expiresAt } = await issueDeliveryToken({
-          buyerAddress,
-          materialId,
-          ttlSeconds: ttlSeconds || 15 * 60,
-          singleUse,
-          ipRestriction: null, // IP binding is optional; set via env if needed
-        });
-
-        // ── 6. Audit ─────────────────────────────────────────────────────────
-        await recordDeliveryAudit({
-          event: 'delivery_token_issued',
-          actor: user.sub,
-          buyerAddress,
-          materialId,
-          result: 'success',
-          statusCode: 200,
-          durationMs: Date.now() - startedAt,
-          userAgent: request.headers.get('user-agent') || null,
-          clientIp,
-        });
-
-        // ── 7. Return token (NOT the CID or gateway URL) ─────────────────────
-        return NextResponse.json(
-          {
-            success: true,
-            token,
-            expiresAt,
-            materialId,
-            fileName: material.fileName,
-            contentType: material.contentType,
-            fileSize: material.fileSize,
-            // No CID, no gateway URL — the token is the only access credential
-          },
-          {
-            headers: {
-              'Cache-Control': 'private, no-store',
-              'X-Token-Expires': String(expiresAt),
-            },
+      },
+      {
+        checkOwnership: async (userId, fullUser, request) => {
+          let body;
+          try {
+            body = await request.json();
+          } catch (e) {
+            return false; // Invalid JSON, cannot determine materialId
           }
-        );
-      } catch (err) {
-        await recordDeliveryAudit({
-          event: 'delivery_token_error',
-          result: 'error',
-          errorReason: err.message,
-          statusCode: 500,
-          durationMs: Date.now() - startedAt,
-        });
-        return NextResponse.json(
-          { error: 'Failed to issue delivery token' },
-          { status: 500 }
-        );
+          const { materialId } = body;
+
+          if (!materialId || typeof materialId !== 'string') {
+            return false; // Missing materialId, cannot determine entitlement
+          }
+
+          const buyerAddress = normalizeBuyerAddress(userId);
+          if (!buyerAddress) {
+            return false; // No wallet address for user
+          }
+
+          const entitlement = await verifyEntitlement(materialId, buyerAddress);
+          if (!entitlement.hasAccess) {
+            await recordDeliveryAudit({
+              event: 'delivery_token_denied',
+              actor: userId,
+              buyerAddress,
+              materialId,
+              result: 'no_entitlement',
+              statusCode: 403,
+            });
+            return false;
+          }
+          return true;
+        },
       }
-    }
-  );
-}
+    )(request);
+  },
+  { route: 'delivery-token', rateLimit: { limit: 30, windowMs: 60_000 } }
+);
