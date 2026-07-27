@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import { getDb } from "@/lib/mongodb";
+import { getUserFromCookie } from "@/lib/api/auth";
+import { withApiHardening } from "@/lib/api/hardening";
 import { withAuthorization } from "@/lib/auth/authorize";
 import { withApiHardening } from "@/lib/api/api-hardening";
 import { auditLog } from "@/lib/api/audit";
@@ -87,6 +89,20 @@ async function safeFindArray(collection, query, options) {
   }
 }
 
+export async function GET(request) {
+  return withApiHardening(
+    request,
+    { route: "creator-analytics", rateLimit: { limit: 30, windowMs: 60_000 } },
+    async () => getCreatorAnalytics(request)
+  );
+}
+
+async function getCreatorAnalytics(request) {
+  try {
+    const user = await getUserFromCookie(request);
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
 export const GET = withApiHardening(
   withAuthorization(
     async (authorizedRequest) => {

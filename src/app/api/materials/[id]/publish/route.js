@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getDb } from "@/lib/mongodb";
 import { auditLog } from "@/lib/api/audit";
+import { withApiHardening } from "@/lib/api/hardening";
 import { getPublishingChecklist } from "@/lib/publishing/checklist";
 import { withAuthorization } from "@/lib/auth/authorize";
 import { errorResponse } from "@/lib/api/errorResponse";
@@ -22,6 +23,20 @@ export const dynamic = "force-dynamic";
  *   2. The requester owns the material.
  *   3. The material has all required fields populated (publishing checklist).
  */
+export async function POST(request, { params }) {
+  return withApiHardening(
+    request,
+    { route: "material-publish", rateLimit: { limit: 10, windowMs: 60_000 } },
+    async () => publishMaterial(request, params)
+  );
+}
+
+async function publishMaterial(request, params) {
+  try {
+    const materialId = params?.id;
+    if (!materialId) {
+      return NextResponse.json({ error: "Material not found" }, { status: 404 });
+    }
 export const POST = withAuthorization(
   async (authorizedRequest, { params }) => {
     try {
@@ -225,6 +240,20 @@ async function lookupMaterial(materialId) {
  * Returns the publishing checklist for a material without publishing it.
  * Useful for the UI to show required/recommended fields before submission.
  */
+export async function GET(request, { params }) {
+  return withApiHardening(
+    request,
+    { route: "material-publish", rateLimit: { limit: 60, windowMs: 60_000 } },
+    async () => getPublishChecklist(request, params)
+  );
+}
+
+async function getPublishChecklist(request, params) {
+  try {
+    const materialId = params?.id;
+    if (!materialId) {
+      return NextResponse.json({ error: "Material not found" }, { status: 404 });
+    }
 export const GET = withAuthorization(
   async (authorizedRequest, { params }) => {
     try {
