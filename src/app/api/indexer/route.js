@@ -77,6 +77,7 @@ export const POST = withApiHardening(
   } catch (err) {
     console.error("[indexer] batch error:", err);
     return errorResponse(`Indexer batch failed: ${err.message}`, 500);
+  }
   },
   {
     route: 'indexer-post',

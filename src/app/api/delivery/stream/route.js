@@ -82,41 +82,7 @@ export const GET = withApiHardening(
     // ── 3. Get material record with CID ─────────────────────────────────────
     const material = await getMaterialRecord(materialId);
     if (!material || !material.cid) {
-      await recordDeliveryAudit({
-        event: 'delivery_stream_error',
-      });
-      return errorResponse('Material not found.', 404);
-    }
 
-    // ── 7. Build response headers ───────────────────────────────────────────
-      const headers = {
-        'Content-Type': material.contentType,
-        'Content-Disposition': contentDispositionAttachment(material.fileName),
-        'Cache-Control': 'private, no-cache, no-store, must-revalidate',
-        'X-Content-Type-Options': 'nosniff',
-        'X-Frame-Options': 'DENY',
-        'Accept-Ranges': 'bytes',
-      };
-
-      let statusCode = 200;
-
-      if (range) {
-        statusCode = 206;
-        const contentStart = range.start;
-        const contentEnd =
-          range.end !== Infinity
-            ? range.end
-            : material.fileSize > 0
-              ? material.fileSize - 1
-              : 0;
-        const contentLength = contentEnd - contentStart + 1;
-        headers['Content-Range'] = `bytes ${contentStart}-${contentEnd}/${material.fileSize || contentLength}`;
-        headers['Content-Length'] = String(contentLength);
-      } else if (material.fileSize > 0) {
-        headers['Content-Length'] = String(material.fileSize);
-      }
-
-      // ── 8. Audit the stream start (non-blocking) ────────────────────────────
       recordDeliveryAudit({
         event: 'delivery_stream_started',
         actor: verification.payload?.ba,
