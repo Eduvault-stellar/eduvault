@@ -90,3 +90,21 @@ Run focused checks before opening a pull request, and add broader checks when yo
   or failed event receipts. The command is bounded and safe to rerun because
   projections are idempotent.
 - `node scripts/backup-mongodb.mjs` runs the MongoDB backup helper when configured.
+
+## Quality gate scripts
+
+These back the CI gates described in [ci-and-quality-gates.md](./ci-and-quality-gates.md).
+Run them before opening a PR that touches dependencies or shared library code.
+
+- `npm run check:lockfile` fails if `package-lock.json` is out of sync with
+  `package.json`, or if a competing `bun.lock` / `pnpm-lock.yaml` reappears.
+  This project standardises on npm (`packageManager` field).
+- `npm run check:licenses` fails on newly introduced GPL/AGPL/SSPL/unlicensed
+  production dependencies. Two pre-existing exceptions are allowlisted and
+  documented.
+- `npm run typecheck` runs `checkJs` over the JSDoc-annotated source. Advisory
+  only — it reports findings but does not fail CI.
+- `npm run test:smoke` runs black-box smoke checks against a deployed preview
+  (`SMOKE_BASE_URL=<url> npm run test:smoke`).
+- `npm run test:migrations` runs the migrations forward against a MongoDB
+  instance (`MONGODB_TEST_URI`, defaults to `mongodb://127.0.0.1:27017`).

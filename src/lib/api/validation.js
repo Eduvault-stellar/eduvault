@@ -243,6 +243,15 @@ export function validateMaterialPayload(body) {
 export function validateMaterialUpdatePayload(body) {
   const allowed = {};
 
+  // Lifecycle status is only ever changed through the material lifecycle
+  // state machine (publish/close/cancel routes) — never via generic update.
+  if (body.status !== undefined) {
+    throw new ValidationError(
+      "status cannot be changed via generic update; use the publish/close/cancel endpoints",
+      { field: "status" }
+    );
+  }
+
   if (body.title !== undefined) {
     const title = sanitizeString(body.title, { maxLength: 160 });
     if (!title) throw new ValidationError("Title cannot be empty", { field: "title" });
