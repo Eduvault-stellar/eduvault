@@ -1,12 +1,28 @@
 import { NextResponse } from "next/server";
 import { getDb } from "@/lib/mongodb";
 import { getPurchaseStatus } from "@/lib/indexer";
+import { resolveAuthenticatedWallet } from "@/lib/auth/walletIdentity";
 import { withAuthorization } from "@/lib/api/withAuthorization";
 import { errorResponse } from "@/lib/api/errorResponse";
 import { withApiHardening } from "@/lib/api/hardening";
 
 export const runtime = "nodejs";
 
+export async function GET(request, { params }) {
+  return withApiHardening(
+    request,
+    { route: "material-access-status", rateLimit: { limit: 60, windowMs: 60_000 } },
+    async () => getAccessStatus(request, params)
+  );
+}
+
+async function getAccessStatus(request, params) {
+  try {
+    const identity = await resolveAuthenticatedWallet(request);
+    if (!identity.ok) {
+      return NextResponse.json({ error: identity.error }, { status: identity.status });
+    }
+    const walletAddress = identity.walletAddress;
 export const GET = withApiHardening(
   async (request, { params }) => {
     return withAuthorization(async ({ userId }) => {

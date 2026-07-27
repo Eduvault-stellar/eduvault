@@ -3,6 +3,7 @@ import connectToDatabase from "@/lib/mongodb";
 import { getDb } from "@/lib/mongodb";
 import { validateAuth } from "@/lib/auth/session";
 import { ObjectId } from "mongodb";
+import { withApiHardening } from "@/lib/api/hardening";
 import { withAuthorization } from "@/lib/auth/authorize";
 import { isAdmin } from "@/lib/auth/policies";
 
@@ -10,6 +11,27 @@ import { isAdmin } from "@/lib/auth/policies";
  * POST /api/reviews/report
  * Allows creators to flag reviews on their materials for moderation
  */
+export async function POST(request) {
+  return withApiHardening(
+    request,
+    { route: "reviews-report", rateLimit: { limit: 10, windowMs: 60_000 } },
+    async () => reportReview(request)
+  );
+}
+
+async function reportReview(request) {
+  try {
+    // Authenticate user
+    const authResult = await validateAuth(request);
+    if (!authResult.valid) {
+      return NextResponse.json(
+        { error: "Authentication required" },
+        { status: 401 },
+      );
+    }
+
+    const { address } = authResult;
+    const body = await request.json();
 export const POST = withAuthorization(
   async (request) => {
     const { userId } = request; // userId is now available from withAuthorization
@@ -144,6 +166,18 @@ export const POST = withAuthorization(
  * GET /api/reviews/report
  * Get reported reviews (admin only, or user's own reports)
  */
+export async function GET(request) {
+  return withApiHardening(
+    request,
+    { route: "reviews-report", rateLimit: { limit: 30, windowMs: 60_000 } },
+    async () => listReportedReviews(request)
+  );
+}
+
+async function listReportedReviews(request) {
+  try {
+    const authResult = await validateAuth(request);
+    if (!authResult.valid) {
 export const GET = withAuthorization(
   async (request) => {
     const { userId, fullUser } = request; // userId and fullUser are now available from withAuthorization

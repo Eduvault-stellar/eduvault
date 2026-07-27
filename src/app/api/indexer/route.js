@@ -5,6 +5,7 @@ import { NextResponse } from "next/server";
 import { withApiHardening } from '@/lib/api/hardening';
 import { errorResponse } from '@/lib/api/errorResponse';
 import { getDb } from "@/lib/mongodb";
+import { withApiHardening } from "@/lib/api/hardening";
 import {
   runIndexerBatch,
   createJsonRpcEventSource,
@@ -31,6 +32,15 @@ function isAuthorised(request) {
   return false;
 }
 
+export async function POST(request) {
+  return withApiHardening(
+    request,
+    { route: "indexer", rateLimit: { limit: 10, windowMs: 60_000 } },
+    async () => indexerBatchPost(request)
+  );
+}
+
+async function indexerBatchPost(request) {
 export const POST = withApiHardening(
   async (request) => {
   if (!isAuthorised(request)) {
@@ -85,6 +95,15 @@ export const POST = withApiHardening(
   }
 );
 
+export async function GET(request) {
+  return withApiHardening(
+    request,
+    { route: "indexer", rateLimit: { limit: 30, windowMs: 60_000 } },
+    async () => indexerStatusGet(request)
+  );
+}
+
+async function indexerStatusGet(request) {
 export const GET = withApiHardening(
   async (request) => {
   if (!isAuthorised(request)) {

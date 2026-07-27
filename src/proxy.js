@@ -9,6 +9,7 @@ import { NextResponse } from "next/server";
 import { isProtectedDashboardPath, verifyDashboardToken } from "@/lib/auth/session";
 import { logger } from "@/lib/logger";
 import { slidingWindowRateLimit } from "@/lib/rateLimit";
+import { resolveTrustedClientIp } from "@/lib/security/clientAddress";
 import {
   applyBrowserSecurityHeaders,
   buildContentSecurityPolicy,
@@ -40,11 +41,7 @@ const RATE_LIMIT_RULES = [
 ];
 
 function clientIp(request) {
-  return (
-    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
-    request.headers.get("x-real-ip") ||
-    "anonymous"
-  );
+  return resolveTrustedClientIp(request, { fallback: "anonymous" });
 }
 
 function applyRateLimiting(request) {

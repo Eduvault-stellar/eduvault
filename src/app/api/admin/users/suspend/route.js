@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { ObjectId } from 'mongodb'
 import { getDb } from '@/lib/mongodb'
 import { auditLog } from '@/lib/api/audit'
+import { withApiHardening } from '@/lib/api/hardening'
 import { sendSuspensionEmail, sendReactivationEmail } from '@/lib/email/suspensionNotifier'
 import { withAuthorization } from "@/lib/auth/authorize";
 import { isAdmin } from "@/lib/auth/policies";

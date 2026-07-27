@@ -3,11 +3,33 @@ import connectToDatabase from "@/lib/mongodb";
 import { withAuthorization } from "@/lib/auth/authorize";
 import { getDb } from "@/lib/mongodb";
 import { validateAuth } from "@/lib/auth/session";
+import { withApiHardening } from "@/lib/api/hardening";
 
 /**
  * POST /api/verification/student
  * Submit student verification application with documents
  */
+export async function POST(request) {
+  return withApiHardening(
+    request,
+    { route: "verification-student", rateLimit: { limit: 5, windowMs: 60 * 60_000 } },
+    async () => submitStudentVerification(request)
+  );
+}
+
+async function submitStudentVerification(request) {
+  try {
+    // Authenticate user
+    const authResult = await validateAuth(request);
+    if (!authResult.valid) {
+      return NextResponse.json(
+        { error: "Authentication required" },
+        { status: 401 },
+      );
+    }
+
+    const { address } = authResult;
+    const formData = await request.formData();
 export const POST = withAuthorization(
   async (request) => {
     const { userId } = request; // userId is now available from withAuthorization
@@ -144,6 +166,15 @@ export const POST = withAuthorization(
  * GET /api/verification/student
  * Check student verification status for authenticated user
  */
+export async function GET(request) {
+  return withApiHardening(
+    request,
+    { route: "verification-student", rateLimit: { limit: 30, windowMs: 60_000 } },
+    async () => getStudentVerificationStatus(request)
+  );
+}
+
+async function getStudentVerificationStatus(request) {
 export const GET = withAuthorization(async (request) => {
   const { userId } = request; // userId is now available from withAuthorization
   try {
