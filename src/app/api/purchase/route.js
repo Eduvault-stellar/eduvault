@@ -289,6 +289,24 @@ async function purchasePost(req) {
     session = client.startSession();
     let purchaseResponse;
 
+        const confirmNow = new Date();
+        await db.collection('purchases').updateOne(
+          { _id: existing._id },
+          {
+            $set: {
+              status: PURCHASE_STATES.CONFIRMED,
+              transactionHash: transactionHash || existing.transactionHash || null,
+              signedXdr: signedXdr || existing.signedXdr || null,
+              amount: amount ?? existing.amount ?? null,
+              asset: asset || existing.asset || null,
+              userEmail: email || existing.userEmail || null,
+              purchasedAt: existing.purchasedAt || confirmNow,
+              confirmedAt: confirmNow,
+              updatedAt: confirmNow,
+            },
+          },
+          { session }
+        );
     await session.withTransaction(async () => {
       const existing = await db.collection("purchases").findOne({ buyerAddress, materialId }, { session });
 
@@ -311,6 +329,42 @@ async function purchasePost(req) {
         return;
       }
 
+      const purchaseNow = new Date();
+
+      const purchaseRecord = {
+        materialId,
+        buyerAddress,
+        userEmail: email || null,
+        status: paymentCompleted ? PURCHASE_STATES.CONFIRMED : PURCHASE_STATES.PENDING,
+        transactionHash: transactionHash || null,
+        signedXdr: signedXdr || null,
+        amount: amount ?? null,
+        asset: asset || null,
+        purchasedAt: paymentCompleted ? purchaseNow : null,
+        confirmedAt: paymentCompleted ? purchaseNow : null,
+        createdAt: purchaseNow,
+        updatedAt: purchaseNow,
+      };
+
+      const result = await db.collection('purchases').insertOne(purchaseRecord, { session });
+      purchaseRecord._id = result.insertedId;
+      
+      let access;
+      if (paymentCompleted) {
+        await createEntitlement(materialId, buyerAddress, {
+          purchaseId: String(result.insertedId),
+          transactionHash: transactionHash || null,
+          session,
+        });
+
+        await insertOutboxEvent(db, session, {
+          type: OUTBOX_EVENT_TYPES.SEND_PURCHASE_WEBHOOK,
+          payload: {
+            materialId,
+            buyerAddress,
+            amount: amount ?? null,
+            asset: asset || null,
+            transactionHash: transactionHash || null,
       const consumeResult = await db.collection("checkout_intents").updateOne(
         {
           _id: intentId,

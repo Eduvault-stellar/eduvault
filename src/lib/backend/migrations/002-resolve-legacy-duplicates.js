@@ -422,6 +422,8 @@ async function restoreArchivedDocuments({
   return restored;
 }
 
+// eslint-disable-next-line import/no-anonymous-default-export
+export default {
 const migration = {
   version: 2,
 

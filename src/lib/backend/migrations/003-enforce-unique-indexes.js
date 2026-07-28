@@ -61,6 +61,8 @@ async function dropUniqueIndexes(
   }
 }
 
+// eslint-disable-next-line import/no-anonymous-default-export
+export default {
 const migration = {
   version: 3,
   name: "enforce-unique-indexes",

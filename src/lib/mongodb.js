@@ -5,6 +5,7 @@ import { updatePressureSignal } from "./capacity/shed.js";
 
 const globalForMongo = globalThis;
 
+
 function parsePositiveInteger(value, fallback, variableName) {
   const parsed = Number.parseInt(value ?? String(fallback), 10);
 
@@ -154,4 +155,8 @@ export async function closeMongoConnection() {
   if (client) {
     await client.close();
   }
+}
+
+export function getClientPromise() {
+  return getMongoClientPromise();
 }

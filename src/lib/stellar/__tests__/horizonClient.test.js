@@ -16,6 +16,12 @@ const mockFeeStats = vi.fn();
 
 vi.mock('@stellar/stellar-sdk', () => ({
   Horizon: {
+    Server: vi.fn().mockImplementation(function() {
+      return {
+        submitTransaction: mockSubmit,
+        loadAccount: mockLoadAccount,
+        feeStats: mockFeeStats,
+      };
     Server: vi.fn().mockImplementation(function () {
       this.submitTransaction = mockSubmit;
       this.loadAccount = mockLoadAccount;
@@ -58,6 +64,7 @@ describe('withFailover', () => {
     );
     await expect(
       withFailover((server) => server.loadAccount('G123'), { retries: 1 })
+    ).rejects.toThrow(/All Horizon requests failed/);
     ).rejects.toThrow(/All Horizon endpoints failed after/);
   });
 
