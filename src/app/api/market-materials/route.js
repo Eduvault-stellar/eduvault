@@ -95,3 +95,49 @@ export async function GET(request) {
     }
   );
 }
+
+import { NextResponse } from 'next/server';
+import { CacheEngine } from '../../../lib/cache/engine';
+import { client } from '../../../lib/backend/db';
+
+export async function GET(request) {
+  try {
+    const { searchParams } = new URL(request.url);
+    const tenant = request.headers.get('x-tenant-id') || 'default';
+    const network = request.headers.get('x-network-id') || 'mainnet';
+    const materialId = searchParams.get('id');
+
+    if (!materialId) {
+      return NextResponse.json({ error: 'Missing material ID' }, { status: 400 });
+    }
+
+    const cacheKey = CacheEngine.buildKey('materials', {
+      tenant, network, authScope: 'public', id: materialId
+    });
+
+    const systemConfig = await client.db().collection('system_meta').findOne({ id: 'global' });
+    const currentSystemVersion = systemConfig?.version || 1;
+
+    const data = await CacheEngine.getOrSet(
+      'materials',
+      cacheKey,
+      async () => {
+        return await client.db().collection('materials').findOne({ id: materialId, tenant, network });
+      },
+      currentSystemVersion
+    );
+
+    if (!data) {
+      return NextResponse.json({ error: 'Material Not Found' }, { status: 404 });
+    }
+
+    return NextResponse.json({ data }, {
+      headers: {
+        'Cache-Control': 'public, max-age=0, must-revalidate',
+        'X-Cache-Provenance': cacheKey
+      }
+    });
+  } catch (error) {
+    return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
+  }
+}

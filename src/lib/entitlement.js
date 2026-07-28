@@ -82,14 +82,47 @@ export function decodeBoolean(xdrBase64) {
 
 export async function checkChainEntitlement(materialId, buyerAddress) {
   if (!PURCHASE_MANAGER_CONTRACT_ID || !STELLAR_RPC_URL) return null;
+import { client } from './backend/db'; // Your app's MongoDB client instance
+import { CacheEngine } from './cache/engine';
+import { getDb } from './mongodb.js';
+import { PURCHASE_MANAGER_CONTRACT_ID, STELLAR_RPC_URL, NETWORK_PASSPHRASE } from './config/chain.js';
+import { isCompletedPurchaseStatus, normalizeBuyerAddress } from './purchases/access.js';
+import {
+  Keypair,
+  TransactionBuilder,
+  BASE_FEE,
+  Contract,
+  xdr,
+  Account,
+  Address,
+  nativeToScVal,
+} from '@stellar/stellar-sdk';
+
+export async function updateEntitlement(tenant, network, userId, authScope, updates) {
+  const db = client.db();
+  const session = client.startSession();
 
   try {
+    let result;
+    await session.withTransaction(async () => {
+      // 1. Update source of truth
+      result = await db.collection('entitlements').findOneAndUpdate(
+        { tenant, network, userId, authScope },
+        { 
+          $set: { ...updates, updatedAt: new Date() },
+          $inc: { version: 1 } 
+        },
+        { returnDocument: 'after', session }
+      );
+    const xdrBlob = buildHasEntitlementXdr(materialId, buyerAddress);
+    if (!xdrBlob) return null;
+
     const body = {
       jsonrpc: '2.0',
       id: 1,
       method: 'simulateTransaction',
       params: {
-        transaction: buildHasEntitlementXdr(materialId, buyerAddress),
+        transaction: xdrBlob,
       },
     };
 
@@ -124,6 +157,62 @@ export async function checkChainEntitlement(materialId, buyerAddress) {
     logger?.error({ err: err.message }, 'Timeout or network error in checkChainEntitlement');
     return null;
   }
+}
+
+function buildHasEntitlementXdr(materialId, buyerAddress) {
+  const contractId = PURCHASE_MANAGER_CONTRACT_ID || process.env.NEXT_PUBLIC_PURCHASE_MANAGER_CONTRACT_ID;
+  if (!materialId || !buyerAddress || !contractId) return '';
+  try {
+    const contract = new Contract(contractId);
+
+    const materialIdBytes = Buffer.alloc(32);
+    const cleanId = String(materialId).replace(/^0x/, '');
+    const raw = /^[0-9a-fA-F]+$/.test(cleanId)
+      ? Buffer.from(cleanId, 'hex')
+      : Buffer.from(cleanId, 'utf-8');
+    raw.copy(materialIdBytes, Math.max(0, 32 - raw.length));
+    const materialIdScVal = xdr.ScVal.scvBytes(materialIdBytes);
+
+    let addressScVal;
+    try {
+      addressScVal = Address.fromString(buyerAddress).toScVal();
+    } catch {
+      addressScVal = nativeToScVal(buyerAddress, { type: 'address' });
+    }
+
+    const dummyAccount = new Account(
+      buyerAddress.startsWith('G')
+        ? buyerAddress
+        : 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF',
+      '0'
+    );
+
+    const tx = new TransactionBuilder(dummyAccount, {
+      fee: BASE_FEE || '100',
+      networkPassphrase: NETWORK_PASSPHRASE,
+    })
+      .addOperation(
+        contract.call('has_entitlement', materialIdScVal, addressScVal)
+      )
+      .setTimeout(30)
+      .build();
+
+    return tx.toXDR();
+  } catch (err) {
+    console.error('Failed to build has_entitlement XDR:', err);
+    return '';
+  }
+}
+
+function decodeBoolean(xdrBase64) {
+  if (!xdrBase64) return false;
+  try {
+    const scval = xdr.ScVal.fromXDR(xdrBase64, 'base64');
+    if (scval.switch().name === 'scvBool') {
+      return scval.b();
+    }
+  } catch {}
+  return xdrBase64.includes('AAAE') || xdrBase64.includes('true');
 }
 
 /**
@@ -253,6 +342,24 @@ export async function verifyEntitlementLogic(materialId, buyerAddress, { db, che
   if (onChain === true) {
     await setCache(db, materialId, normalised, true, 'chain');
     return { hasAccess: true, source: 'chain' };
+      const targetCacheKey = CacheEngine.buildKey('entitlements', {
+        tenant, network, authScope, id: userId
+      });
+
+      // 2. Queue the invalidation to the transactional outbox
+      await db.collection('cache_outbox').insertOne({
+        eventId: `evt_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`,
+        cacheKey: targetCacheKey,
+        targetRegistry: 'entitlements',
+        status: 'PENDING',
+        createdAt: new Date(),
+        attempts: 0
+      }, { session });
+    });
+
+    return result.value;
+  } finally {
+    await session.endSession();
   }
   
   if (onChain === false) {
@@ -337,3 +444,6 @@ export function requireEntitlement(handler, getMaterialId) {
     return handler(request, context, { materialId, buyerAddress, source });
   };
 }
+
+export { buildHasEntitlementXdr, checkChainEntitlement };
+

@@ -22,6 +22,10 @@ vi.mock('@stellar/stellar-sdk', () => ({
         loadAccount: mockLoadAccount,
         feeStats: mockFeeStats,
       };
+    Server: vi.fn().mockImplementation(function () {
+      this.submitTransaction = mockSubmit;
+      this.loadAccount = mockLoadAccount;
+      this.feeStats = mockFeeStats;
     }),
   },
 }));
@@ -61,6 +65,7 @@ describe('withFailover', () => {
     await expect(
       withFailover((server) => server.loadAccount('G123'), { retries: 1 })
     ).rejects.toThrow(/All Horizon requests failed/);
+    ).rejects.toThrow(/All Horizon endpoints failed after/);
   });
 
   it('does not retry on non-transient errors (e.g. 404)', async () => {

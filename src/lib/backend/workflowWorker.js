@@ -23,6 +23,7 @@ import { runWithContext } from "../telemetry/context.js";
 import { withSpan } from "../telemetry/tracing.js";
 import { incrementCounter } from "../telemetry/metrics.js";
 import { logger } from "../logger.js";
+import { upcastPayload } from "./payloadVersions.js";
 
 // Configuration
 const CONFIG = {
@@ -214,7 +215,8 @@ export async function runWorker() {
 
       console.log(`[Worker] Processing ${workflows.length} workflow(s)...`);
 
-      for (const workflow of workflows) {
+      for (const storedWorkflow of workflows) {
+        const workflow = upcastPayload("workflow", storedWorkflow);
         // Resume the trace that started on the HTTP request which created
         // this workflow (stamped in createWorkflow), instead of starting a
         // disconnected new one. Falls back to a fresh trace for older
@@ -279,3 +281,41 @@ if (process.env.RUN_WORKER === "true") {
     process.exit(1);
   });
 }
+import { client } from './db';
+import { Redis } from 'ioredis';
+
+const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379');
+
+export async function processCacheInvalidationOutbox() {
+  const db = client.db();
+  
+  const pendingEvents = await db.collection('cache_outbox')
+    .find({ status: { $in: ['PENDING', 'FAILED'] }, attempts: { $lt: 5 } })
+    .sort({ createdAt: 1 })
+    .limit(50)
+    .toArray();
+
+  for (const event of pendingEvents) {
+    try {
+      // Idempotently evict the key across Redis
+      await redis.del(event.cacheKey);
+      
+      // Update record to complete
+      await db.collection('cache_outbox').updateOne(
+        { _id: event._id },
+        { $set: { status: 'COMPLETED', processedAt: new Date() } }
+      );
+    } catch (error) {
+      await db.collection('cache_outbox').updateOne(
+        { _id: event._id },
+        { 
+          $set: { status: 'FAILED' },
+          $inc: { attempts: 1 },
+          $set: { lastError: error.message }
+        }
+      );
+    }
+  }
+}
+
+

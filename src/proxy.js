@@ -9,6 +9,12 @@ import { NextResponse } from "next/server";
 import { isProtectedDashboardPath, verifyDashboardToken } from "@/lib/auth/session";
 import { logger } from "@/lib/logger";
 import { slidingWindowRateLimit } from "@/lib/rateLimit";
+import { resolveTrustedClientIp } from "@/lib/security/clientAddress";
+import {
+  applyBrowserSecurityHeaders,
+  buildContentSecurityPolicy,
+  createCspNonce,
+} from "@/lib/security/csp";
 
 /**
  * Per-route rate limit rules.
@@ -35,11 +41,7 @@ const RATE_LIMIT_RULES = [
 ];
 
 function clientIp(request) {
-  return (
-    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
-    request.headers.get("x-real-ip") ||
-    "anonymous"
-  );
+  return resolveTrustedClientIp(request, { fallback: "anonymous" });
 }
 
 function applyRateLimiting(request) {
@@ -90,9 +92,18 @@ function applyRateLimiting(request) {
 }
 
 export async function proxy(req) {
+  const nonce = createCspNonce();
+  const csp = buildContentSecurityPolicy(nonce);
+  const forwardedHeaders = new Headers(req.headers);
+  forwardedHeaders.set("Content-Security-Policy", csp);
+  forwardedHeaders.set("x-nonce", nonce);
+
+  const next = () => NextResponse.next({ request: { headers: forwardedHeaders } });
+  const secure = (response) => applyBrowserSecurityHeaders(response, { csp });
+
   // ── Rate limiting for API routes ────────────────────────────────────────
   const rateLimitResponse = applyRateLimiting(req);
-  if (rateLimitResponse) return rateLimitResponse;
+  if (rateLimitResponse) return secure(rateLimitResponse);
 
   // ── Dashboard auth protection ───────────────────────────────────────────
   const token = req.cookies.get("auth_token")?.value;
@@ -106,24 +117,22 @@ export async function proxy(req) {
   }, 'Incoming request');
 
   if (!isProtectedDashboardPath(pathname)) {
-    return NextResponse.next();
+    return secure(next());
   }
 
-  const secret = process.env.JWT_SECRET;
-  if (!token || !secret) {
+  const authorized = token && process.env.JWT_SECRET &&
+    (await verifyDashboardToken(token, process.env.JWT_SECRET)).valid;
+  if (!authorized) {
     const url = new URL("/", req.url);
-    return NextResponse.redirect(url);
+    return secure(NextResponse.redirect(url));
   }
 
-  const verification = await verifyDashboardToken(token, secret);
-  if (!verification.valid) {
-    const url = new URL("/", req.url);
-    return NextResponse.redirect(url);
-  }
-
-  return NextResponse.next();
+  return secure(next());
 }
 
 export const config = {
-  matcher: ["/dashboard/:path*", "/api/:path*"],
+  matcher: [
+    "/((?!_next/static|_next/image|favicon.ico|robots.txt|sitemap.xml).*)",
+    "/dashboard/:path*",
+  ],
 };

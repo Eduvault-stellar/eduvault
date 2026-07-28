@@ -1,4 +1,3 @@
-
 #!/usr/bin/env node
 /**
  * Automated restore and validation script for EduVault.
@@ -18,10 +17,28 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { pipeline } from "node:stream/promises";
 import crypto from "node:crypto";
+import { MongoClient } from "mongodb";
 
 const execFileAsync = promisify(execFile);
 
-// ... (logger and env validation)
+// ---------------------------------------------------------------------------
+// Structured logger
+// ---------------------------------------------------------------------------
+function log(level, message, extra = {}) {
+  console.log(JSON.stringify({ level, message, timestamp: new Date().toISOString(), ...extra }));
+}
+
+// ---------------------------------------------------------------------------
+// Validate environment
+// ---------------------------------------------------------------------------
+function requireEnv(name) {
+  const value = process.env[name];
+  if (!value) {
+    log("error", `Missing required environment variable: ${name}`);
+    process.exit(1);
+  }
+  return value;
+}
 
 // ---------------------------------------------------------------------------
 // Step 1: Download from S3
@@ -29,7 +46,9 @@ const execFileAsync = promisify(execFile);
 async function downloadFromS3(bucket, key, path) {
   let S3Client, GetObjectCommand;
   try {
-    ({ S3Client, GetObjectCommand } = await import("@aws-sdk/client-s3"));
+    const aws = await import("@aws-sdk/client-s3");
+    S3Client = aws.S3Client;
+    GetObjectCommand = aws.GetObjectCommand;
   } catch {
     log("warn", "@aws-sdk/client-s3 not installed. Install it to enable S3 functionality.");
     return;
@@ -68,11 +87,11 @@ async function decryptBundle(inputPath, outputPath, key) {
   log("info", "Decrypting bundle", { input: inputPath, output: outputPath });
 
   const input = createReadStream(inputPath);
-  const output = createWriteStream(output);
+  const output = createWriteStream(outputPath);
 
   const salt = await readBytes(input, 64);
   const iv = await readBytes(input, 12);
-  const authTag = await readBytes(input, 16, -16); // Read last 16 bytes
+  const authTag = await readBytes(input, 16);
 
   const derivedKey = crypto.pbkdf2Sync(key, salt, 100000, 32, "sha512");
   const decipher = crypto.createDecipheriv("aes-256-gcm", derivedKey, iv);
@@ -84,27 +103,26 @@ async function decryptBundle(inputPath, outputPath, key) {
 }
 
 // Helper to read a specific number of bytes from a stream
-function readBytes(stream, numBytes, position = undefined) {
-    return new Promise((resolve, reject) => {
-        const buffer = Buffer.alloc(numBytes);
-        let bytesRead = 0;
-        const onReadable = () => {
-            let chunk;
-            while (null !== (chunk = stream.read(numBytes))) {
-                chunk.copy(buffer, bytesRead);
-                bytesRead += chunk.length;
-                if (bytesRead === numBytes) {
-                    stream.removeListener('readable', onReadable);
-                    resolve(buffer);
-                    return;
-                }
-            }
-        };
-        stream.on('readable', onReadable);
-        stream.once('error', reject);
-    });
+function readBytes(stream, numBytes) {
+  return new Promise((resolve, reject) => {
+    const buffer = Buffer.alloc(numBytes);
+    let bytesRead = 0;
+    const onReadable = () => {
+      let chunk;
+      while (null !== (chunk = stream.read(numBytes - bytesRead))) {
+        chunk.copy(buffer, bytesRead);
+        bytesRead += chunk.length;
+        if (bytesRead === numBytes) {
+          stream.removeListener("readable", onReadable);
+          resolve(buffer);
+          return;
+        }
+      }
+    };
+    stream.on("readable", onReadable);
+    stream.once("error", reject);
+  });
 }
-
 
 // ---------------------------------------------------------------------------
 // Step 3: Unpack bundle
@@ -146,8 +164,6 @@ async function validate(manifest) {
   log("info", "Validating restored data against manifest");
   let validationPassed = true;
 
-  // Validate MongoDB collections
-  const { MongoClient } = require("mongodb");
   const client = new MongoClient(requireEnv("MONGODB_URI"));
   try {
     await client.connect();
@@ -168,8 +184,6 @@ async function validate(manifest) {
     await client.close();
   }
 
-  // ... (add more validation for IPFS and Soroban)
-
   if (validationPassed) {
     log("info", "Validation successful: Restored data matches manifest");
   } else {
@@ -183,7 +197,7 @@ async function validate(manifest) {
 // ---------------------------------------------------------------------------
 async function runRestore() {
   const S3_BUCKET = requireEnv("BACKUP_S3_BUCKET");
-  const S3_KEY = requireEnv("BACKUP_S3_KEY"); // The key of the backup to restore
+  const S3_KEY = requireEnv("BACKUP_S3_KEY");
   const ENCRYPTION_KEY = requireEnv("BACKUP_ENCRYPTION_KEY");
   const MONGODB_URI = requireEnv("MONGODB_URI");
 
@@ -205,7 +219,7 @@ async function runRestore() {
     await execFileAsync("mkdir", ["-p", unpackedDir]);
     await unpackBundle(bundlePath, unpackedDir);
     const manifestPath = join(unpackedDir, "manifest.json");
-    const mongoDumpPath = join(unpackedDir, "eduvault-mongo.gz"); // This will need to be dynamic
+    const mongoDumpPath = join(unpackedDir, "eduvault-mongo.gz");
 
     // Step 4: Restore database
     await restoreDatabase(MONGODB_URI, mongoDumpPath);
@@ -214,20 +228,32 @@ async function runRestore() {
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
     await validate(manifest);
 
+    log("info", "EduVault restore and validation finished successfully");
   } catch (err) {
     log("error", "Restore process failed", { error: err.message });
     process.exit(1);
   } finally {
     // Cleanup
     filesToCleanup.forEach(f => {
-        try { unlinkSync(f) } catch (e) { /* ignore */ }
+      try {
+        unlinkSync(f);
+      } catch (e) {
+        /* ignore */
+      }
     });
-    try { execFileAsync("rm", ["-rf", unpackedDir]) } catch(e) { /* ignore */ }
+    try {
+      execFileAsync("rm", ["-rf", unpackedDir]);
+    } catch (e) {
+      /* ignore */
+    }
   }
-
-  log("info", "EduVault restore and validation finished successfully");
 }
 
 (async () => {
-  await runRestore();
+  try {
+    await runRestore();
+  } catch (err) {
+    log("error", "Restore process failed", { error: err.message });
+    process.exit(1);
+  }
 })();

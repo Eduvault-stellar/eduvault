@@ -3,8 +3,8 @@
 extern crate std;
 
 use super::*;
-use soroban_sdk::testutils::{Address as _, Events as _, Ledger};
-use soroban_sdk::{contract, contractimpl, contracttype};
+use soroban_sdk::testutils::{Address as _, Events as _, Ledger, MockAuth, MockAuthInvoke};
+use soroban_sdk::{contract, contractimpl, contracttype, IntoVal};
 use soroban_sdk::{vec, Event, Symbol};
 
 #[contracttype]
@@ -483,6 +483,142 @@ fn successful_purchase_creates_entitlement_and_distributes_multiple_payouts() {
     assert_eq!(duplicate, Err(Ok(PurchaseError::EntitlementAlreadyExists)));
 }
 
+// ============== Event Wire-Shape Tests (#7 cross-check) ==============
+//
+// The three tests above only assert `events().len()` — never the actual
+// topics/data a listener (src/lib/indexer/eventDecoder.js,
+// src/lib/purchases/chainVerifier.js on the JS side) would receive. Those
+// JS modules assume the *entire* event struct arrives positionally inside
+// the event's data vec. But every event here is declared with
+// `#[contractevent(topics = [...])]` plus per-field `#[topic]` markers, and
+// soroban-sdk's contractevent macro moves `#[topic]`-marked fields into the
+// event's *topics* (appended after the literal topic symbols) — they are
+// NOT part of the data vec. This test pins the real, on-chain wire shape so
+// that assumption is checked here rather than discovered in production.
+
+#[test]
+fn purchase_completed_event_has_expected_topics_and_data_shape() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let registry = env.register(MockRegistry, ());
+    let treasury = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let creator = Address::generate(&env);
+    let creator_payout = Address::generate(&env);
+    let collaborator = Address::generate(&env);
+    let asset = env.register(MockAsset, ());
+
+    let material_id = bytes32(&env, 7);
+    let payout_shares =
+        create_payout_shares_for(&env, &creator_payout, 8_000, &collaborator, 2_000);
+    let material = MaterialRecord {
+        material_id: material_id.clone(),
+        creator: creator.clone(),
+        paused: false,
+        status: MaterialStatus::Active,
+        quotes: vec![
+            &env,
+            AssetQuote {
+                asset: asset.clone(),
+                amount: 1_000_000,
+            },
+        ],
+        payout_shares,
+    };
+    let registry_client = MockRegistryClient::new(&env, &registry);
+    registry_client.set_material(&material_id, &material);
+
+    let (contract_id, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
+    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
+
+    // Read before the call: `purchase_internal` reads the same ledger
+    // sequence internally to compute `EscrowCreatedEvent.lock_until_ledger`.
+    let current_ledger = env.ledger().sequence();
+    let transaction_id = sample_transaction_id(&env);
+
+    let purchase_id = client.purchase(&buyer, &material_id, &asset, &1_000_000, &transaction_id);
+    assert_eq!(purchase_id, 0);
+
+    let platform_fee: i128 = 50_000; // 500 bps of 1_000_000
+    let seller_net: i128 = 950_000;
+
+    // PayoutDistributedEvent — topics: purchase_id, material_id, recipient;
+    // data: role, asset, amount, transaction_id.
+    let expected_payout_topics = (
+        Symbol::new(&env, "payout"),
+        Symbol::new(&env, "distributed"),
+        purchase_id,
+        material_id.clone(),
+        treasury.clone(),
+    );
+    let expected_payout_data = (
+        Symbol::new(&env, "platform_fee"),
+        asset.clone(),
+        platform_fee,
+        transaction_id.clone(),
+    );
+
+    // EscrowCreatedEvent — topics: purchase_id, material_id;
+    // data: asset, amount, lock_until_ledger.
+    let expected_escrow_topics = (
+        Symbol::new(&env, "escrow"),
+        Symbol::new(&env, "created"),
+        purchase_id,
+        material_id.clone(),
+    );
+    let expected_escrow_data = (
+        asset.clone(),
+        seller_net,
+        current_ledger + ESCROW_LOCK_PERIOD_LEDGERS,
+    );
+
+    // PurchaseCompletedEvent — topics: purchase_id, material_id, buyer;
+    // data: seller, asset, amount, platform_fee, seller_net_amount,
+    // entitlement_active, transaction_id. This is the shape
+    // src/lib/indexer/eventSchema.js's "purchase.completed" entry and
+    // src/lib/purchases/chainVerifier.js's readPurchaseEvent() must agree
+    // with — buyer/material_id/purchase_id live in topics, not in `event.value`.
+    let expected_purchase_topics = (
+        Symbol::new(&env, "purchase"),
+        Symbol::new(&env, "completed"),
+        purchase_id,
+        material_id.clone(),
+        buyer.clone(),
+    );
+    let expected_purchase_data = (
+        creator.clone(),
+        asset.clone(),
+        1_000_000i128,
+        platform_fee,
+        seller_net,
+        true,
+        transaction_id.clone(),
+    );
+
+    assert_eq!(
+        env.events().all().filter_by_contract(&contract_id),
+        std::vec![
+            (
+                contract_id.clone(),
+                expected_payout_topics.into_val(&env),
+                expected_payout_data.into_val(&env),
+            ),
+            (
+                contract_id.clone(),
+                expected_escrow_topics.into_val(&env),
+                expected_escrow_data.into_val(&env),
+            ),
+            (
+                contract_id.clone(),
+                expected_purchase_topics.into_val(&env),
+                expected_purchase_data.into_val(&env),
+            ),
+        ]
+    );
+}
+
 #[test]
 fn purchase_distribution_gives_final_recipient_rounding_remainder() {
     let env = Env::default();
@@ -643,6 +779,103 @@ fn rejects_purchase_when_paused() {
         &sample_transaction_id(&env),
     );
     assert_eq!(result, Err(Ok(PurchaseError::ContractPaused)));
+}
+
+#[test]
+fn purchase_with_intent_rejects_expired_intent() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().set_sequence_number(50);
+
+    let admin = Address::generate(&env);
+    let registry = env.register(MockRegistry, ());
+    let treasury = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let asset = env.register(MockAsset, ());
+    let material_id = bytes32(&env, 7);
+    let intent_hash = bytes32(&env, 8);
+    let policy_version = Bytes::from_array(&env, b"checkout-intent-v1");
+
+    let (_, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
+
+    let result = client.try_purchase_with_intent(
+        &buyer,
+        &material_id,
+        &asset,
+        &1_000_000,
+        &sample_transaction_id(&env),
+        &intent_hash,
+        &49,
+        &policy_version,
+    );
+
+    assert_eq!(result, Err(Ok(PurchaseError::IntentExpired)));
+    assert!(!client.is_intent_consumed(&intent_hash));
+}
+
+#[test]
+fn purchase_with_intent_consumes_intent_hash_once() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().set_sequence_number(50);
+
+    let admin = Address::generate(&env);
+    let registry = env.register(MockRegistry, ());
+    let treasury = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let creator = Address::generate(&env);
+    let creator_payout = Address::generate(&env);
+    let collaborator = Address::generate(&env);
+    let asset = env.register(MockAsset, ());
+    let material_id = bytes32(&env, 9);
+    let intent_hash = bytes32(&env, 10);
+    let policy_version = Bytes::from_array(&env, b"checkout-intent-v1");
+    let payout_shares =
+        create_payout_shares_for(&env, &creator_payout, 8_000, &collaborator, 2_000);
+    let material = MaterialRecord {
+        material_id: material_id.clone(),
+        creator,
+        paused: false,
+        status: MaterialStatus::Active,
+        quotes: vec![
+            &env,
+            AssetQuote {
+                asset: asset.clone(),
+                amount: 1_000_000,
+            },
+        ],
+        payout_shares,
+    };
+    MockRegistryClient::new(&env, &registry).set_material(&material_id, &material);
+
+    let (_, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
+    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
+
+    let purchase_id = client.purchase_with_intent(
+        &buyer,
+        &material_id,
+        &asset,
+        &1_000_000,
+        &sample_transaction_id(&env),
+        &intent_hash,
+        &60,
+        &policy_version,
+    );
+
+    assert_eq!(purchase_id, 0);
+    assert!(client.is_intent_consumed(&intent_hash));
+
+    let replay = client.try_purchase_with_intent(
+        &buyer,
+        &material_id,
+        &asset,
+        &1_000_000,
+        &sample_transaction_id(&env),
+        &intent_hash,
+        &60,
+        &policy_version,
+    );
+    assert_eq!(replay, Err(Ok(PurchaseError::IntentConsumed)));
 }
 
 #[test]
@@ -1974,4 +2207,81 @@ fn is_escrow_releasable_returns_true_after_lock_period() {
     env.ledger().set_sequence_number(36_000);
 
     assert!(client.is_escrow_releasable(&purchase_id));
+}
+
+#[test]
+fn sac_purchase_uses_real_balances_and_explicit_buyer_authorization() {
+    use soroban_sdk::token::{Client as TokenClient, StellarAssetClient};
+
+    let env = Env::default();
+    let admin = Address::generate(&env);
+    let issuer = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let creator = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let registry = env.register(MockRegistry, ());
+    let sac = env.register_stellar_asset_contract_v2(issuer.clone());
+    let asset = sac.address();
+    let token = TokenClient::new(&env, &asset);
+    let token_admin = StellarAssetClient::new(&env, &asset);
+    let material_id = bytes32(&env, 31);
+    let transaction_id = sample_transaction_id(&env);
+
+    // Fixture administration is mocked; the critical purchase invocation
+    // below replaces it with the exact buyer authorization tree.
+    env.mock_all_auths();
+    token_admin.mint(&buyer, &1_000_000);
+    MockRegistryClient::new(&env, &registry).set_material(
+        &material_id,
+        &MaterialRecord {
+            material_id: material_id.clone(),
+            creator: creator.clone(),
+            paused: false,
+            status: MaterialStatus::Active,
+            quotes: vec![
+                &env,
+                AssetQuote {
+                    asset: asset.clone(),
+                    amount: 1_000_000,
+                },
+            ],
+            payout_shares: vec![
+                &env,
+                PayoutShare {
+                    recipient: creator,
+                    share_bps: 10_000,
+                },
+            ],
+        },
+    );
+    let (contract_id, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
+    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
+
+    let fee_transfer = MockAuthInvoke {
+        contract: &asset,
+        fn_name: "transfer",
+        args: (&buyer, &treasury, 50_000i128).into_val(&env),
+        sub_invokes: &[],
+    };
+    let escrow_transfer = MockAuthInvoke {
+        contract: &asset,
+        fn_name: "transfer",
+        args: (&buyer, &contract_id, 950_000i128).into_val(&env),
+        sub_invokes: &[],
+    };
+    env.mock_auths(&[MockAuth {
+        address: &buyer,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "purchase",
+            args: (&buyer, &material_id, &asset, 1_000_000i128, &transaction_id).into_val(&env),
+            sub_invokes: &[fee_transfer, escrow_transfer],
+        },
+    }]);
+
+    client.purchase(&buyer, &material_id, &asset, &1_000_000, &transaction_id);
+    assert_eq!(token.balance(&buyer), 0);
+    assert_eq!(token.balance(&treasury), 50_000);
+    assert_eq!(token.balance(&contract_id), 950_000);
+    assert!(client.has_entitlement(&material_id, &buyer));
 }

@@ -1,7 +1,7 @@
 import { cpus } from "node:os";
 import { MongoClient } from "mongodb";
-import { ensureChallengeIndexes } from "@/lib/auth/challenge";
-import { updatePressureSignal } from "@/lib/capacity/shed";
+import { ensureChallengeIndexes } from "./auth/challenge.js";
+import { updatePressureSignal } from "./capacity/shed.js";
 
 const globalForMongo = globalThis;
 
@@ -10,9 +10,7 @@ function parsePositiveInteger(value, fallback, variableName) {
   const parsed = Number.parseInt(value ?? String(fallback), 10);
 
   if (!Number.isSafeInteger(parsed) || parsed < 0) {
-    throw new Error(
-      `${variableName} must be a non-negative integer; received "${value}"`,
-    );
+    throw new Error(`${variableName} must be a non-negative integer; received "${value}"`);
   }
 
   return parsed;
@@ -26,13 +24,11 @@ function getMongoConfiguration() {
   }
 
   const cpuCount = Math.max(cpus().length, 1);
-
   const maxPoolSize = parsePositiveInteger(
     process.env.MONGODB_MAX_POOL_SIZE,
     cpuCount * 5,
     "MONGODB_MAX_POOL_SIZE",
   );
-
   const minPoolSize = parsePositiveInteger(
     process.env.MONGODB_MIN_POOL_SIZE,
     Math.min(cpuCount, maxPoolSize),
@@ -40,9 +36,7 @@ function getMongoConfiguration() {
   );
 
   if (minPoolSize > maxPoolSize) {
-    throw new Error(
-      "MONGODB_MIN_POOL_SIZE cannot be greater than MONGODB_MAX_POOL_SIZE",
-    );
+    throw new Error("MONGODB_MIN_POOL_SIZE cannot be greater than MONGODB_MAX_POOL_SIZE");
   }
 
   return {
@@ -79,28 +73,22 @@ export function getMongoClientPromise() {
 
     globalForMongo._mongoClient = client;
 
-    // Monitor connection pool for capacity pressure signals
     try {
-      client.on('connectionPoolCreated', () => {
-        updatePressureSignal('mongoPoolCreated', true);
+      client.on("connectionPoolCreated", () => {
+        updatePressureSignal("mongoPoolCreated", true);
       });
 
-      client.on('connectionCheckedOut', (event) => {
-        const pool = event?.address;
-        // Track checkout pressure via topology events
-      });
-
-      client.on('connectionPoolClosed', () => {
-        updatePressureSignal('mongoPoolExhausted', false);
+      client.on("connectionPoolClosed", () => {
+        updatePressureSignal("mongoPoolExhausted", false);
       });
     } catch {
-      // Event monitoring not available in all driver versions
+      // Event monitoring is not available in all MongoDB driver environments.
     }
 
     globalForMongo._mongoClientPromise = client.connect().catch((error) => {
       globalForMongo._mongoClient = null;
       globalForMongo._mongoClientPromise = null;
-      updatePressureSignal('mongoPoolExhausted', true);
+      updatePressureSignal("mongoPoolExhausted", true);
 
       console.error("[mongodb] Connection failed", {
         name: error?.name,
@@ -116,6 +104,10 @@ export function getMongoClientPromise() {
   return globalForMongo._mongoClientPromise;
 }
 
+export function getClientPromise() {
+  return getMongoClientPromise();
+}
+
 export async function getMongoClient() {
   return getMongoClientPromise();
 }
@@ -127,10 +119,30 @@ export async function getDb() {
   return client.db(dbName);
 }
 
+export default async function connectToDatabase() {
+  const client = await getMongoClientPromise();
+  const { dbName } = getMongoConfiguration();
+
+  return {
+    client,
+    db: client.db(dbName),
+  };
+}
+
+export async function ensureMongoIndexes() {
+  const db = await getDb();
+  const collection = db.collection("materials");
+
+  await collection.createIndex(
+    { category: 1, price: 1, title: 1, description: 1 },
+    { name: "materials_search_compound_idx", background: true },
+  );
+  await ensureChallengeIndexes(db);
+}
+
 export async function pingDatabase() {
   const db = await getDb();
   await db.command({ ping: 1 });
-
   return true;
 }
 

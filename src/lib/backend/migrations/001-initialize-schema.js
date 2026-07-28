@@ -52,6 +52,7 @@ async function createIndexes(db, collectionName, indexDefinitions) {
 
 // eslint-disable-next-line import/no-anonymous-default-export
 export default {
+const migration = {
   version: 1,
   name: "initialize-documented-schema",
   description:
@@ -122,3 +123,5 @@ export default {
     }
   },
 };
+
+export default migration;

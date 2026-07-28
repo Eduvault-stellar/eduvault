@@ -11,6 +11,15 @@ on:
         required: false
         default: "Manual trigger"
 
+permissions:
+  contents: read
+
+concurrency:
+  group: mongodb-backup
+  # Never cancel an in-flight backup — a partial dump is worse than a delayed
+  # one. A new run queues behind the current one instead.
+  cancel-in-progress: false
+
 jobs:
   backup:
     name: Dump and upload MongoDB
@@ -55,19 +64,6 @@ jobs:
           NEXT_PUBLIC_PURCHASE_MANAGER_CONTRACT_ID: ${{ secrets.NEXT_PUBLIC_PURCHASE_MANAGER_CONTRACT_ID }}
         run: node scripts/backup.mjs
 
-      - name: Notify on failure
-        if: failure()
-        uses: slackapi/slack-github-action@v1.25.0
-        with:
-          payload: |
-            {
-              "text": ":rotating_light: *EduVault MongoDB backup failed* on `${{ github.ref_name }}`\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run>"
-            }
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.BACKUP_SLACK_WEBHOOK_URL }}
-          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
-        continue-on-error: true
-
   restore-test:
     name: Restore and Validate Backup
     needs: backup
@@ -104,16 +100,3 @@ jobs:
           BACKUP_ENCRYPTION_KEY: ${{ secrets.BACKUP_ENCRYPTION_KEY }}
           BACKUP_S3_KEY: ${{ needs.backup.outputs.s3_key }}
         run: node scripts/restore.mjs
-
-      - name: Notify on failure
-        if: failure()
-        uses: slackapi/slack-github-action@v1.25.0
-        with:
-          payload: |
-            {
-              "text": ":warning: *EduVault backup restore test failed* on `${{ github.ref_name }}`\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run>"
-            }
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.BACKUP_SLACK_WEBHOOK_URL }}
-          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
-        continue-on-error: true
