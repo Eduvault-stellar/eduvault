@@ -14,60 +14,69 @@
 
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import PinataSDK from "@pinata/sdk";
+import { MongoClient } from "mongodb";
 
 const execFileAsync = promisify(execFile);
 
-// ---------------------------------------------------------------------------\
+// ---------------------------------------------------------------------------
 // Structured logger
-// ---------------------------------------------------------------------------\
+// ---------------------------------------------------------------------------
 function log(level, message, extra = {}) {
   console.log(JSON.stringify({ level, message, timestamp: new Date().toISOString(), ...extra }));
 }
 
-const pinataSDK = require('@pinata/sdk');
-
-// ---------------------------------------------------------------------------\
+// ---------------------------------------------------------------------------
 // Get IPFS pinned files from Pinata
-// ---------------------------------------------------------------------------\
+// ---------------------------------------------------------------------------
 async function getPinataPinnedObjects() {
-  const pinata = new pinataSDK({ pinataJWTKey: process.env.PINATA_JWT });
+  if (!process.env.PINATA_JWT) {
+    log("warn", "PINATA_JWT not set - skipping Pinata inventory");
+    return [];
+  }
+
+  const pinata = new PinataSDK({ pinataJWTKey: process.env.PINATA_JWT });
   const pins = [];
   let page = 0;
   let hasMore = true;
 
-  log('info', 'Fetching pinned objects from Pinata');
+  log("info", "Fetching pinned objects from Pinata");
 
   while (hasMore) {
     try {
       const result = await pinata.pinList({
         pageLimit: 100,
         pageOffset: page * 100,
-        status: 'pinned',
+        status: "pinned",
       });
 
       pins.push(...result.rows);
       hasMore = result.rows.length > 0;
       page++;
     } catch (err) {
-      log('error', 'Failed to fetch pinned objects from Pinata', { error: err.message });
-      hasMore = false; // Exit loop on error
+      log("error", "Failed to fetch pinned objects from Pinata", { error: err.message });
+      hasMore = false;
     }
   }
 
-  log('info', `Fetched ${pins.length} pinned objects from Pinata`);
+  log("info", `Fetched ${pins.length} pinned objects from Pinata`);
   return pins.map(pin => ({
     cid: pin.ipfs_pin_hash,
-    name: pin.metadata.name,
+    name: pin.metadata?.name || "unnamed",
     size: pin.size,
     createdAt: pin.date_pinned,
   }));
 }
-const { MongoClient } = require("mongodb");
 
-// ---------------------------------------------------------------------------\
+// ---------------------------------------------------------------------------
 // Get MongoDB collection details
-// ---------------------------------------------------------------------------\
+// ---------------------------------------------------------------------------
 async function getMongoDbCollectionDetails() {
+  if (!process.env.MONGODB_URI) {
+    log("warn", "MONGODB_URI not set - skipping MongoDB inventory");
+    return {};
+  }
+
   const client = new MongoClient(process.env.MONGODB_URI);
   try {
     await client.connect();
@@ -88,14 +97,17 @@ async function getMongoDbCollectionDetails() {
     }
 
     return details;
+  } catch (err) {
+    log("error", "Failed to get MongoDB collection details", { error: err.message });
+    return {};
   } finally {
     await client.close();
   }
 }
 
-// ---------------------------------------------------------------------------\
+// ---------------------------------------------------------------------------
 // Main
-// ---------------------------------------------------------------------------\
+// ---------------------------------------------------------------------------
 async function createManifest() {
   log("info", "Creating backup manifest");
 
@@ -123,9 +135,9 @@ async function createManifest() {
   manifest.database.collections = await getMongoDbCollectionDetails();
 
   // --- Contracts (Soroban) ---
-  manifest.contracts.networkPassphrase = process.env.NEXT_PUBLIC_STELLAR_NETWORK_PASSPHRASE;
-  manifest.contracts.materialRegistryContractId = process.env.NEXT_PUBLIC_MATERIAL_REGISTRY_CONTRACT_ID;
-  manifest.contracts.purchaseManagerContractId = process.env.NEXT_PUBLIC_PURCHASE_MANAGER_CONTRACT_ID;
+  manifest.contracts.networkPassphrase = process.env.NEXT_PUBLIC_STELLAR_NETWORK_PASSPHRASE || null;
+  manifest.contracts.materialRegistryContractId = process.env.NEXT_PUBLIC_MATERIAL_REGISTRY_CONTRACT_ID || null;
+  manifest.contracts.purchaseManagerContractId = process.env.NEXT_PUBLIC_PURCHASE_MANAGER_CONTRACT_ID || null;
 
   // --- IPFS (Pinata) ---
   manifest.ipfs.pinnedObjects = await getPinataPinnedObjects();

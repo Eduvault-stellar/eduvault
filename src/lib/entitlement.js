@@ -1,3 +1,5 @@
+import { client } from './backend/db'; // Your app's MongoDB client instance
+import { CacheEngine } from './cache/engine';
 import { getDb } from './mongodb.js';
 import { PURCHASE_MANAGER_CONTRACT_ID, STELLAR_RPC_URL, NETWORK_PASSPHRASE } from './config/chain.js';
 import { isCompletedPurchaseStatus, normalizeBuyerAddress } from './purchases/access.js';
@@ -12,34 +14,22 @@ import {
   nativeToScVal,
 } from '@stellar/stellar-sdk';
 
-async function getCachedEntitlement(db, materialId, buyerAddress) {
-  return db.collection('entitlement_cache').findOne({
-    materialId,
-    buyerAddress: buyerAddress.toLowerCase(),
-  });
-}
-
-async function setCachedEntitlement(db, materialId, buyerAddress, active, source = 'chain') {
-  await db.collection('entitlement_cache').updateOne(
-    { materialId, buyerAddress: buyerAddress.toLowerCase() },
-    {
-      $set: {
-        materialId,
-        buyerAddress: buyerAddress.toLowerCase(),
-        active,
-        source: active ? source : `${source}-miss`,
-        updatedAt: new Date(),
-      },
-      $setOnInsert: { createdAt: new Date() },
-    },
-    { upsert: true }
-  );
-}
-
-async function checkChainEntitlement(materialId, buyerAddress) {
-  if (!PURCHASE_MANAGER_CONTRACT_ID || !STELLAR_RPC_URL) return null;
+export async function updateEntitlement(tenant, network, userId, authScope, updates) {
+  const db = client.db();
+  const session = client.startSession();
 
   try {
+    let result;
+    await session.withTransaction(async () => {
+      // 1. Update source of truth
+      result = await db.collection('entitlements').findOneAndUpdate(
+        { tenant, network, userId, authScope },
+        { 
+          $set: { ...updates, updatedAt: new Date() },
+          $inc: { version: 1 } 
+        },
+        { returnDocument: 'after', session }
+      );
     const xdrBlob = buildHasEntitlementXdr(materialId, buyerAddress);
     if (!xdrBlob) return null;
 
@@ -185,56 +175,24 @@ export async function revokeEntitlement(materialId, buyerAddress) {
     return { success: false };
   }
 
-  const db = await getDb();
-  const normalised = buyerAddress.toLowerCase();
+      const targetCacheKey = CacheEngine.buildKey('entitlements', {
+        tenant, network, authScope, id: userId
+      });
 
-  await db.collection('entitlement_cache').updateOne(
-    { materialId, buyerAddress: normalised },
-    {
-      $set: {
-        active: false,
-        source: 'revoked',
-        updatedAt: new Date(),
-      },
-      $setOnInsert: {
-        materialId,
-        buyerAddress: normalised,
+      // 2. Queue the invalidation to the transactional outbox
+      await db.collection('cache_outbox').insertOne({
+        eventId: `evt_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`,
+        cacheKey: targetCacheKey,
+        targetRegistry: 'entitlements',
+        status: 'PENDING',
         createdAt: new Date(),
-      },
-    },
-    { upsert: true }
-  );
+        attempts: 0
+      }, { session });
+    });
 
-  return { success: true };
-}
-
-export async function verifyEntitlement(materialId, buyerAddress) {
-  if (!materialId || !buyerAddress) {
-    return { hasAccess: false, source: 'invalid-params' };
-  }
-
-  const db = await getDb();
-  const normalised = normalizeBuyerAddress(buyerAddress);
-
-  const cached = await getCachedEntitlement(db, materialId, normalised);
-  if (cached) {
-    if (cached.active) return { hasAccess: true, source: 'cache' };
-  }
-
-  const purchase = await db.collection('purchases').findOne({
-    materialId,
-    buyerAddress: normalised,
-  });
-
-  if (purchase && isCompletedPurchaseStatus(purchase.status)) {
-    await setCachedEntitlement(db, materialId, normalised, true, 'purchases-db');
-    return { hasAccess: true, source: 'purchases-db' };
-  }
-
-  const onChain = await checkChainEntitlement(materialId, buyerAddress);
-  if (onChain === true) {
-    await setCachedEntitlement(db, materialId, normalised, true, 'chain');
-    return { hasAccess: true, source: 'chain' };
+    return result.value;
+  } finally {
+    await session.endSession();
   }
 
   return { hasAccess: false, source: 'not-found' };

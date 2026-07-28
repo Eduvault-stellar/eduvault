@@ -26,7 +26,7 @@ concurrency:
 
 jobs:
   quality:
-    name: Lint, build, and test
+    name: Build and test
     runs-on: ubuntu-latest
     env:
       # These are deliberately non-production values. CI validates the same
@@ -81,6 +81,9 @@ jobs:
           NODE_ENV: development
         run: npm install
 
+      - name: Run Build and Tests
+        run: npm run build --if-present
+        
       - name: Validate CI environment configuration
         run: npm run check:ci-env
         env:
