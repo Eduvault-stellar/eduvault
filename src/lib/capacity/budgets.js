@@ -202,6 +202,283 @@ export const ROUTE_BUDGETS = Object.freeze({
     retries: 2,
     retryAfterBaseMs: 2_000,
   },
+
+  // ── Critical: funds-moving flows (checkout, refunds) ─────────────────
+  "GET:/api/purchase": {
+    maxConcurrent: 30,
+    maxQueueDepth: 60,
+    timeoutMs: 8_000,
+    maxPayloadBytes: 0,
+    priority: 0,
+    degradeWith: [],
+    retries: 2,
+    retryAfterBaseMs: 1_000,
+  },
+  "POST:/api/checkout/initiate": {
+    maxConcurrent: 15,
+    maxQueueDepth: 30,
+    timeoutMs: 10_000,
+    maxPayloadBytes: 8_192,
+    priority: 0,
+    degradeWith: [],
+    retries: 2,
+    retryAfterBaseMs: 2_000,
+  },
+  "GET:/api/checkout/initiate": {
+    maxConcurrent: 30,
+    maxQueueDepth: 60,
+    timeoutMs: 5_000,
+    maxPayloadBytes: 0,
+    priority: 2,
+    degradeWith: [],
+    retries: 2,
+    retryAfterBaseMs: 1_000,
+  },
+  "POST:/api/checkout/refund": {
+    maxConcurrent: 10,
+    maxQueueDepth: 20,
+    timeoutMs: 10_000,
+    maxPayloadBytes: 4_096,
+    priority: 0,
+    degradeWith: [],
+    retries: 1,
+    retryAfterBaseMs: 5_000,
+  },
+  "POST:/api/checkout/verify-promo": {
+    maxConcurrent: 20,
+    maxQueueDepth: 40,
+    timeoutMs: 5_000,
+    maxPayloadBytes: 4_096,
+    priority: 1,
+    degradeWith: ["mongo"],
+    retries: 1,
+    retryAfterBaseMs: 3_000,
+  },
+
+  // ── Critical: admin financial state transitions ─────────────────────
+  "POST:/api/admin/refunds/approve": {
+    maxConcurrent: 5,
+    maxQueueDepth: 10,
+    timeoutMs: 20_000,
+    maxPayloadBytes: 4_096,
+    priority: 0,
+    degradeWith: [],
+    retries: 1,
+    retryAfterBaseMs: 5_000,
+  },
+
+  // ── High: admin moderation state transitions ─────────────────────────
+  "POST:/api/admin/users/suspend": {
+    maxConcurrent: 10,
+    maxQueueDepth: 20,
+    timeoutMs: 10_000,
+    maxPayloadBytes: 8_192,
+    priority: 1,
+    degradeWith: [],
+    retries: 1,
+    retryAfterBaseMs: 3_000,
+  },
+  "GET:/api/admin/disputes": {
+    maxConcurrent: 10,
+    maxQueueDepth: 20,
+    timeoutMs: 8_000,
+    maxPayloadBytes: 0,
+    priority: 1,
+    degradeWith: ["mongo"],
+    retries: 2,
+    retryAfterBaseMs: 2_000,
+  },
+  "PATCH:/api/admin/disputes": {
+    maxConcurrent: 10,
+    maxQueueDepth: 20,
+    timeoutMs: 10_000,
+    maxPayloadBytes: 8_192,
+    priority: 1,
+    degradeWith: [],
+    retries: 1,
+    retryAfterBaseMs: 3_000,
+  },
+  "POST:/api/admin/verification": {
+    maxConcurrent: 10,
+    maxQueueDepth: 20,
+    timeoutMs: 10_000,
+    maxPayloadBytes: 8_192,
+    priority: 1,
+    degradeWith: [],
+    retries: 1,
+    retryAfterBaseMs: 3_000,
+  },
+
+  // ── High: application creation (student verification, incl. document upload) ──
+  "POST:/api/verification/student": {
+    maxConcurrent: 5,
+    maxQueueDepth: 10,
+    timeoutMs: 30_000,
+    maxPayloadBytes: 6 * 1024 * 1024,
+    priority: 1,
+    degradeWith: ["mongo"],
+    retries: 1,
+    retryAfterBaseMs: 10_000,
+  },
+  "GET:/api/verification/student": {
+    maxConcurrent: 20,
+    maxQueueDepth: 40,
+    timeoutMs: 5_000,
+    maxPayloadBytes: 0,
+    priority: 2,
+    degradeWith: [],
+    retries: 2,
+    retryAfterBaseMs: 1_000,
+  },
+
+  // ── High: material publish state transition (dynamic route — keyed by
+  //     the route label passed to withApiHardening, see resolveRouteBudget) ──
+  "POST:material-publish": {
+    maxConcurrent: 10,
+    maxQueueDepth: 20,
+    timeoutMs: 10_000,
+    maxPayloadBytes: 8_192,
+    priority: 1,
+    degradeWith: [],
+    retries: 1,
+    retryAfterBaseMs: 3_000,
+  },
+  "GET:material-publish": {
+    maxConcurrent: 30,
+    maxQueueDepth: 60,
+    timeoutMs: 5_000,
+    maxPayloadBytes: 0,
+    priority: 2,
+    degradeWith: [],
+    retries: 2,
+    retryAfterBaseMs: 1_000,
+  },
+
+  // ── Medium: access status / access requests ──────────────────────────
+  "GET:/api/materials/access": {
+    maxConcurrent: 30,
+    maxQueueDepth: 60,
+    timeoutMs: 5_000,
+    maxPayloadBytes: 0,
+    priority: 2,
+    degradeWith: ["mongo"],
+    retries: 2,
+    retryAfterBaseMs: 1_000,
+  },
+  "POST:/api/materials/access": {
+    maxConcurrent: 15,
+    maxQueueDepth: 30,
+    timeoutMs: 8_000,
+    maxPayloadBytes: 8_192,
+    priority: 1,
+    degradeWith: [],
+    retries: 1,
+    retryAfterBaseMs: 3_000,
+  },
+  "GET:material-access-status": {
+    maxConcurrent: 30,
+    maxQueueDepth: 60,
+    timeoutMs: 5_000,
+    maxPayloadBytes: 0,
+    priority: 2,
+    degradeWith: ["mongo"],
+    retries: 2,
+    retryAfterBaseMs: 1_000,
+  },
+
+  // ── Medium: abuse reporting, history, analytics ──────────────────────
+  "POST:/api/reviews/report": {
+    maxConcurrent: 15,
+    maxQueueDepth: 30,
+    timeoutMs: 8_000,
+    maxPayloadBytes: 16_384,
+    priority: 1,
+    degradeWith: [],
+    retries: 1,
+    retryAfterBaseMs: 3_000,
+  },
+  "GET:/api/reviews/report": {
+    maxConcurrent: 20,
+    maxQueueDepth: 40,
+    timeoutMs: 5_000,
+    maxPayloadBytes: 0,
+    priority: 2,
+    degradeWith: ["mongo"],
+    retries: 2,
+    retryAfterBaseMs: 1_000,
+  },
+  "GET:/api/transactions/history": {
+    maxConcurrent: 25,
+    maxQueueDepth: 50,
+    timeoutMs: 10_000,
+    maxPayloadBytes: 0,
+    priority: 2,
+    degradeWith: ["mongo"],
+    retries: 2,
+    retryAfterBaseMs: 1_000,
+  },
+  "GET:/api/creator/analytics": {
+    maxConcurrent: 15,
+    maxQueueDepth: 30,
+    timeoutMs: 15_000,
+    maxPayloadBytes: 0,
+    priority: 2,
+    degradeWith: ["mongo"],
+    retries: 1,
+    retryAfterBaseMs: 3_000,
+  },
+
+  // ── Low: expensive export, notifications, internal service hooks ────
+  "GET:/api/creator/analytics/export": {
+    maxConcurrent: 5,
+    maxQueueDepth: 10,
+    timeoutMs: 30_000,
+    maxPayloadBytes: 0,
+    priority: 3,
+    degradeWith: ["mongo"],
+    retries: 0,
+    retryAfterBaseMs: 10_000,
+  },
+  "POST:/api/auth/logout": {
+    maxConcurrent: 20,
+    maxQueueDepth: 40,
+    timeoutMs: 5_000,
+    maxPayloadBytes: 2_048,
+    priority: 1,
+    degradeWith: [],
+    retries: 1,
+    retryAfterBaseMs: 2_000,
+  },
+  "POST:/api/csp-report": {
+    maxConcurrent: 20,
+    maxQueueDepth: 40,
+    timeoutMs: 3_000,
+    maxPayloadBytes: 16_384,
+    priority: 3,
+    degradeWith: [],
+    retries: 0,
+    retryAfterBaseMs: 1_000,
+  },
+  "POST:/api/indexer": {
+    maxConcurrent: 3,
+    maxQueueDepth: 5,
+    timeoutMs: 55_000,
+    maxPayloadBytes: 0,
+    priority: 1,
+    degradeWith: ["mongo"],
+    retries: 0,
+    retryAfterBaseMs: 5_000,
+  },
+  "GET:/api/indexer": {
+    maxConcurrent: 10,
+    maxQueueDepth: 20,
+    timeoutMs: 5_000,
+    maxPayloadBytes: 0,
+    priority: 2,
+    degradeWith: ["mongo"],
+    retries: 1,
+    retryAfterBaseMs: 2_000,
+  },
 });
 
 // ── Lookup Helpers ───────────────────────────────────────────────────────────
@@ -217,6 +494,29 @@ export const ROUTE_BUDGETS = Object.freeze({
 export function getRouteBudget(method, route) {
   const key = `${method}:${route}`;
   return ROUTE_BUDGETS[key] || DEFAULT_BUDGET;
+}
+
+/**
+ * Resolve a route's budget the way `withApiHardening` actually calls sites:
+ * route handlers pass a short human-readable label (e.g. "material-publish")
+ * that rarely matches the "/api/..." path keys above. Try the real request
+ * pathname first (what most ROUTE_BUDGETS keys are written against), then
+ * fall back to the caller-supplied label (for dynamic routes where the
+ * pathname includes a resource id and can't be a static key), then default.
+ *
+ * @param {string} method
+ * @param {{ pathname?: string, label?: string }} lookup
+ */
+export function resolveRouteBudget(method, { pathname, label } = {}) {
+  if (pathname) {
+    const byPath = ROUTE_BUDGETS[`${method}:${pathname}`];
+    if (byPath) return byPath;
+  }
+  if (label) {
+    const byLabel = ROUTE_BUDGETS[`${method}:${label}`];
+    if (byLabel) return byLabel;
+  }
+  return DEFAULT_BUDGET;
 }
 
 const DEFAULT_BUDGET = Object.freeze({

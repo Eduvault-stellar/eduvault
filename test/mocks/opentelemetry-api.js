@@ -9,4 +9,5 @@ export const trace = {
   }),
 };
 export const SpanStatusCode = { OK: 0, ERROR: 1 };
-export default { trace, SpanStatusCode };
+const api = { trace, SpanStatusCode };
+export default api;

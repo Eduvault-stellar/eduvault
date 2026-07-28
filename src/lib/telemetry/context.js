@@ -16,25 +16,71 @@
 
 let _AsyncLocalStorage = null;
 let _storage = null;
+let _degraded = false;
+
+/** No-op storage for browser bundles, where async_hooks does not exist. */
+class NoopAsyncLocalStorage {
+  getStore() { return null; }
+  run(store, fn) { return fn(); }
+}
+
+/**
+ * Resolve AsyncLocalStorage without a static `node:async_hooks` import.
+ *
+ * The import has to stay dynamic: this module is reachable from client
+ * bundles (checkoutService -> CheckoutInvoice -> CartDrawer), and a static
+ * import would break the browser build.
+ *
+ * Order matters. `require` only exists in CommonJS and webpack bundles — in
+ * native ESM it throws ReferenceError, which previously dropped us into the
+ * browser fallback on the server. That made every ESM entry point (the
+ * indexer runner, the workflow worker, `node --test`) silently lose
+ * correlation IDs and trace propagation while still appearing to work, so
+ * `process.getBuiltinModule` is tried first.
+ */
+function resolveAsyncLocalStorage() {
+  if (globalThis.AsyncLocalStorage) return globalThis.AsyncLocalStorage;
+
+  // Node 22.3+, synchronous, and invisible to webpack's static analysis.
+  // Works under both ESM and CJS.
+  try {
+    const asyncHooks = process.getBuiltinModule?.("node:async_hooks");
+    if (asyncHooks?.AsyncLocalStorage) return asyncHooks.AsyncLocalStorage;
+  } catch {
+    // Fall through to the require path below.
+  }
+
+  // CommonJS and webpack server bundles.
+  try {
+    return eval('require("node:async_hooks").AsyncLocalStorage');
+  } catch {
+    // Browser, or a Node old enough to lack getBuiltinModule.
+  }
+
+  return null;
+}
 
 function getStorage() {
   if (!_storage) {
-    try {
-      // Dynamic import to avoid webpack bundling node:async_hooks for client
-      _AsyncLocalStorage = globalThis.AsyncLocalStorage || null;
-      if (!_AsyncLocalStorage) {
-        _AsyncLocalStorage = eval('require("async_hooks").AsyncLocalStorage');
-      }
-    } catch (e) {
-      // Fallback for browser environments — no-op storage
-      _AsyncLocalStorage = class {
-        getStore() { return null; }
-        run(store, fn) { return fn(); }
-      };
-    }
+    const Resolved = resolveAsyncLocalStorage();
+    // Degrading to no-op storage on a server is a real loss of observability,
+    // not a normal fallback. Record it so `isContextDegraded()` can surface it
+    // rather than letting correlation quietly disappear.
+    _degraded = !Resolved && typeof window === "undefined";
+    _AsyncLocalStorage = Resolved || NoopAsyncLocalStorage;
     _storage = new _AsyncLocalStorage();
   }
   return _storage;
+}
+
+/**
+ * True when context propagation is inert on a server runtime — i.e. correlation
+ * IDs and traceparents are not actually crossing async boundaries. Surfaced by
+ * `/api/ready` so a degraded deployment is visible instead of silent.
+ */
+export function isContextDegraded() {
+  getStorage();
+  return _degraded;
 }
 
 function generateRandomHex(length) {

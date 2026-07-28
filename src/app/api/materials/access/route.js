@@ -4,6 +4,10 @@ import { withApiContract } from "../../../../lib/api/contract.js";
 
 export const dynamic = 'force-dynamic';
 
+// withApiHardening (and its next/server import) is loaded lazily, same as
+// NextResponse/getDb below — this keeps accessStatus() importable from
+// plain Node test files with no bundler in the loop.
+
 export async function accessStatus(db, materialId, buyerAddress) {
   // Check entitlement cache first (fast path) before falling through to
   // ownership / purchases DB checks in getMaterialAccessStatus.
@@ -38,30 +42,43 @@ async function getMaterialAccess(request) {
     const materialId = searchParams.get('materialId') || '';
     const identity = await resolveAuthenticatedWallet(request);
     const buyerAddress = identity.ok ? identity.walletAddress : '';
+export async function GET(request) {
+  const { withApiHardening } = await import('../../../../lib/api/hardening.js');
+  return withApiHardening(
+    request,
+    { route: "material-access", rateLimit: { limit: 60, windowMs: 60_000 } },
+    async () => {
+      try {
+        const { searchParams } = new URL(request.url);
+        const materialId = searchParams.get('materialId') || '';
+        const identity = await resolveAuthenticatedWallet(request);
+        const buyerAddress = identity.ok ? identity.walletAddress : '';
 
-    if (!identity.ok) {
-      const { NextResponse } = await import('next/server');
-      return NextResponse.json({ error: identity.error }, { status: identity.status });
+        if (!identity.ok) {
+          const { NextResponse } = await import('next/server');
+          return NextResponse.json({ error: identity.error }, { status: identity.status });
+        }
+
+        if (!materialId || !buyerAddress) {
+          const { NextResponse } = await import('next/server');
+          return NextResponse.json({ error: 'Missing materialId or buyerAddress' }, { status: 400 });
+        }
+
+        const { getDb } = await import('../../../../lib/mongodb.js');
+        const db = await getDb();
+        const result = await accessStatus(db, materialId, buyerAddress);
+        const { NextResponse } = await import('next/server');
+
+        if (result?.statusCode) {
+          return NextResponse.json({ error: result.error }, { status: result.statusCode });
+        }
+        return NextResponse.json(result);
+      } catch (err) {
+        const { NextResponse } = await import('next/server');
+        return NextResponse.json({ error: 'Failed to determine access status', detail: String(err?.message || err) }, { status: 500 });
+      }
     }
-
-    if (!materialId || !buyerAddress) {
-      const { NextResponse } = await import('next/server');
-      return NextResponse.json({ error: 'Missing materialId or buyerAddress' }, { status: 400 });
-    }
-
-    const { getDb } = await import('../../../../lib/mongodb.js');
-    const db = await getDb();
-    const result = await accessStatus(db, materialId, buyerAddress);
-    const { NextResponse } = await import('next/server');
-
-    if (result?.statusCode) {
-      return NextResponse.json({ error: result.error }, { status: result.statusCode });
-    }
-    return NextResponse.json(result);
-  } catch (err) {
-    const { NextResponse } = await import('next/server');
-    return NextResponse.json({ error: 'Failed to determine access status', detail: String(err?.message || err) }, { status: 500 });
-  }
+  );
 }
 
 /**
@@ -75,31 +92,44 @@ async function requestMaterialAccess(request) {
     const materialId = body?.materialId || '';
     const identity = await resolveAuthenticatedWallet(request);
     const buyerAddress = identity.ok ? identity.walletAddress : '';
+export async function POST(request) {
+  const { withApiHardening } = await import('../../../../lib/api/hardening.js');
+  return withApiHardening(
+    request,
+    { route: "material-access", rateLimit: { limit: 20, windowMs: 60_000 } },
+    async () => {
+      try {
+        const body = await request.json();
+        const materialId = body?.materialId || '';
+        const identity = await resolveAuthenticatedWallet(request);
+        const buyerAddress = identity.ok ? identity.walletAddress : '';
 
-    if (!identity.ok) {
-      const { NextResponse } = await import('next/server');
-      return NextResponse.json({ error: identity.error }, { status: identity.status });
+        if (!identity.ok) {
+          const { NextResponse } = await import('next/server');
+          return NextResponse.json({ error: identity.error }, { status: identity.status });
+        }
+
+        if (!materialId || !buyerAddress) {
+          const { NextResponse } = await import('next/server');
+          return NextResponse.json({ error: 'Missing materialId or buyerAddress' }, { status: 400 });
+        }
+
+        const { getDb } = await import('../../../../lib/mongodb.js');
+        const db = await getDb();
+        const result = await createPendingAccessRequest(db, materialId, buyerAddress, body);
+        const { NextResponse } = await import('next/server');
+
+        if (result?.statusCode) {
+          return NextResponse.json({ error: result.error }, { status: result.statusCode });
+        }
+
+        return NextResponse.json(result, { status: result.hasAccess ? 200 : 202 });
+      } catch (err) {
+        const { NextResponse } = await import('next/server');
+        return NextResponse.json({ error: 'Failed to start access request', detail: String(err?.message || err) }, { status: 500 });
+      }
     }
-
-    if (!materialId || !buyerAddress) {
-      const { NextResponse } = await import('next/server');
-      return NextResponse.json({ error: 'Missing materialId or buyerAddress' }, { status: 400 });
-    }
-
-    const { getDb } = await import('../../../../lib/mongodb.js');
-    const db = await getDb();
-    const result = await createPendingAccessRequest(db, materialId, buyerAddress, body);
-    const { NextResponse } = await import('next/server');
-
-    if (result?.statusCode) {
-      return NextResponse.json({ error: result.error }, { status: result.statusCode });
-    }
-
-    return NextResponse.json(result, { status: result.hasAccess ? 200 : 202 });
-  } catch (err) {
-    const { NextResponse } = await import('next/server');
-    return NextResponse.json({ error: 'Failed to start access request', detail: String(err?.message || err) }, { status: 500 });
-  }
+  );
 }
 
 export const GET = (request) => withApiContract(request, {}, () => getMaterialAccess(request));
