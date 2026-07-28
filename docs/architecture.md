@@ -91,12 +91,7 @@ EduVault needs to do four things reliably:
 - metadata JSON pinned to IPFS
 - searchable application state stored in MongoDB
 
-### Prototype chain layer
-
-- EVM wallet connection via wagmi and RainbowKit
-- archived ERC-721 proof of concept in `archive/legacy-evm/contracts/EduVault.sol`
-
-## 3. Target Stellar-Native Architecture
+## 3. Stellar-Native Architecture
 
 The canonical Soroban contract boundary and event model are documented in [`docs/soroban-contract-architecture.md`](soroban-contract-architecture.md).
 

@@ -5,7 +5,6 @@ extern crate std;
 use super::*;
 use soroban_sdk::testutils::{Address as _, Events as _};
 use soroban_sdk::{vec, Event, IntoVal};
-use std::format;
 
 fn install_and_init_contract(
     env: &Env,

@@ -3,6 +3,8 @@ export const dynamic = "force-dynamic";
 import { NextResponse } from "next/server";
 import { getDb } from "@/lib/mongodb";
 import { verifyDashboardToken } from "@/lib/auth/session";
+import { withApiContract } from "@/lib/api/contract";
+import { withApiHardening } from "@/lib/api/hardening";
 import {
   buildPurchaseHistoryRecords,
   fetchHorizonTransactions,
@@ -29,7 +31,16 @@ function parseLimit(value) {
   return Math.min(Math.floor(limit), 100);
 }
 
+async function listTransactionHistory(request) {
 export async function GET(request) {
+  return withApiHardening(
+    request,
+    { route: "transactions-history", rateLimit: { limit: 60, windowMs: 60_000 } },
+    async () => transactionHistoryGet(request)
+  );
+}
+
+async function transactionHistoryGet(request) {
   try {
     const user = await getUserFromCookie(request);
     if (!user) {
@@ -88,3 +99,5 @@ export async function GET(request) {
     return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
   }
 }
+
+export const GET = (request) => withApiContract(request, {}, () => listTransactionHistory(request));

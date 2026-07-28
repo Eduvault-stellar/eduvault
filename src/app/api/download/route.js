@@ -21,7 +21,10 @@
  */
 
 import { NextResponse } from 'next/server';
+import { withApiHardening } from '@/lib/api/hardening';
+import { errorResponse } from '@/lib/api/errorResponse';
 import { verifyEntitlement } from '@/lib/entitlement';
+import { withApiHardening } from '@/lib/api/hardening';
 import { getDb } from '@/lib/mongodb';
 import { ObjectId } from 'mongodb';
 import { getManifest, getLatestManifest } from '@/lib/provenance/registry';
@@ -31,11 +34,21 @@ import { resolveAuthenticatedWallet } from '@/lib/auth/walletIdentity';
 export const dynamic = 'force-dynamic';
 
 export async function GET(request) {
+  return withApiHardening(
+    request,
+    { route: "download", rateLimit: { limit: 60, windowMs: 60_000 } },
+    () => handleDownload(request)
+  );
+}
+
+async function handleDownload(request) {
+export const GET = withApiHardening(
+  async (request) => {
   const { searchParams } = new URL(request.url);
   const materialId = searchParams.get('materialId') ?? '';
   const identity = await resolveAuthenticatedWallet(request);
   if (!identity.ok) {
-    return NextResponse.json({ error: identity.error }, { status: identity.status });
+    return errorResponse(identity.error, identity.status);
   }
   const buyerAddress = identity.walletAddress;
   const requestedVersion = searchParams.get('version');
@@ -45,10 +58,7 @@ export async function GET(request) {
   // ── 1. Validate params ─────────────────────────────────────────────────────
 
   if (!materialId) {
-    return NextResponse.json(
-      { error: 'Missing materialId' },
-      { status: 400 }
-    );
+    return errorResponse('Missing materialId', 400);
   }
 
   // ── 2. Verify entitlement ─────────────────────────────────────────────────
@@ -58,20 +68,13 @@ export async function GET(request) {
     entitlementResult = await verifyEntitlement(materialId, buyerAddress);
   } catch (err) {
     console.error('[download] entitlement check error:', err);
-    return NextResponse.json(
-      { error: 'Entitlement verification failed' },
-      { status: 503 }
-    );
+    return errorResponse('Entitlement verification failed', 503);
   }
 
   if (!entitlementResult.hasAccess) {
-    return NextResponse.json(
-      {
-        error: 'Unlicensed Access',
-        detail:
-          'You do not hold an active entitlement for this material. Purchase it first.',
-      },
-      { status: 403 }
+    return errorResponse(
+      'You do not hold an active entitlement for this material. Purchase it first.',
+      403
     );
   }
 
@@ -88,14 +91,11 @@ export async function GET(request) {
     }
   } catch (err) {
     console.error('[download] DB error fetching material:', err);
-    return NextResponse.json(
-      { error: 'Material lookup failed' },
-      { status: 503 }
-    );
+    return errorResponse('Material lookup failed', 503);
   }
 
   if (!material) {
-    return NextResponse.json({ error: 'Material not found' }, { status: 404 });
+    return errorResponse('Material not found', 404);
   }
 
   const cid =
@@ -107,10 +107,7 @@ export async function GET(request) {
     '';
 
   if (!cid) {
-    return NextResponse.json(
-      { error: 'Material has no associated file CID' },
-      { status: 404 }
-    );
+    return errorResponse('Material has no associated file CID', 404);
   }
 
   // ── 4. Verify manifest version binding ────────────────────────────────────
@@ -137,12 +134,9 @@ export async function GET(request) {
       const versionWithdrawn = manifestDoc.withdrawn === true;
 
       if (versionWithdrawn) {
-        return NextResponse.json(
-          {
-            error: 'Version Withdrawn',
-            detail: `Version ${manifestVersion} has been withdrawn: ${manifestDoc.withdrawalReason || 'No reason specified'}`,
-          },
-          { status: 410 }
+        return errorResponse(
+          `Version ${manifestVersion} has been withdrawn: ${manifestDoc.withdrawalReason || 'No reason specified'}`,
+          410
         );
       }
 
@@ -183,5 +177,10 @@ export async function GET(request) {
         'X-Manifest-Verified': manifestDigestVerified ? 'true' : 'false',
       },
     }
-  );
-}
+  }
+  },
+  {
+    route: 'download',
+    rateLimit: { limit: 100, windowMs: 60_000 }, // 100 downloads/min per IP
+  }
+);

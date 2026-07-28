@@ -207,7 +207,7 @@ export async function applyIndexedEvent(db, event, { now = new Date() } = {}) {
   }
 }
 
-export async function runIndexerBatch({ db, eventSource, source = "stellar", limit = 100 }) {
+export async function runIndexerBatch({ db, eventSource, source = "stellar", limit = 100, applyFn = applyIndexedEvent }) {
   return runWithContext({ jobType: "stellar-sync" }, async () => {
   const startedAt = Date.now();
   const stateId = `${source}:events`;
@@ -229,7 +229,7 @@ export async function runIndexerBatch({ db, eventSource, source = "stellar", lim
 
   for (const event of events) {
     try {
-      const result = await withSpan("stellar.sync.apply", { source, eventType: event.type }, () => applyIndexedEvent(db, { ...event, source }));
+      const result = await withSpan("stellar.sync.apply", { source, eventType: event.type }, () => applyFn(db, { ...event, source }));
       if (result.skipped) skipped += 1;
       else applied += 1;
 
@@ -436,7 +436,7 @@ export function createJsonRpcEventSource({
  * terminal rows explicitly (after fixing whatever poisoned them) by passing
  * `statuses: ['retryable', 'failed']`.
  */
-export async function reprocessDeadLetters(db, { statuses = ['retryable'], limit = 100 } = {}) {
+export async function reprocessDeadLetters(db, { statuses = ['retryable'], limit = 100, applyFn = applyIndexedEvent } = {}) {
   const dlCol = db.collection(COLLECTIONS.deadLetterEvents);
   const maxRetries = Number(process.env.INDEXER_MAX_RETRIES || 3);
   const items = [];
@@ -458,7 +458,7 @@ export async function reprocessDeadLetters(db, { statuses = ['retryable'], limit
     }
 
     try {
-      await applyIndexedEvent(db, entry.raw);
+      await applyFn(db, entry.raw);
       await dlCol.deleteOne({ _id: entry._id });
       reprocessed.push({ id: entry._id });
     } catch (err) {
@@ -486,7 +486,7 @@ export async function reprocessDeadLetters(db, { statuses = ['retryable'], limit
   return { reprocessed, exhausted };
 }
 
-export async function repairPartialIndexedEvents(db, { limit = 100 } = {}) {
+export async function repairPartialIndexedEvents(db, { limit = 100, applyFn = applyIndexedEvent } = {}) {
   const syncEvents = db.collection(COLLECTIONS.syncEvents);
   const candidates = [];
 
@@ -516,7 +516,7 @@ export async function repairPartialIndexedEvents(db, { limit = 100 } = {}) {
       continue;
     }
     try {
-      await applyIndexedEvent(db, receipt.raw);
+      await applyFn(db, receipt.raw);
       repaired.push(receipt._id);
     } catch (error) {
       failed.push({ eventId: receipt._id, error: String(error?.message || error) });

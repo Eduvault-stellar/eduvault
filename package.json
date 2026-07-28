@@ -1,6 +1,7 @@
 {
   "name": "eduvault",
   "version": "0.1.0",
+  "type": "module",
   "description": "Stellar-aligned educational content marketplace prototype for creator payments, licensing, and discovery.",
   "license": "MIT",
   "keywords": [
@@ -12,16 +13,27 @@
     "nextjs"
   ],
   "private": true,
+  "packageManager": "npm@10.9.4",
+  "engines": {
+    "node": ">=20.16.0"
+  },
   "scripts": {
+    "predev": "node scripts/sync-openapi.mjs",
     "dev": "next dev",
+    "prebuild": "node scripts/sync-openapi.mjs",
     "build": "next build --webpack",
     "start": "next start",
     "lint": "eslint",
+    "typecheck": "tsc --noEmit -p tsconfig.check.json",
+    "check:lockfile": "node scripts/check-lockfile.mjs",
+    "check:licenses": "node scripts/check-licenses.mjs",
     "test": "vitest",
     "test:all": "npm run test:contracts && npm run test:backend",
     "test:contracts": "hardhat test",
     "test:integration": "vitest run test/integration",
     "test:backend": "node --test tests/backend/*.test.mjs",
+    "check:api-contracts": "node scripts/check-api-contracts.mjs",
+    "test:smoke": "node scripts/smoke-preview.mjs",
     "check:ci-env": "node scripts/validate-ci-env.mjs",
     "audit:deps": "npm audit --audit-level=critical",
     "audit:deps:high": "npm audit --audit-level=high",
@@ -30,6 +42,8 @@
     "indexer:stellar": "node scripts/run-stellar-indexer.mjs",
     "indexer:stellar:once": "node scripts/run-stellar-indexer.mjs once",
     "indexer:stellar:recover": "node scripts/run-stellar-indexer.mjs recover",
+    "indexer:escrow": "node scripts/run-escrow-indexer.mjs",
+    "indexer:escrow:once": "node scripts/run-escrow-indexer.mjs once",
     "indexer:repair": "node scripts/repair-indexer-projections.mjs",
     "clean:intents": "node scripts/clean-stale-intents.mjs",
     "clean:intents:dry": "DRY_RUN=true node scripts/clean-stale-intents.mjs",
@@ -89,11 +103,11 @@
     "mongodb-memory-server": "^11.2.0",
     "node-localstorage": "^3.0.5",
     "tailwindcss": "^4.2.3",
-    "typescript": "^6.0.3",
+    "typescript": "^5.9.3",
     "vitest": "^4.1.8"
   },
   "overrides": {
-    "undici": "^6.13.0",
+    "undici": "^6.28.0",
     "uuid": "^14.0.0",
     "rpc-websockets": "^9.3.8",
     "jayson": "^4.3.0",
