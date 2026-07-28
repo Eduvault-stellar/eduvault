@@ -31,6 +31,7 @@ export async function GET(request) {
           .collection("material_history")
           .find({ materialId: id })
           .sort({ updatedAt: -1 })
+          .limit(200)
           .toArray();
 
         return NextResponse.json(history);

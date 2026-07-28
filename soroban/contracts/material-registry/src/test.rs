@@ -6,6 +6,7 @@ use super::*;
 use soroban_sdk::testutils::{Address as _, Events as _};
 use soroban_sdk::{vec, Event, IntoVal, Symbol};
 use std::format;
+use soroban_sdk::{vec, Event, IntoVal};
 
 fn install_and_init_contract(
     env: &Env,

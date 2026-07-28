@@ -4,6 +4,7 @@ import { ObjectId } from "mongodb";
 import { getDb, getMongoClientPromise as getClientPromise } from '@/lib/mongodb';
 import { NextResponse } from 'next/server';
 import { getUserFromCookie } from "@/lib/api/auth";
+import { withApiHardening } from "@/lib/api/hardening";
 import { findMaterial } from "@/lib/checkout/discountVerifier";
 import {
   CheckoutIntentError,
@@ -23,8 +24,15 @@ import { verifyPurchaseTransaction, PurchaseVerificationError } from "@/lib/purc
 import { PURCHASE_STATES } from "@/lib/purchases/stateMachine";
 import { getLatestManifest } from "@/lib/provenance/registry";
 import { insertOutboxEvent, OUTBOX_EVENT_TYPES } from "@/lib/outbox";
+import { withApiContract } from "@/lib/api/contract";
 
 const STELLAR_NETWORK = process.env.NEXT_PUBLIC_STELLAR_NETWORK || "TESTNET";
+
+function publicPurchase(purchase) {
+  const safe = { ...purchase };
+  delete safe.signedXdr;
+  return safe;
+}
 
 function jsonError(error) {
   return NextResponse.json(
@@ -162,7 +170,7 @@ function buildPurchaseFields({ body, intent, versionBinding, chainReceipt }) {
   };
 }
 
-export async function GET(req) {
+async function getPurchases(req) {
   try {
     const user = await getUserFromCookie(req);
     if (!user) {
@@ -177,14 +185,54 @@ export async function GET(req) {
       .sort({ createdAt: -1 })
       .toArray();
 
-    return NextResponse.json(purchases);
+    return NextResponse.json(purchases.map(publicPurchase));
   } catch (err) {
     console.error("GET /api/purchase error:", err);
     return NextResponse.json({ error: "Server error" }, { status: 500 });
   }
 }
 
+async function recordPurchase(req) {
+const MAX_PURCHASE_HISTORY_RESULTS = 200;
+
+export async function GET(req) {
+  return withApiHardening(
+    req,
+    { route: "purchase", rateLimit: { limit: 60, windowMs: 60_000 } },
+    async () => {
+      try {
+        const user = await getUserFromCookie(req);
+        if (!user) {
+          return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+        }
+
+        const db = await getDb();
+        const userAddress = normalizeBuyerAddress(user.walletAddress || user.address || user.id);
+        const purchases = await db
+          .collection("purchases")
+          .find({ buyerAddress: userAddress })
+          .sort({ createdAt: -1 })
+          .limit(MAX_PURCHASE_HISTORY_RESULTS)
+          .toArray();
+
+        return NextResponse.json(purchases);
+      } catch (err) {
+        console.error("GET /api/purchase error:", err);
+        return NextResponse.json({ error: "Server error" }, { status: 500 });
+      }
+    }
+  );
+}
+
 export async function POST(req) {
+  return withApiHardening(
+    req,
+    { route: "purchase", rateLimit: { limit: 10, windowMs: 60_000 } },
+    async () => purchasePost(req)
+  );
+}
+
+async function purchasePost(req) {
   let session = null;
 
   try {
@@ -255,7 +303,7 @@ export async function POST(req) {
           status: 200,
           body: {
             message: "Already purchased",
-            purchase: existing,
+            purchase: publicPurchase(existing),
             access,
             transactionHash: existing.transactionHash,
           },
@@ -339,7 +387,7 @@ export async function POST(req) {
         body: {
           success: true,
           purchaseId: purchase._id,
-          purchase,
+          purchase: publicPurchase(purchase),
           access,
           transactionHash,
           checkoutIntentHash: intent.intentHash,
@@ -361,3 +409,6 @@ export async function POST(req) {
     }
   }
 }
+
+export const GET = (request) => withApiContract(request, {}, () => getPurchases(request));
+export const POST = (request) => withApiContract(request, {}, () => recordPurchase(request));

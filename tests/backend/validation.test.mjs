@@ -44,6 +44,9 @@ test("validateMaterialPayload preserves preview fields", () => {
     title: "Notes",
     fileUrl: "ipfs://file",
     coverImageUrl: "https://gateway.pinata.cloud/ipfs/cover.png",
+    // Must be an allowlisted remote image host (see REMOTE_IMAGE_HOSTS); the
+    // SSRF hardening in #58 made arbitrary hosts a validation error.
+    coverImageUrl: "https://gateway.pinata.cloud/ipfs/QmCover/cover.png",
     shortSummary: "  Useful summary  ",
     learningOutcomes: "Outcome 1\nOutcome 2,Outcome 3",
     tableOfContents: ["Intro", "Methods", "Conclusion"],
@@ -51,6 +54,7 @@ test("validateMaterialPayload preserves preview fields", () => {
   });
 
   assert.equal(material.coverImageUrl, "https://gateway.pinata.cloud/ipfs/cover.png");
+  assert.equal(material.coverImageUrl, "https://gateway.pinata.cloud/ipfs/QmCover/cover.png");
   assert.equal(material.shortSummary, "Useful summary");
   assert.deepEqual(material.learningOutcomes, ["Outcome 1", "Outcome 2", "Outcome 3"]);
   assert.deepEqual(material.tableOfContents, ["Intro", "Methods", "Conclusion"]);

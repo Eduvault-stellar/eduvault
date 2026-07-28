@@ -37,6 +37,7 @@ export function validatePinataResponse(response, type = "file") {
  * @returns {string} The verified URL
  */
 export function validateGatewayUrl(url, type = "file") {
+  let normalized;
   try {
     if (!url || typeof url !== "string" || url.trim() === "") {
       throw new TypeError("URL is required");
@@ -45,6 +46,7 @@ export function validateGatewayUrl(url, type = "file") {
       ? new URL(process.env.NEXT_PUBLIC_GATEWAY_URL).hostname
       : null;
     const normalized = normalizeExternalUrl(url, {
+    normalized = normalizeExternalUrl(url, {
       allowedHosts: [...REMOTE_IMAGE_HOSTS, gatewayHost].filter(Boolean),
     });
     if (!normalized) throw new TypeError("URL is required");
@@ -55,6 +57,15 @@ export function validateGatewayUrl(url, type = "file") {
       url,
     });
   }
+
+  // normalizeExternalUrl returns null for empty input rather than throwing, so
+  // a missing gateway URL used to pass straight through this validator and
+  // reach callers as null where they expect a verified string.
+  if (!normalized) {
+    throw new StorageError(`Missing gateway URL for ${type}`, { type, url });
+  }
+
+  return normalized;
 }
 
 /**
