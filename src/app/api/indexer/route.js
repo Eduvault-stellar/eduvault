@@ -45,12 +45,7 @@ export const POST = withApiHardening(
   async (request) => {
   if (!isAuthorised(request)) {
     return errorResponse("Unauthorized", 401);
-    },
-    {
-      route: 'indexer-get',
-      rateLimit: { limit: 10, windowMs: 60_000 }, // 10 requests/min per IP
-    }
-  );
+  }
 
   const contractIds = [
     PURCHASE_MANAGER_CONTRACT_ID,
@@ -92,6 +87,7 @@ export const POST = withApiHardening(
   } catch (err) {
     console.error("[indexer] batch error:", err);
     return errorResponse(`Indexer batch failed: ${err.message}`, 500);
+  }
   },
   {
     route: 'indexer-post',
@@ -129,4 +125,9 @@ export const GET = withApiHardening(
   } catch (err) {
     return errorResponse("Failed to read sync state", 500);
   }
-}
+  },
+  {
+    route: 'indexer-get',
+    rateLimit: { limit: 10, windowMs: 60_000 }, // 10 requests/min per IP
+  }
+);

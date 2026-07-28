@@ -128,7 +128,11 @@ export const GET = withApiHardening(
           },
         }
       );
-    },
-    {}
-  );
-}
+    }
+    })(request, { params });
+  },
+  {
+    route: 'materials-deliver',
+    rateLimit: { limit: 100, windowMs: 60_000 },
+  }
+);

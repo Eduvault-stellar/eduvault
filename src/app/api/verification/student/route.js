@@ -81,7 +81,7 @@ export const POST = withAuthorization(
       );
     }
 
-    const db = await getDb();
+    // removed duplicate getDb
 
     // Check for existing pending or approved verification
     const existingVerification = await db
@@ -188,7 +188,6 @@ export const GET = withAuthorization(async (request) => {
     }
 
     const { address } = authResult;
-    const db = await getDb();
 
     const verification = await db.collection("student_verifications").findOne(
       { walletAddress: userId.toLowerCase() }, // Use userId from auth
