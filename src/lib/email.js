@@ -1,4 +1,56 @@
 import nodemailer from "nodemailer";
+import { createCircuitBreaker, CircuitState, DependencyError } from "@/lib/resilience/index.js";
+import { withTimeout } from "@/lib/resilience/timeout.js";
+import { withRetry } from "@/lib/resilience/retry.js";
+import { setGauge, incrementCounter } from "@/lib/telemetry/metrics";
+import { currentTraceparent } from "@/lib/telemetry/context";
+
+const EMAIL_TIMEOUT_MS = Number(process.env.EMAIL_TIMEOUT_MS || 15000);
+
+const emailCircuitBreaker = createCircuitBreaker("email", {
+  failureThreshold: Number(process.env.EMAIL_CB_FAILURE_THRESHOLD || 3),
+  successThreshold: 2,
+  resetTimeoutMs: Number(process.env.EMAIL_CB_RESET_TIMEOUT_MS || 30000),
+  onStateChange(name, from, to) {
+    setGauge("circuit_breaker_state", { dependency: name, state: to }, 1);
+    if (from && from !== to) {
+      setGauge("circuit_breaker_state", { dependency: name, state: from }, 0);
+    }
+    if (to === CircuitState.OPEN) {
+      incrementCounter("circuit_breaker_open_total", { dependency: name });
+    }
+    const level = to === CircuitState.OPEN ? "warn" : "info";
+    console[level](`[circuit-breaker] email: ${from} -> ${to}`);
+  },
+});
+
+export function getEmailCircuitBreakerState() {
+  return emailCircuitBreaker.getState();
+}
+
+async function withEmailResilience(action, fn, opts = {}) {
+  if (emailCircuitBreaker.getState() === CircuitState.OPEN) {
+    incrementCounter("rpc_errors_total", { operation: `email.${action}` });
+    throw new DependencyError({
+      dependency: "email",
+      action,
+      retryable: false,
+      statusCode: 503,
+      userMessage: "Email service is temporarily unavailable.",
+    });
+  }
+  return emailCircuitBreaker.call(async () => {
+    return withRetry(
+      async () => withTimeout(fn(), EMAIL_TIMEOUT_MS, `email.${action}`),
+      {
+        idempotent: opts.idempotent !== false,
+        maxAttempts: Number(process.env.EMAIL_RETRIES || 2),
+        baseDelayMs: 500,
+        maxDelayMs: 5000,
+      }
+    );
+  });
+}
 
 function createTransporter() {
   // Prefer explicit SMTP settings; fallback to Gmail using EMAIL_USER/PASS
@@ -112,10 +164,10 @@ export async function sendWelcomeEmail(to, name) {
     </body>
   </html>`;
 
-  await transporter.sendMail({ from, to, subject, text, html });
+  await withEmailResilience('send.welcome', () => transporter.sendMail({ from, to, subject, text, html }), { idempotent: false });
 }
 
 export async function verifyEmailConnection() {
   const transporter = createTransporter();
-  await transporter.verify();
+  await withEmailResilience('verify', () => transporter.verify());
 }

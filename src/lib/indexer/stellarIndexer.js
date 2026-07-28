@@ -7,6 +7,7 @@ import { auditLog } from "../api/audit.js";
 import { runWithContext } from "../telemetry/context.js";
 import { withSpan } from "../telemetry/tracing.js";
 import { decodeContractEvent } from "./eventDecoder.js";
+import { getRpcEvents } from "../stellar/rpcClient.js";
 
 function duplicateKey(error) {
   return error?.code === 11000;
@@ -364,7 +365,6 @@ export async function runIndexerBatch({ db, eventSource, source = "stellar", lim
 export function createJsonRpcEventSource({
   rpcUrl,
   contractId,
-  fetchImpl = fetch,
   networkPassphrase,
   manifestOverrides,
 }) {
@@ -376,26 +376,10 @@ export function createJsonRpcEventSource({
 
   return {
     async getEvents({ cursor, limit, startLedger }) {
-      const response = await fetchImpl(rpcUrl, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          id: 1,
-          method: "getEvents",
-          params: {
-            ...(cursor ? {} : startLedger ? { startLedger } : {}),
-            filters: contractIds.length > 0 ? [{ contractIds }] : [],
-            pagination: { cursor, limit },
-          },
-        }),
-      });
-      const payload = await response.json();
-      if (payload.error) {
-        throw new Error(payload.error.message || "Stellar RPC getEvents failed");
-      }
+      const filters = contractIds.length > 0 ? [{ contractIds }] : [];
+      const result = await getRpcEvents({ cursor, limit, startLedger, filters }, { rpcUrl });
 
-      const rawEvents = payload.result?.events || [];
+      const rawEvents = result?.events || [];
 
       // Decode/validate each raw RPC event against the versioned schema
       // (#7) before it reaches projection code, which expects normalized
@@ -420,8 +404,8 @@ export function createJsonRpcEventSource({
 
       return {
         events,
-        nextCursor: payload.result?.cursor || null,
-        lastLedger: payload.result?.latestLedger || null,
+        nextCursor: result?.cursor || null,
+        lastLedger: result?.latestLedger || null,
       };
     },
   };

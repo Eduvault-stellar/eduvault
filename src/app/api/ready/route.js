@@ -2,12 +2,13 @@ export const dynamic = "force-dynamic";
 
 import { NextResponse } from "next/server";
 import { getDb } from "@/lib/mongodb";
-import { pinata } from "@/lib/pinata";
+import { pinata, callPinata } from "@/lib/pinata";
 import { verifyEmailConnection } from "@/lib/email";
 import { withApiHardening } from "@/lib/api/hardening";
-import { Server, rpc } from "@stellar/stellar-sdk";
+import { Server } from "@stellar/stellar-sdk";
 import { HORIZON_URL, STELLAR_RPC_URL } from "@/lib/config/chain";
 import { setGauge } from "@/lib/telemetry/metrics";
+import { getRpcHealth } from "@/lib/stellar/rpcClient";
 
 /**
  * Readiness probe (#20): "can this instance actually serve traffic right now?"
@@ -58,7 +59,7 @@ export async function GET(request) {
           status.pinata = "offline: PINATA_JWT not configured";
           recordFailure("pinata");
         } else {
-          await pinata.testAuthentication();
+          await callPinata('testAuthentication', () => pinata.testAuthentication());
           status.pinata = "online";
         }
       } catch (err) {
@@ -80,8 +81,7 @@ export async function GET(request) {
         const horizonServer = new Server(HORIZON_URL);
         await horizonServer.root();
 
-        const rpcServer = new rpc.Server(STELLAR_RPC_URL);
-        const health = await rpcServer.getHealth();
+        const health = await getRpcHealth();
 
         if (health && health.status === "healthy") {
           status.stellar = "online";

@@ -10,7 +10,7 @@ import {
   validateUploadPayload,
   validateUploadFileMetadata,
 } from '@/lib/api/validation'
-import { pinata } from '@/lib/pinata'
+import { pinata, callPinata } from '@/lib/pinata'
 import { validateUploadedFile } from '@/lib/ipfs/uploadValidator'
 
 const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024 // 10 MB
@@ -119,13 +119,13 @@ export async function POST(request) {
         // All checks passed — dispatch to Pinata
         const results = {}
 
-        const uploadedFile = await pinata.upload.public.file(file)
-        const fileUrl = await pinata.gateways.public.convert(uploadedFile.cid)
+        const uploadedFile = await callPinata('upload.file', () => pinata.upload.public.file(file))
+        const fileUrl = await callPinata('gateway.file', () => pinata.gateways.public.convert(uploadedFile.cid))
         results.fileUrl = fileUrl
 
         if (image) {
-          const fileThumb = await pinata.upload.public.file(image)
-          const imgUrl = await pinata.gateways.public.convert(fileThumb.cid)
+          const fileThumb = await callPinata('upload.thumbnail', () => pinata.upload.public.file(image))
+          const imgUrl = await callPinata('gateway.thumbnail', () => pinata.gateways.public.convert(fileThumb.cid))
           results.imgUrl = imgUrl
         }
 
@@ -168,8 +168,8 @@ export async function POST(request) {
           timestamp: new Date().toISOString(),
         }
 
-        const uploadedJson = await pinata.upload.public.json(metadataJSON)
-        const jsonUrl = await pinata.gateways.public.convert(uploadedJson.cid)
+        const uploadedJson = await callPinata('upload.metadata', () => pinata.upload.public.json(metadataJSON))
+        const jsonUrl = await callPinata('gateway.metadata', () => pinata.gateways.public.convert(uploadedJson.cid))
         results.metadataUrl = jsonUrl
 
         auditLog({ event: 'upload_complete', route: 'materials/upload', method: 'POST', status: 200 })

@@ -4,6 +4,7 @@ import { defineConfig } from "vitest/config";
 const srcPath = fileURLToPath(new URL("./src", import.meta.url));
 const sentryMockPath = fileURLToPath(new URL("./test/mocks/sentry-nextjs.js", import.meta.url));
 const otelMockPath = fileURLToPath(new URL("./test/mocks/opentelemetry-api.js", import.meta.url));
+const nextServerMockPath = fileURLToPath(new URL("./test/mocks/next-server.js", import.meta.url));
 
 export default defineConfig({
   resolve: {
@@ -11,6 +12,7 @@ export default defineConfig({
       "@": srcPath,
       "@sentry/nextjs": sentryMockPath,
       "@opentelemetry/api": otelMockPath,
+      "next/server": nextServerMockPath,
     },
   },
   test: {

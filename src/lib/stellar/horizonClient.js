@@ -1,5 +1,24 @@
 import { Horizon } from "@stellar/stellar-sdk";
 import { HORIZON_URL, isMainnet } from "@/lib/config/chain";
+import { createCircuitBreaker, CircuitState, DependencyError } from "@/lib/resilience/index.js";
+import { setGauge, incrementCounter } from "@/lib/telemetry/metrics.js";
+
+const horizonCircuitBreaker = createCircuitBreaker("stellar-horizon", {
+  failureThreshold: Number(process.env.STELLAR_HORIZON_CB_FAILURE_THRESHOLD || 3),
+  successThreshold: 2,
+  resetTimeoutMs: Number(process.env.STELLAR_HORIZON_CB_RESET_TIMEOUT_MS || 30000),
+  onStateChange(name, from, to) {
+    setGauge("circuit_breaker_state", { dependency: name, state: to }, 1);
+    if (from && from !== to) {
+      setGauge("circuit_breaker_state", { dependency: name, state: from }, 0);
+    }
+    if (to === CircuitState.OPEN) {
+      incrementCounter("circuit_breaker_open_total", { dependency: name });
+    }
+    const level = to === CircuitState.OPEN ? "warn" : "info";
+    console[level](`[circuit-breaker] stellar-horizon: ${from} -> ${to}`);
+  },
+});
 
 const horizonLogger = {
   warn(data, message) {
@@ -88,7 +107,20 @@ async function withTimeout(promise, ms, label) {
  * @param {{ timeoutMs?: number, retries?: number }} [opts]
  * @returns {Promise<T>}
  */
+export function getHorizonCircuitBreakerState() {
+  return horizonCircuitBreaker.getState();
+}
+
 export async function withFailover(fn, { timeoutMs = DEFAULT_TIMEOUT_MS, retries = DEFAULT_RETRIES } = {}) {
+  if (horizonCircuitBreaker.getState() === CircuitState.OPEN) {
+    throw new DependencyError({
+      dependency: "stellar-horizon",
+      action: "withFailover",
+      retryable: true,
+      userMessage: "The Stellar network is temporarily unavailable. Please try again later.",
+    });
+  }
+
   const errors = [];
 
   for (let attempt = 0; attempt <= retries; attempt++) {
@@ -107,6 +139,7 @@ export async function withFailover(fn, { timeoutMs = DEFAULT_TIMEOUT_MS, retries
           "Horizon failover succeeded",
         );
       }
+      horizonCircuitBreaker.recordSuccess();
       return result;
     } catch (err) {
       errors.push({ url, message: err.message });
@@ -141,6 +174,8 @@ export async function withFailover(fn, { timeoutMs = DEFAULT_TIMEOUT_MS, retries
   const summary = errors
     .map(({ url, message }) => `${url}: ${message}`)
     .join(" | ");
+
+  horizonCircuitBreaker.recordFailure();
 
   throw new Error(
     `All Horizon endpoints failed after ${retries + 1} attempts. Errors: ${summary}`,
