@@ -1,5 +1,6 @@
 import { getMaterialAccessStatus, createPendingAccessRequest } from "../../../../lib/purchases/access.js";
 import { resolveAuthenticatedWallet } from "../../../../lib/auth/walletIdentity.js";
+import { withApiContract } from "../../../../lib/api/contract.js";
 
 export const dynamic = 'force-dynamic';
 
@@ -35,6 +36,12 @@ export async function accessStatus(db, materialId, buyerAddress) {
  * GET /api/materials/access?materialId=&buyerAddress=
  * Returns a simple access status for a material for a buyer.
  */
+async function getMaterialAccess(request) {
+  try {
+    const { searchParams } = new URL(request.url);
+    const materialId = searchParams.get('materialId') || '';
+    const identity = await resolveAuthenticatedWallet(request);
+    const buyerAddress = identity.ok ? identity.walletAddress : '';
 export async function GET(request) {
   const { withApiHardening } = await import('../../../../lib/api/hardening.js');
   return withApiHardening(
@@ -79,6 +86,12 @@ export async function GET(request) {
  * Starts a learner access request without granting access. Payment completion
  * must be recorded separately through /api/purchase.
  */
+async function requestMaterialAccess(request) {
+  try {
+    const body = await request.json();
+    const materialId = body?.materialId || '';
+    const identity = await resolveAuthenticatedWallet(request);
+    const buyerAddress = identity.ok ? identity.walletAddress : '';
 export async function POST(request) {
   const { withApiHardening } = await import('../../../../lib/api/hardening.js');
   return withApiHardening(
@@ -118,3 +131,6 @@ export async function POST(request) {
     }
   );
 }
+
+export const GET = (request) => withApiContract(request, {}, () => getMaterialAccess(request));
+export const POST = (request) => withApiContract(request, {}, () => requestMaterialAccess(request));

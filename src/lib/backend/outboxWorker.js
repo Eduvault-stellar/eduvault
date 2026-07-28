@@ -1,6 +1,7 @@
 import { getDb } from "../mongodb.js";
 import { pollOutbox, completeOutboxEvent, failOutboxEvent, OUTBOX_EVENT_TYPES } from "../outbox.js";
 import { broadcastPurchaseEvent } from "../webhooks/sender.js";
+import { upcastPayload } from "./payloadVersions.js";
 
 export async function processOutboxEvents(sender = broadcastPurchaseEvent) {
   const db = await getDb();
@@ -10,7 +11,8 @@ export async function processOutboxEvents(sender = broadcastPurchaseEvent) {
 
   console.log(`[Outbox Worker] Processing ${events.length} events...`);
 
-  for (const event of events) {
+  for (const storedEvent of events) {
+    const event = upcastPayload("outbox", storedEvent);
     try {
       if (event.type === OUTBOX_EVENT_TYPES.SEND_PURCHASE_WEBHOOK) {
         // broadcastPurchaseEvent is already handling the payload correctly

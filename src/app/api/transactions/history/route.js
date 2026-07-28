@@ -3,6 +3,7 @@ export const dynamic = "force-dynamic";
 import { NextResponse } from "next/server";
 import { getDb } from "@/lib/mongodb";
 import { verifyDashboardToken } from "@/lib/auth/session";
+import { withApiContract } from "@/lib/api/contract";
 import { withApiHardening } from "@/lib/api/hardening";
 import {
   buildPurchaseHistoryRecords,
@@ -30,6 +31,7 @@ function parseLimit(value) {
   return Math.min(Math.floor(limit), 100);
 }
 
+async function listTransactionHistory(request) {
 export async function GET(request) {
   return withApiHardening(
     request,
@@ -97,3 +99,5 @@ async function transactionHistoryGet(request) {
     return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
   }
 }
+
+export const GET = (request) => withApiContract(request, {}, () => listTransactionHistory(request));

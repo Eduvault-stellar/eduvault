@@ -10,6 +10,7 @@ import { acquireSlot } from "@/lib/capacity/concurrency";
 import { preRequestShed } from "@/lib/capacity/shed";
 import { resolveRouteBudget } from "@/lib/capacity/budgets";
 import { createDisconnectSignal } from "@/lib/capacity/backpressure";
+import { enforceApiResponse, negotiateApiVersion } from "./contract";
 import { resolveTrustedClientIp } from "@/lib/security/clientAddress";
 
 function clientKey(request) {
@@ -32,6 +33,16 @@ export async function withApiHardening(request, options, handler) {
       route,
     },
     async () => {
+      const finalize = (response) => enforceApiResponse(response, {
+        request,
+        correlationId: currentCorrelationId(),
+        deprecation: options.deprecation,
+        responseKeys: options.responseKeys,
+      });
+      const versionError = negotiateApiVersion(request, currentCorrelationId());
+      if (versionError) return versionError;
+      if (options.deprecation) incrementCounter("api_deprecated_requests_total", { route, method });
+
       // ── Load shedding check ────────────────────────────────────────
       const { shed, response: shedResponse } = preRequestShed(method, pathname);
       if (shed && shedResponse) {
@@ -41,7 +52,7 @@ export async function withApiHardening(request, options, handler) {
           status: shedResponse.status,
           headers: { ...shedResponse.headers, "x-correlation-id": currentCorrelationId() },
         });
-        return res;
+        return finalize(res);
       }
 
       // ── Payload size check ─────────────────────────────────────────
@@ -52,10 +63,10 @@ export async function withApiHardening(request, options, handler) {
           const limitMB = (budget.maxPayloadBytes / (1024 * 1024)).toFixed(2);
           auditLog({ event: "payload_too_large", route, method, status: 413 });
           incrementCounter("http_requests_total", { route, method, outcome: "payload_too_large" });
-          return NextResponse.json(
+          return finalize(NextResponse.json(
             { error: `Payload too large: ${sizeMB}MB exceeds limit of ${limitMB}MB` },
             { status: 413, headers: { "x-correlation-id": currentCorrelationId() } }
-          );
+          ));
         }
       }
 
@@ -73,7 +84,7 @@ export async function withApiHardening(request, options, handler) {
       if (!rateLimit.allowed) {
         auditLog({ event: "rate_limit_blocked", route, method, status: 429 });
         incrementCounter("http_requests_total", { route, method, outcome: "rate_limited" });
-        return NextResponse.json(
+        return finalize(NextResponse.json(
           { error: "Too many requests", retryAfter: rateLimit.retryAfter },
           {
             status: 429,
@@ -84,7 +95,7 @@ export async function withApiHardening(request, options, handler) {
               "Retry-After": String(rateLimit.retryAfter || 1),
             },
           }
-        );
+        ));
       }
 
       // ── Concurrency admission ──────────────────────────────────────
@@ -97,7 +108,7 @@ export async function withApiHardening(request, options, handler) {
           status: overload.status,
           headers: { ...overload.headers, "x-correlation-id": currentCorrelationId() },
         });
-        return res;
+        return finalize(res);
       }
 
       // ── Client disconnect signal ───────────────────────────────────
@@ -118,7 +129,7 @@ export async function withApiHardening(request, options, handler) {
         response.headers.set("x-correlation-id", currentCorrelationId());
         response.headers.set("traceparent", currentTraceparent());
         response.headers.set("x-capacity-inflight", "ok");
-        return response;
+        return await finalize(response);
       } catch (error) {
         recordHistogram("http_request_duration_ms", { route, method }, Date.now() - startedAt);
 
@@ -127,12 +138,12 @@ export async function withApiHardening(request, options, handler) {
           incrementCounter("http_requests_total", { route, method, outcome: "validation_error" });
           const res = NextResponse.json({ error: error.message, details: error.details }, { status: 400 });
           res.headers.set("x-correlation-id", currentCorrelationId());
-          return res;
+          return finalize(res);
         }
 
         incrementCounter("http_requests_total", { route, method, outcome: "error" });
         captureException(error, { route, method, correlationId: currentCorrelationId() });
-        throw error;
+        return finalize(NextResponse.json({ error: "Internal Server Error", code: "internal_error" }, { status: 500 }));
       } finally {
         release();
         cleanupDisconnect();

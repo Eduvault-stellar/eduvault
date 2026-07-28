@@ -4,6 +4,9 @@ import { NextResponse } from 'next/server'
 import { withApiHardening } from '@/lib/api/hardening';
 import { errorResponse } from '@/lib/api/errorResponse';
 import { verifyEntitlement } from '@/lib/entitlement'
+import { withApiContract } from '@/lib/api/contract'
+
+async function getEntitlement(req) {
 import { withApiHardening } from '@/lib/api/hardening'
 
 export async function GET(req) {
@@ -57,3 +60,6 @@ export const GET = withApiHardening(
     console.error('Entitlement Check Error:', error)
     return errorResponse('Internal Server Error', 500);
   }
+}
+
+export const GET = (request) => withApiContract(request, {}, () => getEntitlement(request));
