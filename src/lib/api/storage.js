@@ -39,12 +39,18 @@ export function validatePinataResponse(response, type = "file") {
 export function validateGatewayUrl(url, type = "file") {
   let normalized;
   try {
+    if (!url || typeof url !== "string" || url.trim() === "") {
+      throw new TypeError("URL is required");
+    }
     const gatewayHost = process.env.NEXT_PUBLIC_GATEWAY_URL
       ? new URL(process.env.NEXT_PUBLIC_GATEWAY_URL).hostname
       : null;
+    const normalized = normalizeExternalUrl(url, {
     normalized = normalizeExternalUrl(url, {
       allowedHosts: [...REMOTE_IMAGE_HOSTS, gatewayHost].filter(Boolean),
     });
+    if (!normalized) throw new TypeError("URL is required");
+    return normalized;
   } catch {
     throw new StorageError(`Invalid gateway URL returned for ${type}: "${url || ""}"`, {
       type,

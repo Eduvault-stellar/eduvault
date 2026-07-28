@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { ObjectId } from "mongodb";
 import { getDb } from "@/lib/mongodb";
 import { auditLog } from "@/lib/api/audit";
 import { withApiHardening } from "@/lib/api/hardening";
@@ -13,6 +14,12 @@ import {
 } from "@/lib/materials/materialLifecycle";
 
 export const dynamic = "force-dynamic";
+
+function findMaterialById(db, materialId) {
+  return db.collection("materials").findOne({
+    _id: ObjectId.isValid(materialId) ? new ObjectId(materialId) : materialId,
+  });
+}
 
 /**
  * POST /api/materials/[id]/publish
@@ -113,6 +120,19 @@ export const POST = withAuthorization(
       };
 
 
+    const userAddress = user.walletAddress || user.address || user.id;
+    if (!userAddress) {
+      auditLog({ event: "publish_no_address", route: "material-publish", method: "POST", status: 400, actor: user.sub, materialId });
+      return NextResponse.json({ error: "No wallet address on account" }, { status: 400 });
+    }
+
+    // ── Resolve material ──────────────────────────────────────────────────
+    const db = await getDb();
+    const material = await findMaterialById(db, materialId);
+    if (!material) {
+      auditLog({ event: "publish_not_found", route: "material-publish", method: "POST", status: 404, materialId });
+      return NextResponse.json({ error: "Material not found" }, { status: 404 });
+    }
       if (contractId) {
         updatePayload.contractId = contractId;
       }
@@ -143,6 +163,46 @@ export const POST = withAuthorization(
       console.error("Publish error:", err);
       return errorResponse("Server error", 500);
     }
+
+    // ── Persist published status ──────────────────────────────────────────
+    const body = await request.json().catch(() => ({}));
+    const contractId = typeof body.contractId === "string" ? body.contractId.trim() : undefined;
+
+    const updatePayload = {
+      status: "published",
+      publishedAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    if (contractId) {
+      updatePayload.contractId = contractId;
+    }
+
+    await db.collection("materials").updateOne(
+      { _id: ObjectId.isValid(materialId) ? new ObjectId(materialId) : materialId },
+      { $set: updatePayload }
+    );
+
+    auditLog({
+      event: "publish_success",
+      route: "material-publish",
+      method: "POST",
+      status: 200,
+      actor: user.sub,
+      materialId,
+    });
+
+    return NextResponse.json(
+      {
+        success: true,
+        status: "published",
+        checklist: validation.checklist,
+      },
+      { status: 200 }
+    );
+  } catch (err) {
+    console.error("Publish error:", err);
+    return NextResponse.json({ error: "Server error" }, { status: 500 });
   },
   {
     checkOwnership: async (userId, fullUser, request) => {
@@ -201,6 +261,28 @@ export const GET = withAuthorization(
         return errorResponse("No wallet address on account", 400);
       }
 
+    const db = await getDb();
+    const material = await findMaterialById(db, materialId);
+
+    // Return checklist even if material not found (shows all fields as missing)
+    const checklist = getPublishingChecklist(material);
+
+    // Ownership check for determining if user can publish
+    const owner = material?.userAddress || material?.ownerAddress;
+    const isOwner = material && owner && String(owner).toLowerCase() === String(userAddress).toLowerCase();
+
+    return NextResponse.json({
+      materialId,
+      canPublish: isOwner && checklist.missingRequired.length === 0,
+      isOwner,
+      published: material?.status === "published" || false,
+      checklist,
+    });
+  } catch (err) {
+    console.error("Publish checklist error:", err);
+    return NextResponse.json({ error: "Server error" }, { status: 500 });
+  }
+}
 
       const db = await getDb();
       const material = await db.collection("materials").findOne({ _id: materialId });
