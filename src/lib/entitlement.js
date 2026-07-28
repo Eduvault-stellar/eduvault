@@ -2,6 +2,7 @@ import { getDb } from '@/lib/mongodb';
 import { PURCHASE_MANAGER_CONTRACT_ID, STELLAR_RPC_URL, NETWORK_PASSPHRASE } from '@/lib/config/chain';
 import { isCompletedPurchaseStatus, normalizeBuyerAddress } from '@/lib/purchases/access';
 import { Contract, Address, nativeToScVal, scValToNative, xdr, TransactionBuilder, Account } from '@stellar/stellar-sdk';
+import { simulateTransaction } from '@/lib/stellar/rpcClient';
 import logger from '@/lib/logger';
 
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes positive TTL
@@ -52,111 +53,34 @@ export function formatMaterialIdBytes(materialId) {
   return buf;
 }
 
-export function buildHasEntitlementXdr(materialId, buyerAddress) {
-  const contract = new Contract(PURCHASE_MANAGER_CONTRACT_ID);
-  const matIdScVal = nativeToScVal(formatMaterialIdBytes(materialId), { type: 'bytesN', size: 32 });
-  const buyerScVal = new Address(buyerAddress).toScVal();
-
-  const op = contract.call('has_entitlement', matIdScVal, buyerScVal);
-
-  const tx = new TransactionBuilder(new Account("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF", "1"), {
-    fee: "100",
-    networkPassphrase: NETWORK_PASSPHRASE,
-  })
-    .addOperation(op)
-    .setTimeout(30)
-    .build();
-
-  return tx.toXDR();
-}
-
-export function decodeBoolean(xdrBase64) {
-  try {
-    const scval = xdr.ScVal.fromXDR(xdrBase64, 'base64');
-    return scValToNative(scval) === true;
-  } catch (err) {
-    logger?.warn({ err: err.message }, 'Failed to decode boolean from SCVal');
-    return false;
-  }
-}
-
 export async function checkChainEntitlement(materialId, buyerAddress) {
   if (!PURCHASE_MANAGER_CONTRACT_ID || !STELLAR_RPC_URL) return null;
-import { client } from './backend/db'; // Your app's MongoDB client instance
-import { CacheEngine } from './cache/engine';
-import { getDb } from './mongodb.js';
-import { PURCHASE_MANAGER_CONTRACT_ID, STELLAR_RPC_URL, NETWORK_PASSPHRASE } from './config/chain.js';
-import { isCompletedPurchaseStatus, normalizeBuyerAddress } from './purchases/access.js';
-import {
-  Keypair,
-  TransactionBuilder,
-  BASE_FEE,
-  Contract,
-  xdr,
-  Account,
-  Address,
-  nativeToScVal,
-} from '@stellar/stellar-sdk';
 
-export async function updateEntitlement(tenant, network, userId, authScope, updates) {
-  const db = client.db();
-  const session = client.startSession();
+  const xdrBlob = buildHasEntitlementXdr(materialId, buyerAddress);
+  if (!xdrBlob) return null;
 
+  let result;
   try {
-    let result;
-    await session.withTransaction(async () => {
-      // 1. Update source of truth
-      result = await db.collection('entitlements').findOneAndUpdate(
-        { tenant, network, userId, authScope },
-        { 
-          $set: { ...updates, updatedAt: new Date() },
-          $inc: { version: 1 } 
-        },
-        { returnDocument: 'after', session }
-      );
-    const xdrBlob = buildHasEntitlementXdr(materialId, buyerAddress);
-    if (!xdrBlob) return null;
-
-    const body = {
-      jsonrpc: '2.0',
-      id: 1,
-      method: 'simulateTransaction',
-      params: {
-        transaction: xdrBlob,
-      },
-    };
-
-    const res = await fetch(STELLAR_RPC_URL, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(8_000),
-    });
-
-    const payload = await res.json();
-    if (payload.error) {
-      logger?.error({ err: payload.error }, 'RPC Error in checkChainEntitlement');
-      return null;
-    }
-
-    if (payload.result?.restorePreamble) {
-      logger?.warn({ materialId, buyerAddress }, 'Archived state detected in checkChainEntitlement (restorePreamble)');
-      return null;
-    }
-
-    const retval = payload.result?.results?.[0]?.xdr;
-    if (!retval) {
-      logger?.warn({ result: payload.result }, 'Malformed result in checkChainEntitlement');
-      return null;
-    }
-
-    const hasAccess = decodeBoolean(retval);
-    logger?.info({ materialId, buyerAddress, hasAccess }, 'Chain read entitlement');
-    return hasAccess;
+    result = await simulateTransaction(xdrBlob);
   } catch (err) {
-    logger?.error({ err: err.message }, 'Timeout or network error in checkChainEntitlement');
+    logger?.error({ err: err.message }, 'RPC Error in checkChainEntitlement');
     return null;
   }
+
+  if (result?.restorePreamble) {
+    logger?.warn({ materialId, buyerAddress }, 'Archived state detected in checkChainEntitlement (restorePreamble)');
+    return null;
+  }
+
+  const retval = result?.results?.[0]?.xdr;
+  if (!retval) {
+    logger?.warn({ result }, 'Malformed result in checkChainEntitlement');
+    return null;
+  }
+
+  const hasAccess = decodeBoolean(retval);
+  logger?.info({ materialId, buyerAddress, hasAccess }, 'Chain read entitlement');
+  return hasAccess;
 }
 
 function buildHasEntitlementXdr(materialId, buyerAddress) {
@@ -342,26 +266,8 @@ export async function verifyEntitlementLogic(materialId, buyerAddress, { db, che
   if (onChain === true) {
     await setCache(db, materialId, normalised, true, 'chain');
     return { hasAccess: true, source: 'chain' };
-      const targetCacheKey = CacheEngine.buildKey('entitlements', {
-        tenant, network, authScope, id: userId
-      });
-
-      // 2. Queue the invalidation to the transactional outbox
-      await db.collection('cache_outbox').insertOne({
-        eventId: `evt_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`,
-        cacheKey: targetCacheKey,
-        targetRegistry: 'entitlements',
-        status: 'PENDING',
-        createdAt: new Date(),
-        attempts: 0
-      }, { session });
-    });
-
-    return result.value;
-  } finally {
-    await session.endSession();
   }
-  
+
   if (onChain === false) {
     await setCache(db, materialId, normalised, false, 'chain');
     return { hasAccess: false, source: 'chain-miss' };
@@ -445,5 +351,5 @@ export function requireEntitlement(handler, getMaterialId) {
   };
 }
 
-export { buildHasEntitlementXdr, checkChainEntitlement };
+export { buildHasEntitlementXdr };
 

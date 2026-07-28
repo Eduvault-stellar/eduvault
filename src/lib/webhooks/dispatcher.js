@@ -2,6 +2,30 @@ import https from 'node:https';
 import dns from 'node:dns/promises';
 import { URL } from 'node:url';
 import net from 'node:net';
+import { createCircuitBreaker, CircuitState, DependencyError } from "@/lib/resilience/index.js";
+import { setGauge, incrementCounter } from "@/lib/telemetry/metrics";
+import { currentTraceparent } from "@/lib/telemetry/context";
+
+const webhookCircuitBreaker = createCircuitBreaker("webhook", {
+  failureThreshold: Number(process.env.WEBHOOK_CB_FAILURE_THRESHOLD || 5),
+  successThreshold: 2,
+  resetTimeoutMs: Number(process.env.WEBHOOK_CB_RESET_TIMEOUT_MS || 30000),
+  onStateChange(name, from, to) {
+    setGauge("circuit_breaker_state", { dependency: name, state: to }, 1);
+    if (from && from !== to) {
+      setGauge("circuit_breaker_state", { dependency: name, state: from }, 0);
+    }
+    if (to === CircuitState.OPEN) {
+      incrementCounter("circuit_breaker_open_total", { dependency: name });
+    }
+    const level = to === CircuitState.OPEN ? "warn" : "info";
+    console[level](`[circuit-breaker] webhook: ${from} -> ${to}`);
+  },
+});
+
+export function getWebhookCircuitBreakerState() {
+  return webhookCircuitBreaker.getState();
+}
 
 export function isPrivateIP(ip) {
   if (net.isIPv4(ip)) {
@@ -50,6 +74,20 @@ export function isPrivateIP(ip) {
 }
 
 export async function dispatchWebhook(url, payloadStr, signatureHeader) {
+  if (webhookCircuitBreaker.getState() === CircuitState.OPEN) {
+    incrementCounter("rpc_errors_total", { operation: "webhook.dispatch" });
+    throw new DependencyError({
+      dependency: "webhook",
+      action: "dispatch",
+      retryable: false,
+      statusCode: 503,
+      userMessage: "Webhook delivery service is temporarily unavailable.",
+    });
+  }
+  return webhookCircuitBreaker.call(async () => _dispatchWebhook(url, payloadStr, signatureHeader));
+}
+
+async function _dispatchWebhook(url, payloadStr, signatureHeader) {
   let currentUrl = url;
   let redirects = 0;
   const maxRedirects = 3;
@@ -106,6 +144,11 @@ export async function dispatchWebhook(url, payloadStr, signatureHeader) {
 
     if (signatureHeader) {
       requestOptions.headers['Eduvault-Signature'] = signatureHeader;
+    }
+
+    const traceparent = currentTraceparent();
+    if (traceparent) {
+      requestOptions.headers['traceparent'] = traceparent;
     }
 
     const response = await new Promise((resolve, reject) => {

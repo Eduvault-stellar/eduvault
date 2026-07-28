@@ -2,8 +2,30 @@ import { cpus } from "node:os";
 import { MongoClient } from "mongodb";
 import { ensureChallengeIndexes } from "./auth/challenge.js";
 import { updatePressureSignal } from "./capacity/shed.js";
+import { createCircuitBreaker, CircuitState, DependencyError } from "@/lib/resilience/index.js";
+import { withTimeout } from "@/lib/resilience/timeout.js";
+import { setGauge, incrementCounter } from "@/lib/telemetry/metrics.js";
 
 const globalForMongo = globalThis;
+
+const mongoCircuitBreaker = createCircuitBreaker("mongodb", {
+  failureThreshold: Number(process.env.MONGODB_CB_FAILURE_THRESHOLD || 3),
+  successThreshold: 2,
+  resetTimeoutMs: Number(process.env.MONGODB_CB_RESET_TIMEOUT_MS || 30000),
+  onStateChange(name, from, to) {
+    setGauge("circuit_breaker_state", { dependency: name, state: to }, 1);
+    if (from && from !== to) {
+      setGauge("circuit_breaker_state", { dependency: name, state: from }, 0);
+    }
+    if (to === CircuitState.OPEN) {
+      incrementCounter("circuit_breaker_open_total", { dependency: name });
+    }
+    const level = to === CircuitState.OPEN ? "warn" : "info";
+    console[level](
+      `[circuit-breaker] mongodb: ${from} -> ${to}`,
+    );
+  },
+});
 
 
 function parsePositiveInteger(value, fallback, variableName) {
@@ -66,7 +88,20 @@ function getMongoConfiguration() {
   };
 }
 
+export function getMongoCircuitBreakerState() {
+  return mongoCircuitBreaker.getState();
+}
+
 export function getMongoClientPromise() {
+  if (mongoCircuitBreaker.getState() === CircuitState.OPEN) {
+    throw new DependencyError({
+      dependency: "mongodb",
+      action: "connect",
+      retryable: true,
+      userMessage: "The database is temporarily unavailable. Please try again later.",
+    });
+  }
+
   if (!globalForMongo._mongoClientPromise) {
     const { uri, clientOptions } = getMongoConfiguration();
     const client = new MongoClient(uri, clientOptions);
@@ -85,27 +120,30 @@ export function getMongoClientPromise() {
       // Event monitoring is not available in all MongoDB driver environments.
     }
 
-    globalForMongo._mongoClientPromise = client.connect().catch((error) => {
-      globalForMongo._mongoClient = null;
-      globalForMongo._mongoClientPromise = null;
-      updatePressureSignal("mongoPoolExhausted", true);
+    globalForMongo._mongoClientPromise = client.connect().then(
+      (resolvedClient) => {
+        mongoCircuitBreaker.recordSuccess();
+        return resolvedClient;
+      },
+      (error) => {
+        globalForMongo._mongoClient = null;
+        globalForMongo._mongoClientPromise = null;
+        updatePressureSignal("mongoPoolExhausted", true);
+        mongoCircuitBreaker.recordFailure();
 
-      console.error("[mongodb] Connection failed", {
-        name: error?.name,
-        code: error?.code,
-        codeName: error?.codeName,
-        message: error?.message,
-      });
+        console.error("[mongodb] Connection failed", {
+          name: error?.name,
+          code: error?.code,
+          codeName: error?.codeName,
+          message: error?.message,
+        });
 
-      throw error;
-    });
+        throw error;
+      },
+    );
   }
 
   return globalForMongo._mongoClientPromise;
-}
-
-export function getClientPromise() {
-  return getMongoClientPromise();
 }
 
 export async function getMongoClient() {
@@ -142,7 +180,7 @@ export async function ensureMongoIndexes() {
 
 export async function pingDatabase() {
   const db = await getDb();
-  await db.command({ ping: 1 });
+  await withTimeout(db.command({ ping: 1 }), 5000, "mongodb.ping");
   return true;
 }
 

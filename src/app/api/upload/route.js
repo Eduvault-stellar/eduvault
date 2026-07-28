@@ -9,12 +9,11 @@ import {
   validateUploadPayload,
 } from '@/lib/api/validation'
 import {
-  retryWithBackoff,
   validateGatewayUrl,
   validatePinataResponse,
 } from '@/lib/api/storage'
 import { getDb } from '@/lib/mongodb'
-import { pinata } from '@/lib/pinata'
+import { pinata, callPinata } from '@/lib/pinata'
 import { storeManifest } from '@/lib/provenance/registry'
 import { hashFileBytes } from '@/lib/provenance/manifest'
 import { validateUploadedFile } from '@/lib/ipfs/uploadValidator'
@@ -215,23 +214,10 @@ export async function POST(request) {
 
         // 4️⃣ Upload the main file
         try {
-          const uploadedFile = await retryWithBackoff(
-            () => pinata.upload.public.file(file),
-            3,
-            1000,
-            (err, attempt) => {
-              console.warn(`[Storage] Document upload attempt ${attempt} failed: ${err.message}`);
-            }
-          )
+          const uploadedFile = await callPinata('upload.file', () => pinata.upload.public.file(file))
           validatePinataResponse(uploadedFile, 'document')
           
-          const fileUrl = await retryWithBackoff(
-            () => pinata.gateways.public.convert(uploadedFile.cid),
-            3,
-            1000,
-            (err, attempt) => {
-              console.warn(`[Storage] Document gateway conversion attempt ${attempt} failed: ${err.message}`);
-            }
+          const fileUrl = await callPinata('gateway.convert', () => pinata.gateways.public.convert(uploadedFile.cid))
           )
           validateGatewayUrl(fileUrl, 'document')
           results.fileUrl = fileUrl
@@ -253,24 +239,10 @@ export async function POST(request) {
         // 5️⃣ Upload thumbnail (if provided)
         if (image) {
           try {
-            const fileThumb = await retryWithBackoff(
-              () => pinata.upload.public.file(image),
-              3,
-              1000,
-              (err, attempt) => {
-                console.warn(`[Storage] Thumbnail upload attempt ${attempt} failed: ${err.message}`);
-              }
-            )
+            const fileThumb = await callPinata('upload.thumbnail', () => pinata.upload.public.file(image))
             validatePinataResponse(fileThumb, 'thumbnail')
 
-            const imgUrl = await retryWithBackoff(
-              () => pinata.gateways.public.convert(fileThumb.cid),
-              3,
-              1000,
-              (err, attempt) => {
-                console.warn(`[Storage] Thumbnail gateway conversion attempt ${attempt} failed: ${err.message}`);
-              }
-            )
+            const imgUrl = await callPinata('gateway.thumbnail', () => pinata.gateways.public.convert(fileThumb.cid))
             validateGatewayUrl(imgUrl, 'thumbnail')
             results.imgUrl = imgUrl
           } catch (err) {
@@ -344,24 +316,10 @@ export async function POST(request) {
 
         // 7️⃣ Upload metadata JSON to Pinata
         try {
-          const uploadedJson = await retryWithBackoff(
-            () => pinata.upload.public.json(metadataJSON),
-            3,
-            1000,
-            (err, attempt) => {
-              console.warn(`[Storage] Metadata upload attempt ${attempt} failed: ${err.message}`);
-            }
-          )
+          const uploadedJson = await callPinata('upload.metadata', () => pinata.upload.public.json(metadataJSON))
           validatePinataResponse(uploadedJson, 'metadata')
 
-          const jsonUrl = await retryWithBackoff(
-            () => pinata.gateways.public.convert(uploadedJson.cid),
-            3,
-            1000,
-            (err, attempt) => {
-              console.warn(`[Storage] Metadata gateway conversion attempt ${attempt} failed: ${err.message}`);
-            }
-          )
+          const jsonUrl = await callPinata('gateway.metadata', () => pinata.gateways.public.convert(uploadedJson.cid))
           validateGatewayUrl(jsonUrl, 'metadata')
           results.metadataUrl = jsonUrl
         } catch (err) {

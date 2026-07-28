@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { auditLog } from "./audit";
 import { checkRateLimit } from "./rateLimit";
 import { ValidationError } from "./validation";
+import { DependencyError } from "@/lib/resilience/index.js";
 import { captureException } from "@/lib/sentry";
 import { runWithContext, currentTraceparent, currentCorrelationId } from "@/lib/telemetry/context";
 import { withSpan } from "@/lib/telemetry/tracing";
@@ -139,6 +140,17 @@ export async function withApiHardening(request, options, handler) {
           const res = NextResponse.json({ error: error.message, details: error.details }, { status: 400 });
           res.headers.set("x-correlation-id", currentCorrelationId());
           return finalize(res);
+        }
+
+        if (error instanceof DependencyError) {
+          auditLog({ event: "dependency_failed", route, method, status: error.statusCode || 503, dependency: error.dependency, action: error.action, reason: error.message });
+          incrementCounter("http_requests_total", { route, method, outcome: "dependency_error" });
+          incrementCounter("rpc_errors_total", { operation: `${error.dependency}.${error.action}` });
+          const statusCode = error.statusCode || 503;
+          return finalize(NextResponse.json(
+            { error: error.userMessage || "Service temporarily unavailable", code: "dependency_error", dependency: error.dependency },
+            { status: statusCode, headers: { "x-correlation-id": currentCorrelationId() } }
+          ));
         }
 
         incrementCounter("http_requests_total", { route, method, outcome: "error" });
