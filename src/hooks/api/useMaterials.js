@@ -11,6 +11,16 @@ export function useMarketplaceMaterials(params = {}) {
   });
 }
 
+export function useMarketplaceMaterialsCursor(params = {}) {
+  return useQuery({
+    queryKey: queryKeys.materials.marketplaceCursor(params),
+    queryFn: () => materialService.getMarketplaceMaterials(params),
+    placeholderData: keepPreviousData,
+    staleTime: 5 * 60 * 1000,
+    gcTime: 10 * 60 * 1000,
+  });
+}
+
 export function useTrendingMaterials(params = {}) {
   return useQuery({
     queryKey: queryKeys.materials.trending(params),
@@ -51,7 +61,7 @@ export function useUploadFile() {
 
 export function useCreateMaterial() {
   const queryClient = useQueryClient();
-  
+
   return useMutation({
     mutationFn: materialService.createMaterial,
     onSuccess: () => {

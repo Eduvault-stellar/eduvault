@@ -1,3 +1,5 @@
+import { MATERIAL_STATUS } from "../materials/materialLifecycleConstants.js";
+
 export const LICENSE_OPTIONS = [
   { id: "standard", label: "Standard License (download only)", value: "Standard License (download only)" },
   { id: "creative-commons", label: "Creative Commons", value: "Creative Commons" },
@@ -18,6 +20,22 @@ export const NEWEST_OPTIONS = [
   { id: "30d", label: "Last 30 days", days: 30 },
   { id: "90d", label: "Last 90 days", days: 90 },
 ];
+
+export const CURSOR_VERSION = 1;
+export const MAX_SEARCH_LENGTH = 120;
+export const MAX_CLAUSES = 10;
+export const MAX_RESULT_WINDOW = 100;
+export const MAX_PAGE_SIZE = 50;
+export const MIN_PAGE_SIZE = 1;
+export const MAX_REGEX_LENGTH = 50;
+export const VALID_SORT_FIELDS = new Set([
+  "newest",
+  "popular",
+  "rating_desc",
+  "price_asc",
+  "price_desc",
+  "relevance_desc",
+]);
 
 const CONTENT_TYPE_PATTERNS = {
   pdf: ["pdf", "application/pdf"],
@@ -78,9 +96,31 @@ function buildContentTypeQuery(value) {
   };
 }
 
-export function buildMarketplaceDiscoveryQuery(searchParams, { now = new Date() } = {}) {
+export function encodeCursor(createdAt, id) {
+  const payload = `${CURSOR_VERSION}|${createdAt.toISOString()}|${id}`;
+  return Buffer.from(payload).toString("base64");
+}
+
+export function decodeCursor(cursor) {
+  try {
+    const decoded = Buffer.from(cursor, "base64").toString("utf-8");
+    const parts = decoded.split("|");
+    if (parts.length !== 3) throw new Error("Invalid cursor format");
+    const version = Number(parts[0]);
+    if (version !== CURSOR_VERSION) throw new Error(`Incompatible cursor version: ${version}`);
+    const createdAt = new Date(parts[1]);
+    if (Number.isNaN(createdAt.getTime())) throw new Error("Invalid cursor date");
+    return { createdAt, id: parts[2] };
+  } catch (err) {
+    if (err.message.startsWith("Invalid cursor") || err.message.startsWith("Incompatible cursor")) throw err;
+    throw new Error(`Invalid cursor: ${err.message}`);
+  }
+}
+
+export function buildMarketplaceDiscoveryQuery(searchParams, { now = new Date(), maxClauses = MAX_CLAUSES } = {}) {
   const query = {
     visibility: "public",
+    status: MATERIAL_STATUS.PUBLISHED,
     $or: [
       { relevanceStatus: { $exists: false } },
       { relevanceStatus: { $ne: "low" } },
@@ -88,9 +128,13 @@ export function buildMarketplaceDiscoveryQuery(searchParams, { now = new Date() 
   };
   const andClauses = [];
 
-  const search = sanitizeString(searchParams.get("search"), { maxLength: 120 });
+  const search = sanitizeString(searchParams.get("search"), { maxLength: MAX_SEARCH_LENGTH });
   if (search) {
-    const regex = new RegExp(escapeRegExp(search), "i");
+    const cleaned = search.replace(/[*[\]{}()\\^$|?]/g, "");
+    if (cleaned.length > MAX_REGEX_LENGTH) {
+      throw new Error(`Search term too long for regex matching (max ${MAX_REGEX_LENGTH} characters after sanitization)`);
+    }
+    const regex = new RegExp(escapeRegExp(cleaned), "i");
     andClauses.push({
       $or: [
         { title: regex },
@@ -135,6 +179,9 @@ export function buildMarketplaceDiscoveryQuery(searchParams, { now = new Date() 
   }
 
   if (andClauses.length > 0) {
+    if (andClauses.length > maxClauses) {
+      throw new Error(`Query exceeds maximum clause limit of ${maxClauses}`);
+    }
     query.$and = andClauses;
   }
 
@@ -144,15 +191,58 @@ export function buildMarketplaceDiscoveryQuery(searchParams, { now = new Date() 
 export function buildMarketplaceSort(sortBy) {
   switch (sortBy) {
     case "price_asc":
-      return { price: 1, createdAt: -1 };
+      return { price: 1, createdAt: -1, _id: 1 };
     case "price_desc":
-      return { price: -1, createdAt: -1 };
+      return { price: -1, createdAt: -1, _id: 1 };
     case "rating_desc":
-      return { rating: -1, createdAt: -1 };
+      return { rating: -1, createdAt: -1, _id: 1 };
     case "popular":
-      return { likes: -1, rating: -1, createdAt: -1 };
+      return { likes: -1, rating: -1, createdAt: -1, _id: 1 };
+    case "relevance_desc":
+      return { relevanceScore: -1, createdAt: -1, _id: 1 };
     case "newest":
     default:
-      return { createdAt: -1 };
+      return { createdAt: -1, _id: 1 };
   }
+}
+
+export function computeRelevanceScore(material, searchTerm) {
+  if (!searchTerm) return 0;
+  const term = searchTerm.toLowerCase();
+  let score = 0;
+
+  const title = (material.title || "").toLowerCase();
+  const description = (material.description || "").toLowerCase();
+  const shortSummary = (material.shortSummary || "").toLowerCase();
+  const subject = (material.subject || "").toLowerCase();
+
+  if (title.includes(term)) score += 10;
+  if (shortSummary.includes(term)) score += 5;
+  if (description.includes(term)) score += 2;
+  if (subject === term) score += 8;
+
+  const tagMatches = (material.tags || []).filter((tag) => tag.toLowerCase().includes(term));
+  score += tagMatches.length * 3;
+
+  const rating = Number(material.averageScore ?? material.rating ?? 0);
+  score += Math.min(rating, 5) * 0.5;
+
+  const likes = Number(material.likes ?? 0);
+  score += Math.min(likes, 100) * 0.01;
+
+  return Math.round(score * 100) / 100;
+}
+
+export function validateSortField(sortBy) {
+  if (!sortBy || VALID_SORT_FIELDS.has(sortBy)) return sortBy || "newest";
+  throw new Error(`Invalid sort field: "${sortBy}". Allowed: ${[...VALID_SORT_FIELDS].join(", ")}`);
+}
+
+export function clampResultWindow(page, pageSize) {
+  const safePageSize = Math.max(MIN_PAGE_SIZE, Math.min(MAX_PAGE_SIZE, pageSize));
+  const safePage = Math.max(1, page);
+  if ((safePage - 1) * safePageSize > MAX_RESULT_WINDOW) {
+    throw new Error(`Result window exceeds maximum of ${MAX_RESULT_WINDOW}`);
+  }
+  return { page: safePage, pageSize: safePageSize };
 }

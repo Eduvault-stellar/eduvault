@@ -151,53 +151,77 @@ function getFeedbackCount(material) {
 }
 
 export default function MarketPage() {
-	const { addToCart, cartItems } = useCart();
-	const { addToComparison, comparedItems } = useComparison();
+  const { addToCart, cartItems } = useCart();
+  const { addToComparison, comparedItems } = useComparison();
 
-	const router = useRouter();
+  const router = useRouter();
 
-	const [searchQuery, setSearchQuery] = useState("");
-	const [activeSubject, setActiveSubject] = useState("All");
-	const [activeCategory, setActiveCategory] = useState("All");
-	const [activeLevel, setActiveLevel] = useState("");
-	const [sortBy, setSortBy] = useState("Popular");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [activeSubject, setActiveSubject] = useState("All");
+  const [activeCategory, setActiveCategory] = useState("All");
+  const [activeLevel, setActiveLevel] = useState("");
+  const [sortBy, setSortBy] = useState("Popular");
 
-	const [minPrice, setMinPrice] = useState("");
-	const [maxPrice, setMaxPrice] = useState("");
+  const [minPrice, setMinPrice] = useState("");
+  const [maxPrice, setMaxPrice] = useState("");
 
-	const [creator, setCreator] = useState("");
-	const [usageRights, setUsageRights] = useState("");
+  const [creator, setCreator] = useState("");
+  const [usageRights, setUsageRights] = useState("");
 
-	const [currentPage, setCurrentPage] = useState(1);
+  const [cursor, setCursor] = useState(null);
+  const [prevCursor, setPrevCursor] = useState(null);
 
-	const [hydrated, setHydrated] = useState(false);
+  const [hydrated, setHydrated] = useState(false);
 
-	const [subjects, setSubjects] = useState(["All"]);
-	const [categories, setCategories] = useState([]);
-	const [subjectsLoading, setSubjectsLoading] = useState(true);
+  const [subjects, setSubjects] = useState(["All"]);
+  const [categories, setCategories] = useState([]);
+  const [subjectsLoading, setSubjectsLoading] = useState(true);
 
-	const itemsPerPage = 12;
+  const itemsPerPage = 12;
 
-	// Hydrate filters from URL
-	useEffect(() => {
-		const params = new URLSearchParams(window.location.search);
+  const { data, isLoading, isError, error } =
+    useMarketplaceMaterials({
+      search: searchQuery,
 
-		setSearchQuery(params.get("search") || "");
-		setActiveSubject(params.get("subject") || "All");
-		setActiveCategory(params.get("category") || "All");
-		setActiveLevel(params.get("level") || "");
-		setSortBy(params.get("sortBy") || "Popular");
+      subject:
+        activeSubject !== "All"
+          ? activeSubject
+          : undefined,
 
-		setMinPrice(params.get("minPrice") || "");
-		setMaxPrice(params.get("maxPrice") || "");
+      category:
+        activeCategory !== "All"
+          ? activeCategory
+          : undefined,
 
-		setCreator(params.get("creator") || "");
-		setUsageRights(params.get("usageRights") || "");
+      level: activeLevel || undefined,
 
-		setCurrentPage(Number(params.get("page") || 1));
+      sortBy:
+        sortBy === "Popular"
+          ? "popular"
+          : sortBy === "Price: Low to High"
+          ? "price_asc"
+          : sortBy === "Price: High to Low"
+          ? "price_desc"
+          : sortBy === "Newest"
+          ? "newest"
+          : sortBy === "Top Rated"
+          ? "top_rated"
+          : undefined,
 
-		setHydrated(true);
-	}, []);
+      minPrice: minPrice || undefined,
+      maxPrice: maxPrice || undefined,
+
+      creator: creator || undefined,
+
+      usageRights: usageRights || undefined,
+
+      cursor: cursor || undefined,
+      pageSize: itemsPerPage,
+    });
+
+  const materials = data?.items || [];
+  const hasMore = data?.hasMore ?? false;
+  const nextCursor = data?.nextCursor ?? null;
 
 	// PERF-AUDIT: Measure initial load time using Navigation Timing API.
 	// Logs are only emitted in development so they don't reach production.
@@ -275,10 +299,6 @@ export default function MarketPage() {
 		if (creator) params.set("creator", creator);
 		if (usageRights) params.set("usageRights", usageRights);
 
-		if (currentPage > 1) {
-			params.set("page", String(currentPage));
-		}
-
 		router.replace(`/marketplace?${params.toString()}`);
 	}, [
 		hydrated,
@@ -291,52 +311,8 @@ export default function MarketPage() {
 		maxPrice,
 		creator,
 		usageRights,
-		currentPage,
 		router,
 	]);
-
-	const { data, isLoading, isError, error } =
-		useMarketplaceMaterials({
-			search: searchQuery,
-
-			subject:
-				activeSubject !== "All"
-					? activeSubject
-					: undefined,
-
-			category:
-				activeCategory !== "All"
-					? activeCategory
-					: undefined,
-
-			level: activeLevel || undefined,
-
-			sortBy:
-				sortBy === "Popular"
-					? "popular"
-					: sortBy === "Price: Low to High"
-					? "price_asc"
-					: sortBy === "Price: High to Low"
-					? "price_desc"
-					: sortBy === "Newest"
-					? "newest"
-					: sortBy === "Top Rated"
-					? "top_rated"
-					: undefined,
-
-			minPrice: minPrice || undefined,
-			maxPrice: maxPrice || undefined,
-
-			creator: creator || undefined,
-
-			usageRights: usageRights || undefined,
-
-			page: currentPage,
-			pageSize: itemsPerPage,
-		});
-
-	const materials = data?.items || [];
-	const totalPages = data?.totalPages || 1;
 
 	const getFileIcon = (type) => {
 		switch (type) {
@@ -369,7 +345,7 @@ export default function MarketPage() {
 		setCreator("");
 		setUsageRights("");
 
-		setCurrentPage(1);
+		setCursor(null);
 	};
 
 	return (
@@ -390,7 +366,7 @@ export default function MarketPage() {
 									key={subject}
 									onClick={() => {
 										setActiveSubject(subject);
-										setCurrentPage(1);
+										setCursor(null);
 									}}
 									role="tab"
 									aria-selected={activeSubject === subject}
@@ -412,7 +388,7 @@ export default function MarketPage() {
 									key={cat.id}
 									onClick={() => {
 										setActiveCategory(cat.id);
-										setCurrentPage(1);
+										setCursor(null);
 									}}
 									role="tab"
 									aria-selected={activeCategory === cat.id}
@@ -449,7 +425,7 @@ export default function MarketPage() {
 									<button
 										onClick={() => {
 											setActiveSubject(subject);
-											setCurrentPage(1);
+											setCursor(null);
 										}}
 										role="tab"
 										aria-selected={activeSubject === subject}
@@ -478,7 +454,7 @@ export default function MarketPage() {
 										<button
 											onClick={() => {
 												setActiveCategory(cat.id);
-												setCurrentPage(1);
+												setCursor(null);
 											}}
 											role="tab"
 											aria-selected={activeCategory === cat.id}
@@ -535,7 +511,7 @@ export default function MarketPage() {
 									value={searchQuery}
 								onChange={(e) => {
 									setSearchQuery(e.target.value);
-									setCurrentPage(1);
+									setCursor(null);
 								}}
 								className="w-full pl-10 pr-4 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus-visible:ring-2 focus-visible:ring-blue-500"
 							/>
@@ -552,7 +528,7 @@ export default function MarketPage() {
 													e.target.value
 												);
 
-												setCurrentPage(1);
+												setCursor(null);
 											}}
 											aria-label="Filter by subject"
 											className="bg-transparent text-sm focus-visible:ring-2 focus-visible:ring-blue-500"
@@ -586,7 +562,7 @@ export default function MarketPage() {
 													e.target.value
 												);
 
-												setCurrentPage(1);
+												setCursor(null);
 											}}
 											aria-label="Filter by level"
 											className="bg-transparent text-sm focus-visible:ring-2 focus-visible:ring-blue-500"
@@ -669,7 +645,7 @@ export default function MarketPage() {
 								<button
 									onClick={() => {
 										setSearchQuery("");
-										setCurrentPage(1);
+										setCursor(null);
 									}}
 									className="inline-flex items-center justify-center px-5 py-2.5 border border-gray-200 text-gray-700 font-medium text-sm rounded-lg hover:bg-gray-50 transition"
 								>
@@ -686,7 +662,7 @@ export default function MarketPage() {
 												onClick={() => {
 													setSearchQuery(subject.toLowerCase());
 													setActiveSubject(subject);
-													setCurrentPage(1);
+													setCursor(null);
 												}}
 												className="px-3 py-1.5 bg-blue-50 text-blue-600 text-xs font-medium rounded-full hover:bg-blue-100 transition"
 											>
@@ -891,31 +867,32 @@ export default function MarketPage() {
 								})}
 							</motion.div>
 
-							{/* Pagination */}
-							{totalPages > 1 && (
+							{/* Cursor-based Pagination */}
+							{(hasMore || cursor) && (
 								<nav aria-label="Pagination">
-								<div className="flex justify-center mt-8 gap-2">
-									{Array.from({
-										length: totalPages,
-									}).map((_, i) => (
+								<div className="flex justify-center mt-8 gap-3">
+									{cursor && (
 										<button
-											key={i}
-											onClick={() =>
-												setCurrentPage(
-													i + 1
-												)
-											}
-											aria-current={currentPage === i + 1 ? "page" : undefined}
-											className={`px-3 py-1.5 rounded focus-visible:ring-2 focus-visible:ring-blue-500 ${
-												currentPage ===
-												i + 1
-													? "bg-blue-600 text-white"
-													: "bg-gray-100 text-gray-700 hover:bg-gray-200"
-											}`}
+											onClick={() => {
+												setCursor(null);
+												setPrevCursor(cursor);
+											}}
+											className="px-4 py-2 rounded-lg text-sm font-medium bg-gray-100 text-gray-700 hover:bg-gray-200 focus-visible:ring-2 focus-visible:ring-blue-500"
 										>
-											{i + 1}
+											Previous
 										</button>
-									))}
+									)}
+									{hasMore && (
+										<button
+											onClick={() => {
+												setPrevCursor(cursor);
+												setCursor(nextCursor);
+											}}
+											className="px-4 py-2 rounded-lg text-sm font-medium bg-blue-600 text-white hover:bg-blue-700 focus-visible:ring-2 focus-visible:ring-blue-500"
+										>
+											Next
+										</button>
+									)}
 								</div>
 								</nav>
 							)}
