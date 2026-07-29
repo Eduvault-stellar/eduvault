@@ -5,6 +5,7 @@ import Web3Provider from "@/providers/Web3Provider";
 import { ToastProvider } from "@/providers/ToastProvider";
 import { CartProvider } from "@/providers/CartProvider";
 import { ComparisonProvider } from "@/providers/ComparisonProvider";
+import SecurityInit from "@/components/SecurityInit";
 import CartDrawer from "@/components/CartDrawer";
 import ComparisonMatrix from "@/components/ComparisonMatrix";
 
@@ -53,6 +54,7 @@ export default async function RootLayout({ children }) {
         className={`${geistSans.variable} ${geistMono.variable} antialiased bg-background text-foreground`}
       >
         <script nonce={nonce} dangerouslySetInnerHTML={{ __html: themeInitScript }} />
+        <SecurityInit />
         <a
           href="#main-content"
           className="sr-only focus:not-sr-only focus:fixed focus:top-4 focus:left-4 focus:z-[9999] focus:px-4 focus:py-2 focus:bg-blue-600 focus:text-white focus:rounded-lg focus:shadow-lg focus:text-sm focus:font-bold"

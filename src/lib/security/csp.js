@@ -29,10 +29,7 @@ export function createCspNonce() {
   ).join("");
 }
 
-export function buildContentSecurityPolicy(
-  nonce,
-  { development = process.env.NODE_ENV === "development" } = {},
-) {
+export function buildContentSecurityPolicy(nonce) {
   if (!/^[a-f0-9]{32}$/i.test(nonce || "")) throw new TypeError("Invalid CSP nonce");
 
   const connectOrigins = [...new Set([
@@ -51,9 +48,9 @@ export function buildContentSecurityPolicy(
     "frame-ancestors 'none'",
     "form-action 'self'",
     "frame-src 'none'",
-    `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'${development ? " 'unsafe-eval'" : ""}`,
+    `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'`,
     "script-src-attr 'none'",
-    `style-src 'self' 'nonce-${nonce}'${development ? " 'unsafe-inline'" : ""}`,
+    `style-src 'self' 'nonce-${nonce}'`,
     "style-src-attr 'unsafe-inline'",
     "font-src 'self' data:",
     `img-src 'self' data: blob: ${mediaOrigins.join(" ")}`,
@@ -62,7 +59,7 @@ export function buildContentSecurityPolicy(
     "worker-src 'self' blob:",
     "manifest-src 'self'",
     "require-trusted-types-for 'script'",
-    "trusted-types nextjs nextjs#bundler",
+    "trusted-types eduvault-safe-html nextjs nextjs#bundler",
     "upgrade-insecure-requests",
     "report-uri /api/csp-report",
     "report-to csp-endpoint",

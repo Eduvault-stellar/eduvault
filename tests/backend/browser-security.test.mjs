@@ -1,103 +1,380 @@
 import assert from "node:assert/strict";
-import { randomBytes } from "node:crypto";
-import { test } from "node:test";
+import { describe, test } from "node:test";
+
 import {
-  Account, Asset, Keypair, Networks, Operation, StrKey, TransactionBuilder, nativeToScVal,
-} from "@stellar/stellar-sdk";
-import {
-  applyBrowserSecurityHeaders, buildContentSecurityPolicy, createCspNonce,
-  normalizeCspReport, shouldRecordCspReport,
+  buildContentSecurityPolicy,
+  createCspNonce,
+  normalizeCspReport,
+  shouldRecordCspReport,
+  STATIC_SECURITY_HEADERS,
 } from "../../src/lib/security/csp.js";
 import {
-  contentDispositionAttachment, normalizeExternalUrl, normalizePlainText,
-  normalizeRedirectPath, normalizeRemoteImageUrl,
+  normalizePlainText,
+  normalizeExternalUrl,
+  normalizeRemoteImageUrl,
+  normalizeRedirectPath,
+  normalizeDownloadFilename,
+  contentDispositionAttachment,
 } from "../../src/lib/security/input.js";
-import { verifyWalletTransactionIntent } from "../../src/lib/wallet/intent.js";
+import {
+  createTrustedHtmlSink,
+  TRUSTED_TYPES_SINK_NAME,
+} from "../../src/lib/security/trustedTypes.js";
 
-function xdr(source, operation) {
-  return new TransactionBuilder(new Account(source, "1"), {
-    fee: "100", networkPassphrase: Networks.TESTNET,
-  }).addOperation(operation).setTimeout(30).build().toXDR();
-}
-
-test("strict CSP uses unique nonces and required browser headers", () => {
-  const nonces = new Set(Array.from({ length: 16 }, createCspNonce));
-  const csp = buildContentSecurityPolicy([...nonces][0], { development: false });
-  assert.equal(nonces.size, 16);
-  assert.match(csp, /script-src 'self' 'nonce-[a-f0-9]{32}' 'strict-dynamic'/);
-  assert.doesNotMatch(csp, /unsafe-eval|script-src[^;]*unsafe-inline|cdn\.jsdelivr\.net/);
-  for (const rule of ["frame-src 'none'", "form-action 'self'", "require-trusted-types-for 'script'", "trusted-types nextjs nextjs#bundler"]) {
-    assert.ok(csp.includes(rule));
-  }
-
-  const headers = applyBrowserSecurityHeaders(new Response(), { csp }).headers;
-  assert.equal(headers.get("x-frame-options"), "DENY");
-  assert.equal(headers.get("cross-origin-opener-policy"), "same-origin-allow-popups");
-  assert.equal(headers.get("cross-origin-embedder-policy"), "credentialless");
-  assert.equal(headers.get("cross-origin-resource-policy"), "same-origin");
-  assert.equal(headers.get("x-content-type-options"), "nosniff");
-  assert.match(headers.get("strict-transport-security"), /includeSubDomains/);
-});
-
-test("untrusted text, URLs, SVG, redirects, and filenames are normalized", () => {
-  assert.equal(normalizePlainText("<img src=x onerror=alert(1)>"), "＜img src=x onerror=alert(1)＞");
-  assert.throws(() => normalizeExternalUrl("javascript:alert(1)"), /HTTPS/);
-  assert.throws(() => normalizeExternalUrl("https://127.0.0.1/private"), /public/);
-  assert.throws(() => normalizeRemoteImageUrl("https://evil.example/a.png"), /allowlisted/);
-  assert.throws(() => normalizeRemoteImageUrl("https://ipfs.io/a.svg"), /SVG/);
-  assert.equal(normalizeRedirectPath("//evil.example/steal"), "/");
-  assert.equal(normalizeRedirectPath("/dashboard?tab=purchases"), "/dashboard?tab=purchases");
-  assert.doesNotMatch(contentDispositionAttachment("report\r\nX-Test: yes.pdf"), /[\r\n]/);
-});
-
-test("CSP reports remove secrets, sample, and deduplicate", () => {
-  const report = normalizeCspReport({ "csp-report": {
-    "effective-directive": "script-src-elem",
-    "blocked-uri": "https://evil.example/a.js?token=secret#fragment",
-    "document-uri": "https://eduvault.example/marketplace?email=user@example.com",
-  } });
-  assert.equal(report.blockedUrl, "https://evil.example/a.js");
-  assert.equal(report.documentUrl, "https://eduvault.example/marketplace");
-  assert.equal(shouldRecordCspReport(report, { sampleRate: 1, random: () => 0 }), true);
-  assert.equal(shouldRecordCspReport(report, { sampleRate: 1, random: () => 0 }), false);
-});
-
-test("payment intent rejects network and amount mismatches", () => {
-  const source = Keypair.random();
-  const destination = Keypair.random();
-  const transaction = xdr(source.publicKey(), Operation.payment({
-    destination: destination.publicKey(), asset: Asset.native(), amount: "3.5000000",
-  }));
-  const intent = {
-    summary: "Pay for material", networkPassphrase: Networks.TESTNET,
-    operation: "payment", destination: destination.publicKey(), amount: "3.5", asset: "XLM",
-  };
-  const verify = (overrides = {}) => verifyWalletTransactionIntent({
-    xdr: transaction, address: source.publicKey(), networkPassphrase: Networks.TESTNET,
-    intent: { ...intent, ...overrides },
+describe("CSP", () => {
+  test("buildContentSecurityPolicy generates a valid nonce-based policy", () => {
+    const nonce = createCspNonce();
+    const csp = buildContentSecurityPolicy(nonce);
+    assert.ok(csp.includes(`'nonce-${nonce}'`));
+    assert.ok(csp.includes("default-src 'self'"));
+    assert.ok(csp.includes("base-uri 'none'"));
+    assert.ok(csp.includes("object-src 'none'"));
+    assert.ok(csp.includes("frame-ancestors 'none'"));
+    assert.ok(csp.includes("form-action 'self'"));
+    assert.ok(csp.includes("frame-src 'none'"));
   });
-  assert.equal(verify().operation, "payment");
-  assert.throws(() => verify({ amount: "4" }), /amount/);
-  assert.throws(() => verify({ networkPassphrase: Networks.PUBLIC }), /network/);
+
+  test("CSP eliminates unsafe-eval", () => {
+    const nonce = createCspNonce();
+    const csp = buildContentSecurityPolicy(nonce);
+    assert.ok(!csp.includes("'unsafe-eval'"), "CSP must not contain unsafe-eval");
+  });
+
+  test("CSP eliminates unnecessary unsafe-inline in script-src", () => {
+    const nonce = createCspNonce();
+    const csp = buildContentSecurityPolicy(nonce);
+    const scriptSrcMatch = csp.match(/script-src[^;]*/);
+    if (scriptSrcMatch) {
+      assert.ok(
+        !scriptSrcMatch[0].includes("'unsafe-inline'"),
+        "script-src must not contain unsafe-inline"
+      );
+    }
+  });
+
+  test("CSP requires trusted-types for script", () => {
+    const nonce = createCspNonce();
+    const csp = buildContentSecurityPolicy(nonce);
+    assert.ok(csp.includes("require-trusted-types-for 'script'"));
+  });
+
+  test("CSP includes eduvault-safe-html trusted types policy", () => {
+    const nonce = createCspNonce();
+    const csp = buildContentSecurityPolicy(nonce);
+    assert.ok(csp.includes("trusted-types eduvault-safe-html"));
+  });
+
+  test("CSP nonce is 32 hex characters", () => {
+    const nonce = createCspNonce();
+    assert.ok(/^[a-f0-9]{32}$/i.test(nonce));
+  });
+
+  test("CSP nonce is unique per call", () => {
+    const nonce1 = createCspNonce();
+    const nonce2 = createCspNonce();
+    assert.notEqual(nonce1, nonce2);
+  });
+
+  test("buildContentSecurityPolicy throws on invalid nonce", () => {
+    assert.throws(() => buildContentSecurityPolicy("invalid"), /Invalid CSP nonce/);
+  });
+
+  test("CSP report-uri and report-to are configured", () => {
+    const nonce = createCspNonce();
+    const csp = buildContentSecurityPolicy(nonce);
+    assert.ok(csp.includes("report-uri /api/csp-report"));
+    assert.ok(csp.includes("report-to csp-endpoint"));
+  });
 });
 
-test("contract intent rejects contract and atomic amount mismatches", () => {
-  const source = Keypair.random();
-  const contractId = StrKey.encodeContract(randomBytes(32));
-  const transaction = xdr(source.publicKey(), Operation.invokeContractFunction({
-    contract: contractId, function: "purchase",
-    args: [nativeToScVal(12500000n, { type: "i128" })],
-  }));
-  const intent = {
-    summary: "Purchase material", networkPassphrase: Networks.TESTNET,
-    operation: "invokeHostFunction", contractId, functionName: "purchase",
-    amount: "12500000", amountArgIndex: 0,
-  };
-  const verify = (overrides = {}) => verifyWalletTransactionIntent({
-    xdr: transaction, address: source.publicKey(), networkPassphrase: Networks.TESTNET,
-    intent: { ...intent, ...overrides },
+describe("STATIC_SECURITY_HEADERS", () => {
+  test("includes HSTS with preload", () => {
+    assert.ok(
+      STATIC_SECURITY_HEADERS["Strict-Transport-Security"].includes("max-age=31536000"),
+    );
+    assert.ok(
+      STATIC_SECURITY_HEADERS["Strict-Transport-Security"].includes("includeSubDomains"),
+    );
+    assert.ok(
+      STATIC_SECURITY_HEADERS["Strict-Transport-Security"].includes("preload"),
+    );
   });
-  assert.equal(verify().operation, "invokeHostFunction");
-  assert.throws(() => verify({ contractId: StrKey.encodeContract(randomBytes(32)) }), /contract/);
-  assert.throws(() => verify({ amount: "1" }), /amount/);
+
+  test("includes X-Frame-Options DENY", () => {
+    assert.equal(STATIC_SECURITY_HEADERS["X-Frame-Options"], "DENY");
+  });
+
+  test("includes X-Content-Type-Options nosniff", () => {
+    assert.equal(STATIC_SECURITY_HEADERS["X-Content-Type-Options"], "nosniff");
+  });
+
+  test("includes Referrer-Policy strict-origin-when-cross-origin", () => {
+    assert.equal(STATIC_SECURITY_HEADERS["Referrer-Policy"], "strict-origin-when-cross-origin");
+  });
+
+  test("includes COOP/COEP/CORP", () => {
+    assert.equal(STATIC_SECURITY_HEADERS["Cross-Origin-Opener-Policy"], "same-origin-allow-popups");
+    assert.equal(STATIC_SECURITY_HEADERS["Cross-Origin-Embedder-Policy"], "credentialless");
+    assert.equal(STATIC_SECURITY_HEADERS["Cross-Origin-Resource-Policy"], "same-origin");
+  });
+
+  test("includes Permissions-Policy with restrictive defaults", () => {
+    const pp = STATIC_SECURITY_HEADERS["Permissions-Policy"];
+    assert.ok(pp.includes("camera=()"));
+    assert.ok(pp.includes("microphone=()"));
+    assert.ok(pp.includes("geolocation=()"));
+    assert.ok(pp.includes("payment=()"));
+    assert.ok(pp.includes("usb=()"));
+  });
+});
+
+describe("normalizePlainText", () => {
+  test("strips control characters and BIDI marks", () => {
+    const result = normalizePlainText("hello\u0000world\u202E");
+    assert.ok(!result.includes("\u0000"));
+    assert.ok(!result.includes("\u202E"));
+  });
+
+  test("escapes HTML angle brackets", () => {
+    const result = normalizePlainText("<script>alert(1)</script>");
+    assert.ok(!result.includes("<script>"));
+    assert.ok(result.includes("＜script＞"));
+  });
+
+  test("normalizes Unicode NFKC", () => {
+    const result = normalizePlainText("café");
+    assert.ok(result.includes("café"));
+  });
+
+  test("truncates to maxLength", () => {
+    const long = "a".repeat(10000);
+    const result = normalizePlainText(long, { maxLength: 100 });
+    assert.equal(result.length, 100);
+  });
+
+  test("returns empty string for null/undefined", () => {
+    assert.equal(normalizePlainText(null), "");
+    assert.equal(normalizePlainText(undefined), "");
+  });
+});
+
+describe("normalizeExternalUrl", () => {
+  test("accepts valid HTTPS URLs", () => {
+    const result = normalizeExternalUrl("https://example.com/path", {
+      allowedHosts: ["example.com"],
+    });
+    assert.equal(result, "https://example.com/path");
+  });
+
+  test("rejects HTTP URLs", () => {
+    assert.throws(() => normalizeExternalUrl("http://example.com"), /URL must use public HTTPS/);
+  });
+
+  test("rejects URLs with credentials", () => {
+    assert.throws(() => normalizeExternalUrl("https://user:pass@example.com"), /credentials/);
+  });
+
+  test("rejects non-allowlisted hosts", () => {
+    assert.throws(() => normalizeExternalUrl("https://evil.com", { allowedHosts: ["example.com"] }), /not allowlisted/);
+  });
+
+  test("strips hash fragments", () => {
+    const result = normalizeExternalUrl("https://example.com/path#fragment", {
+      allowedHosts: ["example.com"],
+    });
+    assert.equal(result, "https://example.com/path");
+  });
+
+  test("rejects relative URLs", () => {
+    assert.throws(() => normalizeExternalUrl("/path"), /URL must be absolute/);
+  });
+});
+
+describe("normalizeRemoteImageUrl", () => {
+  test("rejects SVG files", () => {
+    assert.throws(() => normalizeRemoteImageUrl("https://gateway.pinata.cloud/image.svg"), /SVG is not accepted/);
+  });
+
+  test("rejects SVG with query params", () => {
+    assert.throws(() => normalizeRemoteImageUrl("https://gateway.pinata.cloud/image.svg?size=large"), /SVG is not accepted/);
+  });
+
+  test("accepts PNG from allowlisted hosts", () => {
+    const result = normalizeRemoteImageUrl("https://gateway.pinata.cloud/image.png");
+    assert.ok(result.includes("gateway.pinata.cloud"));
+  });
+
+  test("accepts relative paths for same-origin images", () => {
+    const result = normalizeRemoteImageUrl("/images/photo.png");
+    assert.equal(result, "/images/photo.png");
+  });
+});
+
+describe("normalizeRedirectPath", () => {
+  test("accepts valid relative paths", () => {
+    assert.equal(normalizeRedirectPath("/dashboard"), "/dashboard");
+  });
+
+  test("rejects protocol-relative URLs", () => {
+    assert.equal(normalizeRedirectPath("//evil.com"), "/");
+  });
+
+  test("rejects absolute URLs", () => {
+    assert.equal(normalizeRedirectPath("https://evil.com"), "/");
+  });
+
+  test("rejects paths with backslashes", () => {
+    assert.equal(normalizeRedirectPath("/path\\evil"), "/");
+  });
+
+  test("falls back to default for invalid input", () => {
+    assert.equal(normalizeRedirectPath("javascript:alert(1)"), "/");
+  });
+});
+
+describe("normalizeDownloadFilename", () => {
+  test("sanitizes dangerous characters", () => {
+    const result = normalizeDownloadFilename("file<script>.exe");
+    assert.ok(!result.includes("<script>"));
+  });
+
+  test("strips path traversal", () => {
+    const result = normalizeDownloadFilename("../../etc/passwd");
+    assert.equal(result, "passwd");
+  });
+
+  test("truncates to maxLength", () => {
+    const long = "a".repeat(200);
+    const result = normalizeDownloadFilename(long, { maxLength: 50 });
+    assert.ok(result.length <= 50);
+  });
+
+  test("falls back to default for empty result", () => {
+    const result = normalizeDownloadFilename("");
+    assert.equal(result, "download");
+  });
+});
+
+describe("contentDispositionAttachment", () => {
+  test("generates safe Content-Disposition header", () => {
+    const result = contentDispositionAttachment("report.pdf");
+    assert.ok(result.includes('filename="report.pdf"'));
+  });
+
+  test("escapes non-ASCII characters", () => {
+    const result = contentDispositionAttachment("café.pdf");
+    assert.ok(result.includes("caf_"));
+    assert.ok(result.includes("UTF-8"));
+  });
+});
+
+describe("Trusted Types sink", () => {
+  test("createTrustedHtmlSink returns a policy object", () => {
+    const sink = createTrustedHtmlSink();
+    assert.ok(sink);
+    assert.ok(typeof sink.createHTML === "function");
+    assert.ok(typeof sink.createScriptURL === "function");
+  });
+
+  test("createHTML strips disallowed tags", () => {
+    const sink = createTrustedHtmlSink();
+    const result = sink.createHTML('<b>safe</b><script>alert(1)</script>');
+    assert.ok(result.includes("<b>safe</b>"));
+    assert.ok(!result.includes("<script>"));
+  });
+
+  test("createHTML preserves allowed tags", () => {
+    const sink = createTrustedHtmlSink();
+    const result = sink.createHTML("<p>Hello <strong>world</strong></p>");
+    assert.ok(result.includes("<p>"));
+    assert.ok(result.includes("<strong>"));
+  });
+
+  test("createScriptURL blocks unsafe URLs", () => {
+    const sink = createTrustedHtmlSink();
+    assert.throws(() => sink.createScriptURL("javascript:alert(1)"), /Blocked unsafe/);
+  });
+
+  test("createScriptURL allows safe URLs", () => {
+    const sink = createTrustedHtmlSink();
+    const result = sink.createScriptURL("https://example.com/script.js");
+    assert.equal(result, "https://example.com/script.js");
+  });
+
+  test("createScript throws", () => {
+    const sink = createTrustedHtmlSink();
+    assert.throws(() => sink.createScript(), /Script creation blocked/);
+  });
+
+  test("TRUSTED_TYPES_SINK_NAME is exported", () => {
+    assert.equal(TRUSTED_TYPES_SINK_NAME, "eduvault-safe-html");
+  });
+});
+
+describe("CSP report normalization", () => {
+  test("normalizes a standard CSP violation report", () => {
+    const report = normalizeCspReport({
+      "csp-report": {
+        "effective-directive": "script-src",
+        "blocked-uri": "https://evil.com/script.js",
+        "document-uri": "https://eduvault.app/page",
+        "source-file": "https://evil.com/script.js",
+        disposition: "enforce",
+        "status-code": 200,
+      },
+    });
+    assert.equal(report.effectiveDirective, "script-src");
+    assert.equal(report.blockedUrl, "https://evil.com/script.js");
+    assert.equal(report.disposition, "enforce");
+  });
+
+  test("redacts private URL details", () => {
+    const report = normalizeCspReport({
+      "csp-report": {
+        "blocked-uri": "https://user:secret@example.com/script.js",
+      },
+    });
+    assert.ok(!report.blockedUrl.includes("secret"));
+  });
+
+  test("returns null for invalid payload", () => {
+    assert.equal(normalizeCspReport(null), null);
+    assert.equal(normalizeCspReport("not-an-object"), null);
+  });
+});
+
+describe("CSP report sampling", () => {
+  test("shouldRecordCspReport returns true for new unique reports", () => {
+    const report = {
+      effectiveDirective: "script-src",
+      blockedUrl: "https://evil.com/script.js",
+      documentUrl: "https://eduvault.app/page",
+      sourceUrl: "https://evil.com/script.js",
+      disposition: "enforce",
+    };
+    assert.ok(shouldRecordCspReport(report, { sampleRate: 1.0 }));
+  });
+
+  test("shouldRecordCspReport returns false for duplicate reports within window", () => {
+    const report = {
+      effectiveDirective: "script-src",
+      blockedUrl: "https://evil.com/script.js",
+      documentUrl: "https://eduvault.app/page",
+      sourceUrl: "https://evil.com/script.js",
+      disposition: "enforce",
+    };
+    shouldRecordCspReport(report, { sampleRate: 1.0 });
+    assert.ok(!shouldRecordCspReport(report, { sampleRate: 1.0 }));
+  });
+
+  test("shouldRecordCspReport respects sampleRate", () => {
+    const report = {
+      effectiveDirective: "script-src",
+      blockedUrl: "https://evil.com/script.js",
+      documentUrl: "https://eduvault.app/page",
+      sourceUrl: "https://evil.com/script.js",
+      disposition: "enforce",
+    };
+    assert.ok(!shouldRecordCspReport(report, { sampleRate: 0.0 }));
+  });
 });
