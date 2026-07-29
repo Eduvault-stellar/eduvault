@@ -1,5 +1,3 @@
-import { createHash } from "node:crypto";
-
 import { COLLECTIONS } from "../backend/schemaContracts.js";
 import { incrementCounter, setGauge } from "../telemetry/metrics.js";
 import { logger } from "../logger.js";
@@ -7,6 +5,7 @@ import { auditLog } from "../api/audit.js";
 import { runWithContext } from "../telemetry/context.js";
 import { withSpan } from "../telemetry/tracing.js";
 import { decodeContractEvent } from "./eventDecoder.js";
+import { deadLetterId, eventId } from "./eventIdentity.js";
 
 function duplicateKey(error) {
   return error?.code === 11000;
@@ -29,34 +28,7 @@ let transactionSupport = "unknown";
  *  stable identity (malformed payloads) still need a deterministic key, so we
  *  hash the payload instead of generating a random one — a random key would
  *  write a fresh row per attempt and never reach the retry ceiling. */
-export function deadLetterId(event, source = "stellar") {
-  const identity = eventId(event);
-  if (identity) return identity;
-
-  let serialized;
-  try {
-    serialized = JSON.stringify(event);
-  } catch {
-    serialized = String(event);
-  }
-  return `${source}:unidentified:${createHash("sha256").update(serialized).digest("hex").slice(0, 32)}`;
-}
-
-export function eventId(event) {
-  if (event.id || event.eventId) return String(event.id || event.eventId);
-
-  const identity = [
-    event.network || event.source || "stellar",
-    event.contractId || event.contract || "unknown-contract",
-    event.ledger ?? event.ledgerSequence,
-    event.transactionHash || event.txHash,
-    event.index ?? event.eventIndex ?? event.position,
-  ];
-
-  return identity.some((part) => part === undefined || part === null || part === "")
-    ? ""
-    : identity.map(String).join(":");
-}
+export { deadLetterId, eventId };
 
 function writeOptions(session, extra = {}) {
   return session ? { ...extra, session } : extra;
