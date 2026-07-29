@@ -24,6 +24,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 
 let _storage = null;
 let _degraded = false;
+let _AsyncLocalStorage = null;
 
 /** No-op storage for browser bundles, where async_hooks does not exist. */
 class NoopAsyncLocalStorage {
