@@ -178,6 +178,12 @@ class FakeCollection {
         ...(update.$set || {}),
       };
       this.#assertUnique(candidate, null);
+      if (update.$push) {
+        for (const [field, value] of Object.entries(update.$push)) {
+          candidate[field] = candidate[field] || [];
+          candidate[field].push(value);
+        }
+      }
       this.docs.push(candidate);
       return { matchedCount: 0, modifiedCount: 0, upsertedCount: 1 };
     }
@@ -187,6 +193,12 @@ class FakeCollection {
     const candidate = { ...existing, ...(update.$set || {}) };
     this.#assertUnique(candidate, existing);
     Object.assign(existing, update.$set || {});
+    if (update.$push) {
+      for (const [field, value] of Object.entries(update.$push)) {
+        if (!existing[field]) existing[field] = [];
+        existing[field].push(value);
+      }
+    }
     return { matchedCount: 1, modifiedCount: 1 };
   }
 
@@ -202,11 +214,54 @@ class FakeCollection {
     return this.docs.filter((doc) => matchesFilter(doc, filter)).length;
   }
 
+  aggregate(pipeline) {
+    let results = [...this.docs];
+    for (const stage of pipeline) {
+      if (stage.$match) {
+        results = results.filter((doc) => matchesFilter(doc, stage.$match));
+      } else if (stage.$group) {
+        const sumField = Object.entries(stage.$group).find(
+          ([k, v]) => k !== "_id" && v && typeof v === "object" && v.$sum !== undefined,
+        );
+        if (sumField) {
+          const fieldRef = sumField[1].$sum;
+          const fieldName =
+            typeof fieldRef === "string"
+              ? fieldRef.replace(/^\$/, "")
+              : fieldRef?.$toDecimal
+                ? fieldRef.$toDecimal.replace(/^\$/, "")
+                : null;
+          const total = results.reduce((s, doc) => s + Number(doc[fieldName] || 0), 0);
+          results = [{ _id: null, total: String(total) }];
+        } else {
+          results = [{ _id: null }];
+        }
+      }
+    }
+    return {
+      async toArray() {
+        return results.map((d) => ({ ...d }));
+      },
+    };
+  }
+
   find(filter = {}) {
     let results = this.docs.filter((doc) => matchesFilter(doc, filter));
     const cursor = {
       limit(count) {
         results = results.slice(0, count);
+        return cursor;
+      },
+      sort(sortSpec) {
+        // Simple sort: single field ascending (1) or descending (-1).
+        const entries = Object.entries(sortSpec);
+        if (entries.length === 1) {
+          const [field, dir] = entries[0];
+          results = [...results].sort((a, b) => {
+            if (dir === -1) return String(b[field] ?? "").localeCompare(String(a[field] ?? ""));
+            return String(a[field] ?? "").localeCompare(String(b[field] ?? ""));
+          });
+        }
         return cursor;
       },
       async toArray() {
