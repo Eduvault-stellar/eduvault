@@ -1,7 +1,7 @@
 import { COLLECTIONS } from "../backend/schemaContracts.js";
 import { incrementCounter } from "../telemetry/metrics.js";
 import { logger } from "../logger.js";
-import { eventId, deadLetterId } from "./stellarIndexer.js";
+import { eventId } from "./eventIdentity.js";
 
 function duplicateKey(error) {
   return error?.code === 11000;
