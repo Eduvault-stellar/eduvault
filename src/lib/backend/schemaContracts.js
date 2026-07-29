@@ -33,6 +33,13 @@ export const COLLECTIONS = Object.freeze({
   files: "files",
   fileCleanupOutbox: "file_cleanup_outbox",
   uploadQuarantine: "upload_quarantine",
+
+  // Milestone normalization (#110).
+  milestones: "milestones",
+  payouts: "payouts",
+  escrows: "escrows",
+  milestoneHistory: "milestone_history",
+  milestoneEvidence: "milestone_evidence",
 });
 
 // File lifecycle states (#98). A file object moves:
@@ -574,6 +581,10 @@ export const REQUIRED_INDEXES = Object.freeze({
     {
       name: "quarantine_status_lease",
       keys: { status: 1, leaseUntil: 1 },
+      options: {},
+    },
+  ],
+
   escrows: [
     {
       name: "escrows_escrow_id_unique",
@@ -604,6 +615,63 @@ export const REQUIRED_INDEXES = Object.freeze({
     {
       name: "milestones_escrow_id",
       keys: { escrowId: 1 },
+      options: {},
+    },
+    {
+      name: "milestones_payout_id",
+      keys: { payoutId: 1 },
+      options: {},
+    },
+    {
+      name: "milestones_payout_order_unique",
+      keys: { payoutId: 1, order: 1 },
+      options: {
+        unique: true,
+        partialFilterExpression: {
+          payoutId: { $type: "string" },
+          order: { $type: "int" },
+        },
+      },
+    },
+    {
+      name: "milestones_status_payout",
+      keys: { status: 1, payoutId: 1 },
+      options: {},
+    },
+  ],
+
+  milestone_evidence: [
+    {
+      name: "evidence_evidence_id_unique",
+      keys: { evidenceId: 1 },
+      options: { unique: true },
+    },
+    {
+      name: "evidence_milestone_id",
+      keys: { milestoneId: 1 },
+      options: {},
+    },
+    {
+      name: "evidence_milestone_created_at",
+      keys: { milestoneId: 1, createdAt: -1 },
+      options: {},
+    },
+  ],
+
+  milestone_history: [
+    {
+      name: "history_history_id_unique",
+      keys: { historyId: 1 },
+      options: { unique: true },
+    },
+    {
+      name: "history_milestone_id",
+      keys: { milestoneId: 1 },
+      options: {},
+    },
+    {
+      name: "history_milestone_created_at",
+      keys: { milestoneId: 1, createdAt: -1 },
       options: {},
     },
   ],
@@ -1045,13 +1113,56 @@ export const COLLECTION_VALIDATORS = Object.freeze({
       required: ["milestoneId", "escrowId", "status", "createdAt", "updatedAt"],
       properties: {
         milestoneId: { bsonType: "string", minLength: 1 },
+        payoutId: { bsonType: ["string", "null"] },
         escrowId: { bsonType: "string", minLength: 1 },
-        status: { enum: ["pending", "approved", "rejected", "completed"] },
+        order: { bsonType: ["int", "null"], minimum: 0 },
+        title: { bsonType: ["string", "null"] },
         description: { bsonType: ["string", "null"] },
         amount: { bsonType: ["string", "null"] },
+        currency: { bsonType: ["string", "null"] },
+        dueDate: { bsonType: ["date", "null"] },
+        status: { enum: ["pending", "submitted", "approved", "rejected", "completed"] },
+        evidenceIds: { bsonType: ["array", "null"], items: { bsonType: "string" } },
+        feedback: { bsonType: ["string", "null"] },
         chainTxHash: { bsonType: ["string", "null"] },
+        createdBy: { bsonType: ["string", "null"] },
+        version: { bsonType: ["int", "null"], minimum: 1 },
         createdAt: { bsonType: "date" },
         updatedAt: { bsonType: "date" },
+      },
+    },
+  },
+
+  milestone_evidence: {
+    $jsonSchema: {
+      bsonType: "object",
+      required: ["evidenceId", "milestoneId", "uploadedBy", "createdAt"],
+      properties: {
+        evidenceId: { bsonType: "string", minLength: 1 },
+        milestoneId: { bsonType: "string", minLength: 1 },
+        uploadedBy: { bsonType: "string", minLength: 1 },
+        fileId: { bsonType: ["string", "null"] },
+        fileUrl: { bsonType: ["string", "null"] },
+        fileType: { bsonType: ["string", "null"] },
+        notes: { bsonType: ["string", "null"] },
+        createdAt: { bsonType: "date" },
+      },
+    },
+  },
+
+  milestone_history: {
+    $jsonSchema: {
+      bsonType: "object",
+      required: ["historyId", "milestoneId", "fromStatus", "toStatus", "changedBy", "createdAt"],
+      properties: {
+        historyId: { bsonType: "string", minLength: 1 },
+        milestoneId: { bsonType: "string", minLength: 1 },
+        fromStatus: { bsonType: "string" },
+        toStatus: { bsonType: "string" },
+        changedBy: { bsonType: "string", minLength: 1 },
+        reason: { bsonType: ["string", "null"] },
+        chainTxHash: { bsonType: ["string", "null"] },
+        createdAt: { bsonType: "date" },
       },
     },
   },
@@ -1068,6 +1179,8 @@ export const COLLECTION_VALIDATORS = Object.freeze({
         asset: { bsonType: ["string", "null"] },
         status: { enum: ["pending", "claimed"] },
         chainTxHash: { bsonType: ["string", "null"] },
+        // Legacy embedded milestones (pre-#110 migration). Null after contract phase.
+        milestones: { bsonType: ["array", "null"] },
         createdAt: { bsonType: "date" },
         updatedAt: { bsonType: "date" },
       },
