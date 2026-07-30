@@ -2,7 +2,18 @@ import { apiClient } from '@/lib/api/apiClient';
 
 export const materialService = {
   getMarketplaceMaterials: async (params = {}) => {
-    const searchParams = new URLSearchParams(params);
+    const searchParams = new URLSearchParams();
+    if (params.cursor) searchParams.set('cursor', params.cursor);
+    if (params.search) searchParams.set('search', params.search);
+    if (params.subject) searchParams.set('subject', params.subject);
+    if (params.category) searchParams.set('category', params.category);
+    if (params.level) searchParams.set('level', params.level);
+    if (params.sortBy) searchParams.set('sortBy', params.sortBy);
+    if (params.minPrice) searchParams.set('minPrice', params.minPrice);
+    if (params.maxPrice) searchParams.set('maxPrice', params.maxPrice);
+    if (params.creator) searchParams.set('creator', params.creator);
+    if (params.usageRights) searchParams.set('usageRights', params.usageRights);
+    if (params.pageSize) searchParams.set('pageSize', params.pageSize);
     return apiClient(`/api/market-materials?${searchParams.toString()}`);
   },
 
@@ -23,7 +34,7 @@ export const materialService = {
   },
 
   uploadFile: async (formData) => {
-    return apiClient('/api/upload', { 
+    return apiClient('/api/upload', {
       body: formData,
       headers: { 'Content-Type': undefined },
       method: 'POST'

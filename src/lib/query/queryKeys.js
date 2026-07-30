@@ -2,6 +2,7 @@ export const queryKeys = {
   materials: {
     all: ['materials'],
     marketplace: (params) => ['materials', 'marketplace', params],
+    marketplaceCursor: (params) => ['materials', 'marketplace-cursor', params],
     trending: (params) => ['materials', 'trending', params],
     detail: (id) => ['materials', 'detail', id],
     feedback: (id) => ['materials', 'feedback', id],

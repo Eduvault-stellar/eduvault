@@ -25,6 +25,11 @@ const SAFE_FIELDS = new Set([
   "durationMs",
   "retryCount",
   "errorCode",
+  "policyVersion",
+  "approvalId",
+  "emergencyId",
+  "scope",
+  "role",
 ]);
 
 export function createAuditEntry(fields = {}) {

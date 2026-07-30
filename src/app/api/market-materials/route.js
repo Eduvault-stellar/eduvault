@@ -3,8 +3,18 @@ export const dynamic = "force-dynamic";
 import { NextResponse } from "next/server";
 import { auditLog } from "@/lib/api/audit";
 import { withApiHardening } from "@/lib/api/hardening";
-import { parsePagination } from "@/lib/api/validation";
-import { buildMarketplaceDiscoveryQuery, buildMarketplaceSort } from "@/lib/backend/marketplaceDiscovery";
+import {
+  buildMarketplaceDiscoveryQuery,
+  buildMarketplaceSort,
+  encodeCursor,
+  decodeCursor,
+  validateSortField,
+  clampResultWindow,
+  MAX_PAGE_SIZE,
+  MIN_PAGE_SIZE,
+  MAX_RESULT_WINDOW,
+  MAX_SEARCH_LENGTH,
+} from "@/lib/backend/marketplaceDiscovery";
 import { getDb } from "@/lib/mongodb";
 import { ObjectId } from "mongodb";
 import { cacheGet, cacheSet } from "@/lib/cache/redis";
@@ -27,8 +37,15 @@ function sanitizeMaterial(doc) {
   };
 }
 
+function buildCacheKey(searchParams, cursor) {
+  const params = new URLSearchParams(searchParams);
+  if (cursor) params.set("cursor", cursor);
+  params.delete("page");
+  return `market-materials:${params.toString()}`;
+}
+
 // GET /api/market-materials
-// Returns all public materials across users, newest first
+// Deterministic cursor-based pagination with safe relevance indexing.
 export async function GET(request) {
   return withApiHardening(
     request,
@@ -45,10 +62,11 @@ export async function GET(request) {
       if (!ObjectId.isValid(id)) {
         return NextResponse.json({ error: "Invalid material ID" }, { status: 400 });
       }
-      
-      const item = await db.collection("materials").findOne({ 
-        _id: new ObjectId(id), 
-        visibility: "public" 
+
+      const item = await db.collection("materials").findOne({
+        _id: new ObjectId(id),
+        visibility: "public",
+        status: "published",
       });
 
       if (!item) {
@@ -58,33 +76,69 @@ export async function GET(request) {
       return NextResponse.json(sanitizeMaterial(item));
     }
 
-    // 2️⃣ Handle list fetch
-    const { page, pageSize } = parsePagination(url.searchParams);
+    // 2️⃣ Handle cursor-based list fetch
+    const cursor = url.searchParams.get("cursor") || null;
+    const sortBy = validateSortField(url.searchParams.get("sortBy"));
+    const pageSize = Math.max(MIN_PAGE_SIZE, Math.min(MAX_PAGE_SIZE, Number(url.searchParams.get("pageSize") || "12")));
 
-    const cacheKey = `market-materials:${url.searchParams.toString()}`;
+    const cacheKey = buildCacheKey(url.searchParams, cursor);
     const cached = await cacheGet(cacheKey);
     if (cached) {
       return NextResponse.json(cached, { status: 200 });
     }
 
     const query = buildMarketplaceDiscoveryQuery(url.searchParams);
-    const sort = buildMarketplaceSort(url.searchParams.get("sortBy"));
+    const sort = buildMarketplaceSort(sortBy);
 
-    const total = await db.collection("materials").countDocuments(query);
+    let filterQuery = { ...query };
+    let cursorFilter = {};
+
+    if (cursor) {
+      const decoded = decodeCursor(cursor);
+      cursorFilter = {
+        $or: [
+          { createdAt: { $lt: decoded.createdAt } },
+          { createdAt: decoded.createdAt, _id: { $lt: new ObjectId(decoded.id) } },
+        ],
+      };
+      filterQuery = { ...filterQuery, ...cursorFilter };
+    }
+
+    const total = await db.collection("materials").countDocuments(filterQuery);
+
     const items = await db
       .collection("materials")
-      .find(query)
+      .find(filterQuery)
       .sort(sort)
-      .skip((page - 1) * pageSize)
-      .limit(pageSize)
+      .limit(pageSize + 1)
       .toArray();
 
-    const normalized = items.map(sanitizeMaterial);
+    const hasMore = items.length > pageSize;
+    const pageItems = hasMore ? items.slice(0, pageSize) : items;
 
-    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    const normalized = pageItems.map(sanitizeMaterial);
 
-    const payload = { items: normalized, page, pageSize, total, totalPages };
-    await cacheSet(cacheKey, payload, 600);
+    let nextCursor = null;
+    if (hasMore && pageItems.length > 0) {
+      const lastItem = pageItems[pageItems.length - 1];
+      nextCursor = encodeCursor(lastItem.createdAt, lastItem._id);
+    }
+
+    if (!cursor) {
+      clampResultWindow(1, pageSize);
+    }
+
+    const payload = {
+      items: normalized,
+      nextCursor,
+      hasMore,
+      total,
+      pageSize,
+      sortBy,
+      snapshotAt: new Date().toISOString(),
+    };
+
+    await cacheSet(cacheKey, payload, 300);
 
     return NextResponse.json(payload, { status: 200 });
   } catch (err) {
@@ -94,50 +148,4 @@ export async function GET(request) {
   }
     }
   );
-}
-
-import { NextResponse } from 'next/server';
-import { CacheEngine } from '../../../lib/cache/engine';
-import { client } from '../../../lib/backend/db';
-
-export async function GET(request) {
-  try {
-    const { searchParams } = new URL(request.url);
-    const tenant = request.headers.get('x-tenant-id') || 'default';
-    const network = request.headers.get('x-network-id') || 'mainnet';
-    const materialId = searchParams.get('id');
-
-    if (!materialId) {
-      return NextResponse.json({ error: 'Missing material ID' }, { status: 400 });
-    }
-
-    const cacheKey = CacheEngine.buildKey('materials', {
-      tenant, network, authScope: 'public', id: materialId
-    });
-
-    const systemConfig = await client.db().collection('system_meta').findOne({ id: 'global' });
-    const currentSystemVersion = systemConfig?.version || 1;
-
-    const data = await CacheEngine.getOrSet(
-      'materials',
-      cacheKey,
-      async () => {
-        return await client.db().collection('materials').findOne({ id: materialId, tenant, network });
-      },
-      currentSystemVersion
-    );
-
-    if (!data) {
-      return NextResponse.json({ error: 'Material Not Found' }, { status: 404 });
-    }
-
-    return NextResponse.json({ data }, {
-      headers: {
-        'Cache-Control': 'public, max-age=0, must-revalidate',
-        'X-Cache-Provenance': cacheKey
-      }
-    });
-  } catch (error) {
-    return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
-  }
 }
