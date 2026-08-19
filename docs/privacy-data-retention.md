@@ -32,6 +32,10 @@ The machine-readable source of truth is [`src/lib/privacy/retentionPolicy.js`](.
 | IPFS pins (avatar) | — | Consent | Immediate | **Unpin** |
 | IPFS pins (material files) | — | Consent | Immediate | **Unpin** (if no other buyers hold entitlements) |
 
+Subscriber responses stored on `webhook_deliveries.attempts` are allowlisted,
+redacted, bounded and digested before persistence; see
+[webhook-response-handling.md](./webhook-response-handling.md).
+
 ### Anonymization values
 
 | Field type | Anonymized value |

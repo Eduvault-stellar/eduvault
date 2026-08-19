@@ -1,7 +1,12 @@
 /**
  * Shared PII redaction rules for EduVault telemetry (#20).
  * Used by logger, tracing, and metrics so redaction is defined once.
+ *
+ * It is also used to sanitise untrusted third-party payloads (for example
+ * webhook subscriber responses, #173) before they are persisted or logged.
  */
+
+export const REDACTED = "[REDACTED]";
 
 const DENY_FIELDS = new Set([
   "email",
@@ -37,4 +42,145 @@ export function redactFields(obj = {}) {
 
 export function isDeniedField(key) {
   return DENY_FIELDS.has(String(key).toLowerCase());
+}
+
+/**
+ * Free-text redaction rules.
+ *
+ * These run over opaque text we did not produce (subscriber response bodies,
+ * upstream error messages), so they are intentionally conservative: every rule
+ * matches a shape that is a credential, key material, a stack frame or an
+ * email address, and nothing that is merely numeric or id-like. Rules are
+ * applied in order, from the most specific shape to the most generic one.
+ */
+const TEXT_RULES = [
+  // PEM encoded private key material.
+  {
+    pattern: /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/g,
+    replacement: "[REDACTED_PRIVATE_KEY]",
+  },
+  // Cookie / header style credential assignments ("set-cookie: session=...")
+  // and JSON style ("api_key": "...").
+  {
+    pattern:
+      /\b(api[_-]?key|apikey|access[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|secret|password|passwd|pwd|authorization|auth[_-]?token|session[_-]?id|sessionid|session|sid|csrf|xsrf|cookie|private[_-]?key|signature)\b(\s*["']?\s*[:=]\s*["']?)((?:(?:Bearer|Basic|Digest|Token)\s+)?[^"'\s,;&}\]]{1,4096})/gi,
+    replacement: (_match, key, separator) => `${key}${separator}${REDACTED}`,
+  },
+  // Authorization scheme values that survived the rule above.
+  {
+    pattern: /\b(Bearer|Basic|Digest|Token)\s+[A-Za-z0-9._~+/=-]{8,}/g,
+    replacement: (_match, scheme) => `${scheme} ${REDACTED}`,
+  },
+  // JSON Web Tokens anywhere in the text.
+  {
+    pattern: /\beyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]*/g,
+    replacement: "[REDACTED_JWT]",
+  },
+  // Well-known vendor token shapes.
+  { pattern: /\bAKIA[0-9A-Z]{16}\b/g, replacement: "[REDACTED_TOKEN]" },
+  { pattern: /\bgh[pousr]_[A-Za-z0-9]{16,}\b/g, replacement: "[REDACTED_TOKEN]" },
+  { pattern: /\bxox[abprs]-[A-Za-z0-9-]{10,}/g, replacement: "[REDACTED_TOKEN]" },
+  { pattern: /\bsk-[A-Za-z0-9]{16,}\b/g, replacement: "[REDACTED_TOKEN]" },
+  // Stellar secret seeds (S + 55 base32 chars). Public keys (G...) are kept.
+  { pattern: /\bS[A-Z2-7]{55}\b/g, replacement: "[REDACTED_SECRET_SEED]" },
+  // Email addresses are PII.
+  {
+    pattern: /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g,
+    replacement: "[REDACTED_EMAIL]",
+  },
+];
+
+// Stack frames leak internal paths, package layout and sometimes arguments.
+const STACK_FRAME_RULES = [
+  // V8: "    at fn (/srv/app/file.js:10:5)"; JVM: "\tat com.foo.Bar(Bar.java:1)".
+  /^[ \t]*at [^\n]*$/gm,
+  // Python: '  File "/srv/app/main.py", line 42, in handler'.
+  /^[ \t]*File "[^"]+", line \d+[^\n]*$/gm,
+  // Bare absolute paths with line:column on their own line.
+  /^[ \t]*(?:\/[^\s:]+|[A-Za-z]:\\[^\s:]+):\d+:\d+[^\n]*$/gm,
+];
+
+// C0/C1 control characters except tab, newline and carriage return.
+const CONTROL_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g;
+
+/**
+ * Remove stack frames from untrusted text, collapsing runs of frames into a
+ * single marker so the shape of the error stays legible.
+ */
+export function stripStackFrames(text) {
+  let out = String(text ?? "");
+  for (const pattern of STACK_FRAME_RULES) {
+    out = out.replace(pattern, "[STACK_FRAME_REDACTED]");
+  }
+  return out.replace(
+    /(?:\[STACK_FRAME_REDACTED\][ \t]*\r?\n?){2,}/g,
+    "[STACK_FRAMES_REDACTED]\n",
+  );
+}
+
+/**
+ * Redact credentials, key material and PII from an opaque string.
+ *
+ * @param {unknown} value raw text
+ * @param {{ maxLength?: number, stripStacks?: boolean }} [options]
+ * @returns {string} redacted text, truncated to `maxLength` when provided
+ */
+export function redactText(value, options = {}) {
+  const { maxLength, stripStacks = true } = options;
+  if (value === null || value === undefined) return "";
+
+  // Strip control characters so an untrusted body cannot forge log records
+  // once written to a text sink.
+  let out = (typeof value === "string" ? value : String(value)).replace(CONTROL_CHARS, "");
+
+  if (stripStacks) out = stripStackFrames(out);
+  for (const { pattern, replacement } of TEXT_RULES) {
+    out = out.replace(pattern, replacement);
+  }
+
+  if (typeof maxLength === "number" && maxLength >= 0 && out.length > maxLength) {
+    out = `${out.slice(0, maxLength)}[TRUNCATED]`;
+  }
+  return out;
+}
+
+/**
+ * Response headers that are safe to retain from an untrusted endpoint: they
+ * are operationally useful and carry no credentials. Everything else
+ * (`set-cookie`, `authorization`, `location`, vendor headers...) is dropped.
+ */
+export const SAFE_RESPONSE_HEADERS = Object.freeze([
+  "content-type",
+  "content-length",
+  "date",
+  "retry-after",
+  "x-request-id",
+  "x-correlation-id",
+  "x-ratelimit-limit",
+  "x-ratelimit-remaining",
+  "x-ratelimit-reset",
+]);
+
+const MAX_HEADER_VALUE_LENGTH = 256;
+
+/**
+ * Keep only allowlisted headers, redact their values and bound their length.
+ *
+ * @param {Record<string, unknown>} headers
+ * @param {string[]|Set<string>} [allowlist]
+ * @returns {Record<string, string>}
+ */
+export function redactHeaders(headers, allowlist = SAFE_RESPONSE_HEADERS) {
+  const allowed = allowlist instanceof Set ? allowlist : new Set(allowlist);
+  const safe = {};
+  if (!headers || typeof headers !== "object") return safe;
+
+  for (const [key, value] of Object.entries(headers)) {
+    const name = String(key).toLowerCase();
+    if (!allowed.has(name)) continue;
+    if (value === undefined || value === null) continue;
+    const flat = Array.isArray(value) ? value.join(", ") : String(value);
+    safe[name] = redactText(flat, { maxLength: MAX_HEADER_VALUE_LENGTH, stripStacks: false });
+  }
+  return safe;
 }
