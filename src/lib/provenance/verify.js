@@ -1,8 +1,9 @@
 import { getDb } from '@/lib/mongodb';
 import { verifyFileBytes, verifyManifestDigest } from './manifest';
-import { getManifest, isManifestWithdrawn, getLatestManifest } from './registry';
+import { getManifest, isManifestWithdrawn, getLatestManifest, getDigestAnchor } from './registry';
+import { verifyDeliveryIntegrityLogic, DELIVERY_INTEGRITY } from './deliveryIntegrity';
 
-export { verifyManifestDigest };
+export { verifyManifestDigest, verifyDeliveryIntegrityLogic, DELIVERY_INTEGRITY };
 
 /**
  * Download verification — ensures file bytes match the purchased manifest
@@ -22,6 +23,46 @@ export const VERIFY_STATUS = Object.freeze({
   STALE_VERSION: 'stale_version',
   ERROR: 'verification_error',
 });
+
+// ── Delivery Integrity (Issue #168) ─────────────────────────────────────────
+
+/**
+ * Verify that the CID about to be served for a protected delivery matches the
+ * purchased version manifest, and that the manifest's digest (and on-chain
+ * anchor, when present) is intact. This is the gate the streaming delivery
+ * route runs BEFORE any protected bytes are served, so a mutable or tampered
+ * CID mapping on the materials record can never redirect a buyer to
+ * different content.
+ *
+ * @param {object} params
+ * @param {string} params.materialId
+ * @param {string} params.buyerAddress - Buyer wallet address
+ * @param {string} params.requestedCid - The CID resolved from the material record
+ * @param {number} [params.version] - Optional explicit version to verify against
+ * @returns {Promise<{valid: boolean, statusCode: number, reason: string, detail: string, version: number|null, manifestCid: string|null}>}
+ */
+export async function verifyDeliveryIntegrity({
+  materialId,
+  buyerAddress,
+  requestedCid,
+  version = null,
+}) {
+  const db = await getDb();
+
+  return verifyDeliveryIntegrityLogic({
+    materialId,
+    buyerAddress,
+    requestedCid,
+    version,
+    getPurchase: async ({ materialId: m, buyerAddress: b }) =>
+      db
+        .collection('purchases')
+        .findOne({ materialId: m, buyerAddress: String(b || '').toLowerCase() }),
+    getManifest: (m, v) => getManifest(m, v),
+    getLatestManifest: (m) => getLatestManifest(m),
+    getDigestAnchor: (m, v) => getDigestAnchor(m, v),
+  });
+}
 
 // ── Core Verification ────────────────────────────────────────────────────────
 
