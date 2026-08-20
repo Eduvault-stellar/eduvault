@@ -1,11 +1,38 @@
 import { getDb } from '@/lib/mongodb';
 import { PURCHASE_MANAGER_CONTRACT_ID, STELLAR_RPC_URL, NETWORK_PASSPHRASE } from '@/lib/config/chain';
 import { isCompletedPurchaseStatus, normalizeBuyerAddress } from '@/lib/purchases/access';
-import { Contract, Address, nativeToScVal, scValToNative, xdr, TransactionBuilder, Account } from '@stellar/stellar-sdk';
+import {
+  Contract,
+  Address,
+  nativeToScVal,
+  scValToNative,
+  xdr,
+  TransactionBuilder,
+  Account,
+  BASE_FEE,
+} from '@stellar/stellar-sdk';
 import logger from '@/lib/logger';
 
+// Positive results (an on-chain / DB confirmed entitlement) are safe to cache
+// for longer, since access should be revoked far less often than it is
+// granted, and continuing to grant access to an already-entitled buyer for a
+// short extra window carries little risk.
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes positive TTL
+
+// Negative results (confirmed absence of an entitlement) must expire quickly:
+// a buyer who just purchased access needs to be recognized promptly, and we
+// never want to keep denying access longer than necessary.
 const NEGATIVE_TTL_MS = 60 * 1000; // 1 minute negative TTL
+
+// When the chain read itself fails (RPC timeout, network error, malformed
+// response, archived/restore-preamble state, ...) we must NOT treat that as
+// a confirmed negative - doing so would cache a transient outage as "no
+// entitlement" and lock out a paying buyer. Instead, on transport failure we
+// may fall back to the last verified cache entry, but only within a bounded
+// grace window past its own expiry. Beyond that window we fail closed rather
+// than trusting arbitrarily stale data forever.
+const STALE_GRACE_MS = 15 * 60 * 1000; // 15 minutes beyond expiry
+
 const PENDING_REQS = new Map();
 
 export async function getCachedEntitlement(db, materialId, buyerAddress) {
@@ -21,13 +48,23 @@ export async function setCachedEntitlement(db, materialId, buyerAddress, active,
   const now = new Date();
   const ttl = active ? CACHE_TTL_MS : NEGATIVE_TTL_MS;
   const expiresAt = new Date(now.getTime() + ttl);
+  const normalised = buyerAddress.toLowerCase();
 
   await db.collection('entitlement_cache').updateOne(
-    { materialId, buyerAddress: buyerAddress.toLowerCase() },
+    // Scope the upsert filter by contractId/network as well as
+    // materialId/buyerAddress so a switch of network or contract can never
+    // silently clobber (or be masked by) a cache document verified against a
+    // different chain deployment.
+    {
+      materialId,
+      buyerAddress: normalised,
+      contractId: PURCHASE_MANAGER_CONTRACT_ID,
+      network: NETWORK_PASSPHRASE,
+    },
     {
       $set: {
         materialId,
-        buyerAddress: buyerAddress.toLowerCase(),
+        buyerAddress: normalised,
         active,
         source: active ? source : `${source}-miss`,
         contractId: PURCHASE_MANAGER_CONTRACT_ID,
@@ -44,33 +81,54 @@ export async function setCachedEntitlement(db, materialId, buyerAddress, active,
 
 // Ensure materialId is exactly 32 bytes for BytesN<32>
 export function formatMaterialIdBytes(materialId) {
-  if (typeof materialId === 'string' && materialId.length === 64 && /^[0-9a-f]+$/i.test(materialId)) {
-    return Buffer.from(materialId, 'hex');
-  }
-  let buf = Buffer.alloc(32);
-  buf.write(materialId || '', 'utf8');
+  const buf = Buffer.alloc(32);
+  const cleanId = String(materialId || '').replace(/^0x/, '');
+  const raw = /^[0-9a-fA-F]+$/.test(cleanId) && cleanId.length > 0
+    ? Buffer.from(cleanId, 'hex')
+    : Buffer.from(cleanId, 'utf-8');
+  raw.copy(buf, Math.max(0, 32 - raw.length));
   return buf;
 }
 
 export function buildHasEntitlementXdr(materialId, buyerAddress) {
-  const contract = new Contract(PURCHASE_MANAGER_CONTRACT_ID);
-  const matIdScVal = nativeToScVal(formatMaterialIdBytes(materialId), { type: 'bytesN', size: 32 });
-  const buyerScVal = new Address(buyerAddress).toScVal();
+  const contractId = PURCHASE_MANAGER_CONTRACT_ID || process.env.NEXT_PUBLIC_PURCHASE_MANAGER_CONTRACT_ID;
+  if (!materialId || !buyerAddress || !contractId) return '';
 
-  const op = contract.call('has_entitlement', matIdScVal, buyerScVal);
+  try {
+    const contract = new Contract(contractId);
+    const materialIdScVal = xdr.ScVal.scvBytes(formatMaterialIdBytes(materialId));
 
-  const tx = new TransactionBuilder(new Account("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF", "1"), {
-    fee: "100",
-    networkPassphrase: NETWORK_PASSPHRASE,
-  })
-    .addOperation(op)
-    .setTimeout(30)
-    .build();
+    let addressScVal;
+    try {
+      addressScVal = Address.fromString(buyerAddress).toScVal();
+    } catch {
+      addressScVal = nativeToScVal(buyerAddress, { type: 'address' });
+    }
 
-  return tx.toXDR();
+    const dummyAccount = new Account(
+      buyerAddress.startsWith('G')
+        ? buyerAddress
+        : 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF',
+      '0'
+    );
+
+    const tx = new TransactionBuilder(dummyAccount, {
+      fee: BASE_FEE || '100',
+      networkPassphrase: NETWORK_PASSPHRASE,
+    })
+      .addOperation(contract.call('has_entitlement', materialIdScVal, addressScVal))
+      .setTimeout(30)
+      .build();
+
+    return tx.toXDR();
+  } catch (err) {
+    logger?.error({ err: err.message }, 'Failed to build has_entitlement XDR');
+    return '';
+  }
 }
 
 export function decodeBoolean(xdrBase64) {
+  if (!xdrBase64) return false;
   try {
     const scval = xdr.ScVal.fromXDR(xdrBase64, 'base64');
     return scValToNative(scval) === true;
@@ -80,40 +138,20 @@ export function decodeBoolean(xdrBase64) {
   }
 }
 
+// Reads entitlement state directly from the Soroban contract.
+//
+// Return contract (tri-state - callers MUST preserve this distinction and
+// never collapse it to a plain boolean before deciding whether to cache):
+//   true  -> chain authoritatively confirms the buyer holds the entitlement
+//   false -> chain authoritatively confirms the buyer does NOT hold it
+//   null  -> the check could not be completed (missing config, RPC/network
+//            failure, timeout, malformed response, or archived/unrestored
+//            state). This is NOT a negative result and must never be cached
+//            as one.
 export async function checkChainEntitlement(materialId, buyerAddress) {
   if (!PURCHASE_MANAGER_CONTRACT_ID || !STELLAR_RPC_URL) return null;
-import { client } from './backend/db'; // Your app's MongoDB client instance
-import { CacheEngine } from './cache/engine';
-import { getDb } from './mongodb.js';
-import { PURCHASE_MANAGER_CONTRACT_ID, STELLAR_RPC_URL, NETWORK_PASSPHRASE } from './config/chain.js';
-import { isCompletedPurchaseStatus, normalizeBuyerAddress } from './purchases/access.js';
-import {
-  Keypair,
-  TransactionBuilder,
-  BASE_FEE,
-  Contract,
-  xdr,
-  Account,
-  Address,
-  nativeToScVal,
-} from '@stellar/stellar-sdk';
-
-export async function updateEntitlement(tenant, network, userId, authScope, updates) {
-  const db = client.db();
-  const session = client.startSession();
 
   try {
-    let result;
-    await session.withTransaction(async () => {
-      // 1. Update source of truth
-      result = await db.collection('entitlements').findOneAndUpdate(
-        { tenant, network, userId, authScope },
-        { 
-          $set: { ...updates, updatedAt: new Date() },
-          $inc: { version: 1 } 
-        },
-        { returnDocument: 'after', session }
-      );
     const xdrBlob = buildHasEntitlementXdr(materialId, buyerAddress);
     if (!xdrBlob) return null;
 
@@ -121,9 +159,7 @@ export async function updateEntitlement(tenant, network, userId, authScope, upda
       jsonrpc: '2.0',
       id: 1,
       method: 'simulateTransaction',
-      params: {
-        transaction: xdrBlob,
-      },
+      params: { transaction: xdrBlob },
     };
 
     const res = await fetch(STELLAR_RPC_URL, {
@@ -157,62 +193,6 @@ export async function updateEntitlement(tenant, network, userId, authScope, upda
     logger?.error({ err: err.message }, 'Timeout or network error in checkChainEntitlement');
     return null;
   }
-}
-
-function buildHasEntitlementXdr(materialId, buyerAddress) {
-  const contractId = PURCHASE_MANAGER_CONTRACT_ID || process.env.NEXT_PUBLIC_PURCHASE_MANAGER_CONTRACT_ID;
-  if (!materialId || !buyerAddress || !contractId) return '';
-  try {
-    const contract = new Contract(contractId);
-
-    const materialIdBytes = Buffer.alloc(32);
-    const cleanId = String(materialId).replace(/^0x/, '');
-    const raw = /^[0-9a-fA-F]+$/.test(cleanId)
-      ? Buffer.from(cleanId, 'hex')
-      : Buffer.from(cleanId, 'utf-8');
-    raw.copy(materialIdBytes, Math.max(0, 32 - raw.length));
-    const materialIdScVal = xdr.ScVal.scvBytes(materialIdBytes);
-
-    let addressScVal;
-    try {
-      addressScVal = Address.fromString(buyerAddress).toScVal();
-    } catch {
-      addressScVal = nativeToScVal(buyerAddress, { type: 'address' });
-    }
-
-    const dummyAccount = new Account(
-      buyerAddress.startsWith('G')
-        ? buyerAddress
-        : 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF',
-      '0'
-    );
-
-    const tx = new TransactionBuilder(dummyAccount, {
-      fee: BASE_FEE || '100',
-      networkPassphrase: NETWORK_PASSPHRASE,
-    })
-      .addOperation(
-        contract.call('has_entitlement', materialIdScVal, addressScVal)
-      )
-      .setTimeout(30)
-      .build();
-
-    return tx.toXDR();
-  } catch (err) {
-    console.error('Failed to build has_entitlement XDR:', err);
-    return '';
-  }
-}
-
-function decodeBoolean(xdrBase64) {
-  if (!xdrBase64) return false;
-  try {
-    const scval = xdr.ScVal.fromXDR(xdrBase64, 'base64');
-    if (scval.switch().name === 'scvBool') {
-      return scval.b();
-    }
-  } catch {}
-  return xdrBase64.includes('AAAE') || xdrBase64.includes('true');
 }
 
 /**
@@ -259,6 +239,9 @@ export async function createEntitlement(materialId, buyerAddress, purchaseData =
 
   const session = purchaseData.session || null;
 
+  // Grant is authoritative: it must immediately supersede any previously
+  // cached negative result for this (materialId, buyerAddress) pair so a
+  // just-completed purchase is recognized on the very next check.
   await db.collection('entitlement_cache').updateOne(
     { materialId, buyerAddress: normalised },
     { $set: entry },
@@ -282,7 +265,7 @@ export async function revokeEntitlement(materialId, buyerAddress) {
 
   const db = await getDb();
   const normalised = buyerAddress.toLowerCase();
-  
+
   const now = new Date();
   const expiresAt = new Date(now.getTime() + NEGATIVE_TTL_MS);
 
@@ -317,11 +300,11 @@ export async function verifyEntitlementLogic(materialId, buyerAddress, { db, che
 
   const cached = await getCache(db, materialId, normalised);
   if (cached) {
-    // Check if cache is still valid
+    // A cache entry within its own TTL is authoritative for its polarity:
+    // a fresh positive grants access, a fresh negative (short TTL) denies
+    // it. Expired entries fall through to re-verification below.
     if (cached.expiresAt && cached.expiresAt > now) {
       if (cached.active) return { hasAccess: true, source: cached.source || 'cache' };
-      // Fall through to DB check for inactive if it could be out of date?
-      // With a negative TTL, it expires quickly. If it's valid, it's inactive.
       return { hasAccess: false, source: cached.source || 'cache-miss' };
     }
   }
@@ -339,38 +322,54 @@ export async function verifyEntitlementLogic(materialId, buyerAddress, { db, che
 
   // Fallback to chain
   const onChain = await checkChain(materialId, buyerAddress);
+
   if (onChain === true) {
     await setCache(db, materialId, normalised, true, 'chain');
     return { hasAccess: true, source: 'chain' };
-      const targetCacheKey = CacheEngine.buildKey('entitlements', {
-        tenant, network, authScope, id: userId
-      });
-
-      // 2. Queue the invalidation to the transactional outbox
-      await db.collection('cache_outbox').insertOne({
-        eventId: `evt_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`,
-        cacheKey: targetCacheKey,
-        targetRegistry: 'entitlements',
-        status: 'PENDING',
-        createdAt: new Date(),
-        attempts: 0
-      }, { session });
-    });
-
-    return result.value;
-  } finally {
-    await session.endSession();
   }
-  
+
   if (onChain === false) {
-    await setCache(db, materialId, normalised, false, 'chain');
+    // Authoritative negative: safe to cache, but only briefly.
+    await setCache(db, materialId, normalised, false, 'chain-miss');
     return { hasAccess: false, source: 'chain-miss' };
   }
 
-  // Fail-open/stale fallback: if chain fails (returns null) and we have a stale cache entry, return it
-  if (onChain === null && cached) {
-    logger?.warn({ materialId, buyerAddress }, 'Chain verify failed, falling back to stale cache');
-    return { hasAccess: cached.active, source: 'stale-cache' };
+  // onChain === null: the chain read itself failed (transport error, RPC
+  // outage, malformed response, ...). This is NOT an authoritative negative
+  // and must never be written to the negative cache - doing so would let a
+  // transient outage lock out an already-entitled buyer.
+  if (onChain === null) {
+    if (cached) {
+      const staleMs = now.getTime() - new Date(cached.expiresAt).getTime();
+
+      if (!cached.active) {
+        // Extending a stale *negative* result carries no access-control
+        // risk (worst case we keep denying a little longer), so it is
+        // always safe to fall back to it while the chain is unreachable.
+        logger?.warn({ materialId, buyerAddress }, 'Chain verify failed, reusing stale negative cache');
+        return { hasAccess: false, source: 'stale-cache-miss' };
+      }
+
+      if (staleMs <= STALE_GRACE_MS) {
+        // Bounded trust window: keep honoring a recently-expired positive
+        // result while the chain is unreachable, so a real outage doesn't
+        // immediately cut off already-entitled buyers.
+        logger?.warn({ materialId, buyerAddress, staleMs }, 'Chain verify failed, serving bounded-stale positive cache');
+        return { hasAccess: true, source: 'stale-cache' };
+      }
+
+      // Past the grace window we no longer trust the stale positive result
+      // and fail closed rather than granting access indefinitely off data
+      // we can no longer verify.
+      logger?.error({ materialId, buyerAddress, staleMs }, 'Stale positive entitlement exceeded safe grace window; failing closed');
+      return { hasAccess: false, source: 'unavailable-stale-expired' };
+    }
+
+    // No cache at all and the chain is unreachable: this is distinct from
+    // an authoritative "not found" - we simply don't know. Fail closed but
+    // keep the source label distinguishable for observability/alerting.
+    logger?.error({ materialId, buyerAddress }, 'Chain verify failed with no cached entitlement to fall back on');
+    return { hasAccess: false, source: 'unavailable' };
   }
 
   return { hasAccess: false, source: 'not-found' };
@@ -444,6 +443,3 @@ export function requireEntitlement(handler, getMaterialId) {
     return handler(request, context, { materialId, buyerAddress, source });
   };
 }
-
-export { buildHasEntitlementXdr, checkChainEntitlement };
-
