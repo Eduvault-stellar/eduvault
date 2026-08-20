@@ -11,6 +11,8 @@
  * or txHash as a label instead of an attribute).
  */
 
+import { sanitizeMetricLabels } from "./redact.js";
+
 const MAX_LABEL_COMBINATIONS_PER_METRIC = 200;
 
 const counters = new Map(); // metricName -> Map<labelKey, value>
@@ -18,8 +20,9 @@ const histograms = new Map(); // metricName -> Map<labelKey, number[]>
 const gauges = new Map(); // metricName -> Map<labelKey, value>
 
 function labelKey(labels = {}) {
-  const keys = Object.keys(labels).sort();
-  return keys.map((k) => `${k}="${String(labels[k]).slice(0, 64)}"`).join(",");
+  const sanitized = sanitizeMetricLabels(labels);
+  const keys = Object.keys(sanitized).sort();
+  return keys.map((k) => `${k}="${String(sanitized[k]).slice(0, 64)}"`).join(",");
 }
 
 function guardCardinality(store, metricName) {
@@ -109,12 +112,6 @@ export function toPrometheusFormat() {
   }
   for (const [name, series] of gauges.entries()) {
     lines.push(`# TYPE ${name} gauge`);
-    for (const [key, value] of series.entries()) {
-      lines.push(key ? `${name}{${key}} ${value}` : `${name} ${value}`);
-    }
-  }
-  for (const [name, series] of counters.entries()) {
-    lines.push(`# TYPE ${name} counter`);
     for (const [key, value] of series.entries()) {
       lines.push(key ? `${name}{${key}} ${value}` : `${name} ${value}`);
     }

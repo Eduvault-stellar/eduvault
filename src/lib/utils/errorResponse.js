@@ -1,9 +1,7 @@
-import { NextResponse } from "next/server";
-
 /**
  * RFC 7807 Problem Details error response helper.
  *
- * Returns a NextResponse with Content-Type: application/problem+json and a
+ * Returns a Response with Content-Type: application/problem+json and a
  * standardized JSON body containing type, title, status, detail, and instance.
  *
  * @param {Object} options
@@ -12,7 +10,7 @@ import { NextResponse } from "next/server";
  * @param {string}  options.detail   Human-readable explanation of this occurrence
  * @param {string}  options.instance URI that identifies the specific occurrence
  * @param {string}  options.type     URI that identifies the problem type (default "about:blank")
- * @returns {NextResponse}
+ * @returns {Response}
  */
 export function errorResponse({
   status = 500,
@@ -32,17 +30,16 @@ export function errorResponse({
     500: "Internal Server Error",
   };
 
-  return NextResponse.json(
-    {
-      type,
-      title: title || defaultTitles[status] || "Error",
-      status,
-      detail,
-      instance,
-    },
-    {
-      status,
-      headers: { "Content-Type": "application/problem+json" },
-    }
-  );
+  const payload = {
+    type,
+    title: title || defaultTitles[status] || "Error",
+    status,
+    detail,
+    instance,
+  };
+
+  return new Response(JSON.stringify(payload), {
+    status,
+    headers: { "Content-Type": "application/problem+json" },
+  });
 }
