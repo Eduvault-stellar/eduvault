@@ -24,7 +24,7 @@
  * chooses the key. Either way it is unique per stored object.
  */
 
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import {
   COLLECTIONS,
@@ -32,6 +32,7 @@ import {
   FILE_VISIBILITY,
   FILE_PURPOSES,
 } from "../backend/schemaContracts.js";
+import { acquireStorageClaim, releaseStorageClaim } from "./storageClaims.js";
 
 export class FileAuthorizationError extends Error {
   constructor(message) {
@@ -160,6 +161,9 @@ export async function registerFile(db, {
   });
   if (existing) return { file: existing, deduped: true };
 
+  const claimId = `file:${randomUUID()}`;
+  await acquireStorageClaim(db, normalizedKey, claimId, now);
+
   const record = {
     ownerId,
     purpose,
@@ -177,16 +181,43 @@ export async function registerFile(db, {
   };
 
   try {
-    const result = await files.insertOne(record);
-    return { file: { _id: result.insertedId, ...record }, deduped: false };
-  } catch (error) {
-    if (error?.code === 11000) {
-      // Another writer registered the same storage key first; return theirs.
-      const raced = await files.findOne({ storageKey: normalizedKey });
-      if (raced) return { file: raced, deduped: true };
+    try {
+      const result = await files.insertOne(record);
+      return { file: { _id: result.insertedId, ...record }, deduped: false };
+    } catch (error) {
+      if (error?.code === 11000) {
+        // Another writer registered the same storage key first; return theirs.
+        const raced = await files.findOne({ storageKey: normalizedKey });
+        if (raced) return { file: raced, deduped: true };
+      }
+      throw error;
     }
-    throw error;
+  } finally {
+    await releaseStorageClaim(db, normalizedKey, claimId);
   }
+}
+
+async function storageKeyIsClaimed(db, storageKey) {
+  const liveFile = await db.collection(COLLECTIONS.files).findOne({
+    storageKey,
+    state: { $ne: FILE_STATES.DELETED },
+  });
+  if (liveFile) return true;
+
+  const material = await db.collection(COLLECTIONS.materials).findOne({
+    $or: [{ storageKey }, { thumbnailStorageKey: storageKey }],
+  });
+  if (material) return true;
+
+  const uploadSession = await db.collection(COLLECTIONS.uploadSessions).findOne({
+    state: { $in: ["created", "uploading", "ready", "completing", "complete"] },
+    $or: [
+      { "parts.file.cid": storageKey },
+      { "parts.thumbnail.cid": storageKey },
+      { "parts.metadata.cid": storageKey },
+    ],
+  });
+  return Boolean(uploadSession);
 }
 
 /** Load a file record, enforcing that `requesterId` is allowed to see it. */
@@ -351,15 +382,29 @@ export async function runFileCleanup(db, remove, { limit = 100, maxAttempts = 5,
     .toArray();
 
   let removed = 0;
+  let skippedClaimed = 0;
   const failed = [];
   for (const task of due) {
+    const cleanupToken = randomUUID();
+    const claim = await outbox.updateOne(
+      { storageKey: task.storageKey, status: "pending" },
+      { $set: { status: "processing", cleanupToken, processingAt: now, updatedAt: now } },
+    );
+    if (claim.matchedCount !== 1) continue;
+
     try {
+      if (task.reason === "orphan" && await storageKeyIsClaimed(db, task.storageKey)) {
+        await outbox.deleteOne({ storageKey: task.storageKey, status: "processing", cleanupToken });
+        skippedClaimed += 1;
+        continue;
+      }
+
       await remove(task.storageKey);
       await db.collection(COLLECTIONS.files).updateOne(
         { storageKey: task.storageKey },
         { $set: { state: FILE_STATES.DELETED, deletedAt: now, updatedAt: now } },
       );
-      await outbox.deleteOne({ storageKey: task.storageKey });
+      await outbox.deleteOne({ storageKey: task.storageKey, status: "processing", cleanupToken });
       removed += 1;
     } catch (error) {
       const attempts = (task.attempts || 0) + 1;
@@ -368,7 +413,7 @@ export async function runFileCleanup(db, remove, { limit = 100, maxAttempts = 5,
       // spin the worker.
       const backoffMs = Math.min(60 * 60 * 1000, 1000 * 2 ** attempts);
       await outbox.updateOne(
-        { storageKey: task.storageKey },
+        { storageKey: task.storageKey, status: "processing", cleanupToken },
         {
           $set: {
             attempts,
@@ -383,7 +428,7 @@ export async function runFileCleanup(db, remove, { limit = 100, maxAttempts = 5,
     }
   }
 
-  return { scanned: due.length, removed, failed };
+  return { scanned: due.length, removed, skippedClaimed, failed };
 }
 
 /**
@@ -408,12 +453,12 @@ export async function detectOrphans(db, listStorageKeys, {
 
   const files = db.collection(COLLECTIONS.files);
   const storageKeys = await listStorageKeys();
+  let enqueued = 0;
 
   // Storage objects with no live (pending/active/pending_deletion) record.
   const orphanedStorage = [];
   for (const key of storageKeys) {
-    const record = await files.findOne({ storageKey: key, state: { $ne: FILE_STATES.DELETED } });
-    if (!record) orphanedStorage.push(key);
+    if (!(await storageKeyIsClaimed(db, key))) orphanedStorage.push(key);
   }
 
   // Records that should have been cleaned up but were not, past retention.
@@ -425,14 +470,26 @@ export async function detectOrphans(db, listStorageKeys, {
   if (mode === "apply") {
     const outbox = db.collection(COLLECTIONS.fileCleanupOutbox);
     for (const key of orphanedStorage) {
-      await outbox.updateOne(
+      // Ownership may have been committed after the storage listing. Recheck
+      // immediately before the guarded insert; `$setOnInsert` never overwrites
+      // an upload/file claim marker for the same key.
+      if (await storageKeyIsClaimed(db, key)) continue;
+      const result = await outbox.updateOne(
         { storageKey: key },
         {
-          $set: { storageKey: key, status: "pending", nextAttemptAt: now, reason: "orphan", updatedAt: now },
-          $setOnInsert: { createdAt: now, attempts: 0 },
+          $setOnInsert: {
+            storageKey: key,
+            status: "pending",
+            nextAttemptAt: now,
+            reason: "orphan",
+            createdAt: now,
+            updatedAt: now,
+            attempts: 0,
+          },
         },
         { upsert: true },
       );
+      if (result.upsertedCount === 1) enqueued += 1;
     }
   }
 
@@ -440,6 +497,6 @@ export async function detectOrphans(db, listStorageKeys, {
     mode,
     orphanedStorageKeys: orphanedStorage,
     stuckRecordKeys: stuckRecords.map((r) => r.storageKey),
-    enqueued: mode === "apply" ? orphanedStorage.length : 0,
+    enqueued,
   };
 }
