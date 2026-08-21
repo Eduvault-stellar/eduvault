@@ -11,6 +11,7 @@ const BASIS_POINTS: u32 = 10_000;
 const MAX_PLATFORM_FEE_BPS: u32 = 1_000;
 const MAX_PAYOUT_RECIPIENTS: u32 = 5;
 const ESCROW_LOCK_PERIOD_LEDGERS: u32 = 35_000;
+const MAX_ORACLE_SCALE: u32 = 18;
 
 /// Volume-tier discounted fee rates (basis points).
 /// Tier 1: 2.5 %, Tier 2: 1.5 %.
@@ -67,6 +68,32 @@ pub struct AssetInfo {
 pub struct AssetQuote {
     pub asset: Address,
     pub amount: i128,
+}
+
+/// Price observation returned by a configured oracle. Both sides of the pair,
+/// the decimal scale, and the observation ledger are carried with the value so
+/// the purchase manager never has to infer quote semantics.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OracleObservation {
+    pub base_asset: Address,
+    pub quote_asset: Address,
+    pub price: i128,
+    pub scale: u32,
+    pub observed_ledger: u32,
+}
+
+/// Per-payment-asset oracle safety policy. Existing assets without a policy
+/// retain the fixed registry-quote behavior for storage compatibility.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OraclePolicy {
+    pub oracle: Address,
+    pub base_asset: Address,
+    pub quote_asset: Address,
+    pub scale: u32,
+    pub max_age_ledgers: u32,
+    pub max_deviation_bps: u32,
 }
 
 /// Payout share structure from registry
@@ -159,6 +186,7 @@ enum DataKey {
     Escrow(u64),
     PendingAdmin,
     CreatorTier(Address),
+    OraclePolicy(Address),
 }
 
 /// Contract errors
@@ -200,6 +228,16 @@ pub enum PurchaseError {
     // Checkout intent errors
     IntentExpired = 70,
     IntentConsumed = 71,
+
+    // Oracle quote validation errors
+    OracleCallFailed = 80,
+    InvalidOracleConfig = 81,
+    OraclePairMismatch = 82,
+    OracleScaleMismatch = 83,
+    OracleQuoteStale = 84,
+    OracleDeviationExceeded = 85,
+    InvalidOracleQuote = 86,
+    ArithmeticOverflow = 87,
 }
 
 /// Event: purchase.completed
@@ -306,6 +344,27 @@ pub struct CreatorTierUpdatedEvent {
     pub tier: CreatorTier,
 }
 
+/// Event: admin.oracle_policy_updated
+#[contractevent(topics = ["admin", "oracle_policy_updated"], data_format = "vec")]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OraclePolicyUpdatedEvent {
+    #[topic]
+    pub asset: Address,
+    pub oracle: Address,
+    pub base_asset: Address,
+    pub scale: u32,
+    pub max_age_ledgers: u32,
+    pub max_deviation_bps: u32,
+}
+
+/// Event: admin.oracle_policy_cleared
+#[contractevent(topics = ["admin", "oracle_policy_cleared"], data_format = "vec")]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OraclePolicyClearedEvent {
+    #[topic]
+    pub asset: Address,
+}
+
 /// Event: checkout_intent.consumed
 #[contractevent(topics = ["checkout_intent", "consumed"], data_format = "vec")]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -388,6 +447,35 @@ impl MaterialRegistryInterface for Address {
             Vec::from_array(env, [material_id.into_val(env)]),
         );
         result.map_err(|_| PurchaseError::RegistryCallFailed)
+    }
+}
+
+/// Interface for an oracle that returns its latest observation for an explicit
+/// asset pair. The return type is a Result so semantic failures are converted
+/// into a stable PurchaseError instead of being treated as a valid zero quote.
+pub trait PriceOracleInterface {
+    fn get_quote(
+        &self,
+        env: &Env,
+        base_asset: &Address,
+        quote_asset: &Address,
+    ) -> Result<OracleObservation, PurchaseError>;
+}
+
+impl PriceOracleInterface for Address {
+    fn get_quote(
+        &self,
+        env: &Env,
+        base_asset: &Address,
+        quote_asset: &Address,
+    ) -> Result<OracleObservation, PurchaseError> {
+        let func = Symbol::new(env, "get_quote");
+        let result: Result<OracleObservation, PurchaseError> = env.invoke_contract(
+            self,
+            &func,
+            Vec::from_array(env, [base_asset.into_val(env), quote_asset.into_val(env)]),
+        );
+        result.map_err(|_| PurchaseError::OracleCallFailed)
     }
 }
 
@@ -651,6 +739,74 @@ impl PurchaseManager {
         }
         .publish(&env);
 
+        Ok(())
+    }
+
+    /// Configure oracle validation for one payment asset. A policy is opt-in
+    /// per asset, preserving existing fixed-price materials while ensuring all
+    /// subsequent purchases of the configured asset use a fresh, typed quote.
+    pub fn set_oracle_policy(
+        env: Env,
+        admin: Address,
+        asset: Address,
+        oracle: Address,
+        base_asset: Address,
+        scale: u32,
+        max_age_ledgers: u32,
+        max_deviation_bps: u32,
+    ) -> Result<(), PurchaseError> {
+        auth::require_admin(&env, &admin)?;
+        if oracle == env.current_contract_address()
+            || base_asset == asset
+            || scale > MAX_ORACLE_SCALE
+            || max_age_ledgers == 0
+            || max_deviation_bps > BASIS_POINTS
+        {
+            return Err(PurchaseError::InvalidOracleConfig);
+        }
+
+        let policy = OraclePolicy {
+            oracle: oracle.clone(),
+            base_asset: base_asset.clone(),
+            quote_asset: asset.clone(),
+            scale,
+            max_age_ledgers,
+            max_deviation_bps,
+        };
+        env.storage()
+            .persistent()
+            .set(&DataKey::OraclePolicy(asset.clone()), &policy);
+        OraclePolicyUpdatedEvent {
+            asset,
+            oracle,
+            base_asset,
+            scale,
+            max_age_ledgers,
+            max_deviation_bps,
+        }
+        .publish(&env);
+        Ok(())
+    }
+
+    /// Return the oracle policy for an asset, if oracle validation is enabled.
+    pub fn get_oracle_policy(env: Env, asset: Address) -> Option<OraclePolicy> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::OraclePolicy(asset))
+    }
+
+    /// Disable oracle validation for an asset and return to its fixed registry
+    /// quote. This is explicit and emits an event for operational auditability.
+    pub fn clear_oracle_policy(
+        env: Env,
+        admin: Address,
+        asset: Address,
+    ) -> Result<(), PurchaseError> {
+        auth::require_admin(&env, &admin)?;
+        env.storage()
+            .persistent()
+            .remove(&DataKey::OraclePolicy(asset.clone()));
+        OraclePolicyClearedEvent { asset }.publish(&env);
         Ok(())
     }
 
@@ -983,6 +1139,18 @@ fn execute_purchase(
         return Err(PurchaseError::InvalidQuoteAmount);
     }
 
+    if let Some(policy) = env
+        .storage()
+        .persistent()
+        .get::<DataKey, OraclePolicy>(&DataKey::OraclePolicy(asset.clone()))
+    {
+        let observation = policy
+            .oracle
+            .get_quote(&env, &policy.base_asset, &policy.quote_asset)
+            .map_err(|_| PurchaseError::OracleCallFailed)?;
+        validate_oracle_observation(&env, &policy, &observation, quote.amount)?;
+    }
+
     validate_payout_shares(&material.payout_shares)?;
 
     let gross = quote.amount;
@@ -1123,6 +1291,61 @@ fn find_quote(quotes: &Vec<AssetQuote>, asset: &Address) -> Option<AssetQuote> {
         index += 1;
     }
     None
+}
+
+/// Validate a price observation against the configured semantic and risk
+/// bounds. All deviation arithmetic is checked; values large enough to
+/// overflow fail closed rather than wrapping into an apparently safe quote.
+fn validate_oracle_observation(
+    env: &Env,
+    policy: &OraclePolicy,
+    observation: &OracleObservation,
+    reference_amount: i128,
+) -> Result<(), PurchaseError> {
+    if policy.max_age_ledgers == 0
+        || policy.max_deviation_bps > BASIS_POINTS
+        || policy.scale > MAX_ORACLE_SCALE
+    {
+        return Err(PurchaseError::InvalidOracleConfig);
+    }
+    if observation.base_asset != policy.base_asset || observation.quote_asset != policy.quote_asset
+    {
+        return Err(PurchaseError::OraclePairMismatch);
+    }
+    if observation.scale != policy.scale || observation.scale > MAX_ORACLE_SCALE {
+        return Err(PurchaseError::OracleScaleMismatch);
+    }
+    if observation.price <= 0 || reference_amount <= 0 {
+        return Err(PurchaseError::InvalidOracleQuote);
+    }
+
+    let current_ledger = env.ledger().sequence();
+    if observation.observed_ledger > current_ledger
+        || current_ledger - observation.observed_ledger > policy.max_age_ledgers
+    {
+        return Err(PurchaseError::OracleQuoteStale);
+    }
+
+    let difference = if observation.price >= reference_amount {
+        observation
+            .price
+            .checked_sub(reference_amount)
+            .ok_or(PurchaseError::ArithmeticOverflow)?
+    } else {
+        reference_amount
+            .checked_sub(observation.price)
+            .ok_or(PurchaseError::ArithmeticOverflow)?
+    };
+    let scaled_difference = difference
+        .checked_mul(BASIS_POINTS as i128)
+        .ok_or(PurchaseError::ArithmeticOverflow)?;
+    let allowed_difference = reference_amount
+        .checked_mul(policy.max_deviation_bps as i128)
+        .ok_or(PurchaseError::ArithmeticOverflow)?;
+    if scaled_difference > allowed_difference {
+        return Err(PurchaseError::OracleDeviationExceeded);
+    }
+    Ok(())
 }
 
 fn get_and_increment_purchase_nonce(env: &Env) -> Result<u64, PurchaseError> {
