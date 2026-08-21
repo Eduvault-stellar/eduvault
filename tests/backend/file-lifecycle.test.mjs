@@ -237,6 +237,30 @@ describe("cleanup worker", () => {
     assert.equal(db.dump(COLLECTIONS.files)[0].state, FILE_STATES.PENDING_DELETION);
   });
 
+  test("skips an orphan cleanup task when a material claimed the key", async () => {
+    const db = createFakeDb();
+    const storageKey = "bafy-material-claimed-during-scan";
+    await db.collection(COLLECTIONS.fileCleanupOutbox).insertOne({
+      storageKey,
+      reason: "orphan",
+      status: "pending",
+      nextAttemptAt: new Date(0),
+      attempts: 0,
+    });
+    await db.collection(COLLECTIONS.materials).insertOne({
+      _id: "material-1",
+      storageKey,
+    });
+
+    const removedKeys = [];
+    const result = await runFileCleanup(db, async (key) => removedKeys.push(key));
+
+    assert.equal(result.skippedClaimed, 1);
+    assert.equal(result.removed, 0);
+    assert.deepEqual(removedKeys, []);
+    assert.equal(db.dump(COLLECTIONS.fileCleanupOutbox).length, 0);
+  });
+
   test("gives up after maxAttempts and marks the task failed", async () => {
     const db = createFakeDb();
     const { file } = await registerFile(db, avatarInput("gowner", Buffer.from("data")));

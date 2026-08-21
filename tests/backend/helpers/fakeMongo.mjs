@@ -190,6 +190,19 @@ class FakeCollection {
     return { matchedCount: 1, modifiedCount: 1 };
   }
 
+  async findOneAndUpdate(filter, update, options = {}) {
+    this.#maybeFail("findOneAndUpdate");
+    const existing = this.docs.find((doc) => matchesFilter(doc, filter));
+    if (!existing) return null;
+
+    const before = { ...existing };
+    const candidate = { ...existing, ...(update.$set || {}) };
+    this.#assertUnique(candidate, existing);
+    Object.assign(existing, update.$set || {});
+    for (const field of Object.keys(update.$unset || {})) delete existing[field];
+    return options.returnDocument === "after" ? { ...existing } : before;
+  }
+
   async deleteOne(filter) {
     this.#maybeFail("deleteOne");
     const index = this.docs.findIndex((doc) => matchesFilter(doc, filter));

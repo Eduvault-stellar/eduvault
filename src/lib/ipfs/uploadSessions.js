@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto"
+import { acquireStorageClaim, releaseStorageClaim } from "../uploads/storageClaims.js"
 
-export const UPLOAD_STATES = ["created", "uploading", "ready", "completing", "complete", "cancelled", "cleanup_pending"]
+export const UPLOAD_STATES = ["created", "uploading", "ready", "completing", "complete", "cancelled", "cleanup_pending", "cleanup_claimed"]
 
 export function validateUploadSpec(spec) {
   if (!spec?.fileName || !spec?.mimeType || !Number.isSafeInteger(spec?.size) || spec.size < 1) {
@@ -80,7 +81,18 @@ export async function completeUploadSession(db, { sessionId, ownerId, material }
     if (existing) return existing
     throw new Error("upload session is not ready for completion")
   }
+  const claimId = `upload:${sessionId}`
+  const storageKeys = [...new Set([
+    claimed.parts.file?.cid,
+    claimed.parts.thumbnail?.cid,
+    claimed.parts.metadata?.cid,
+  ].filter(Boolean))]
+  const acquired = []
   try {
+    for (const storageKey of storageKeys) {
+      await acquireStorageClaim(db, storageKey, claimId)
+      acquired.push(storageKey)
+    }
     const document = {
       ...material, ownerId, uploadSessionId: sessionId,
       storageKey: claimed.parts.file.cid,
@@ -103,6 +115,8 @@ export async function completeUploadSession(db, { sessionId, ownerId, material }
       { $set: { state: "cleanup_pending", lastError: String(error?.message || error), updatedAt: new Date() } }
     )
     throw error
+  } finally {
+    await Promise.all(acquired.map((storageKey) => releaseStorageClaim(db, storageKey, claimId)))
   }
 }
 
@@ -122,16 +136,22 @@ export async function reclaimUploadSessions(db, unpin, { now = new Date(), limit
   }).sort({ updatedAt: 1 }).limit(Math.min(Math.max(limit, 1), 500)).toArray()
   let cleaned = 0
   for (const session of sessions) {
+    const claimed = await db.collection("upload_sessions").findOneAndUpdate(
+      { _id: session._id, state: session.state },
+      { $set: { state: "cleanup_claimed", cleanupClaimedAt: new Date(), updatedAt: new Date() } },
+      { returnDocument: "after" }
+    )
+    if (!claimed) continue
     try {
-      for (const cid of session.pins || []) await unpin(cid)
+      for (const cid of claimed.pins || []) await unpin(cid)
       await db.collection("upload_sessions").updateOne(
-        { _id: session._id, state: { $ne: "complete" } },
+        { _id: claimed._id, state: "cleanup_claimed" },
         { $set: { state: "cancelled", cleanedAt: new Date(), updatedAt: new Date() }, $unset: { lastError: "" } }
       )
       cleaned += 1
     } catch (error) {
       await db.collection("upload_sessions").updateOne(
-        { _id: session._id }, { $set: { state: "cleanup_pending", lastError: String(error?.message || error), updatedAt: new Date() } }
+        { _id: claimed._id, state: "cleanup_claimed" }, { $set: { state: "cleanup_pending", lastError: String(error?.message || error), updatedAt: new Date() } }
       )
     }
   }
