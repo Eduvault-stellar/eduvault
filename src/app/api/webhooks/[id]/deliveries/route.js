@@ -4,6 +4,7 @@ import { COLLECTIONS } from "@/lib/backend/schemaContracts";
 import { getUserFromCookie } from "@/lib/api/auth";
 import { ObjectId } from "mongodb";
 import { withApiHardening } from "@/lib/api/hardening";
+import { sanitizeStoredAttempt } from "@/lib/webhooks/dispatcher";
 
 export async function GET(request, { params }) {
   return withApiHardening(request, { route: "webhooks_deliveries" }, async () => {
@@ -24,6 +25,15 @@ export async function GET(request, { params }) {
       .limit(50)
       .toArray();
 
-    return NextResponse.json({ deliveries });
+    // Deliveries recorded before #173 may still hold an unredacted response
+    // body, so history is redacted and bounded on read as well as on write.
+    const safeDeliveries = deliveries.map((delivery) => ({
+      ...delivery,
+      attempts: Array.isArray(delivery.attempts)
+        ? delivery.attempts.map(sanitizeStoredAttempt)
+        : delivery.attempts,
+    }));
+
+    return NextResponse.json({ deliveries: safeDeliveries });
   });
 }

@@ -1,8 +1,9 @@
 import { getDb } from '@/lib/mongodb';
 import { COLLECTIONS } from '@/lib/backend/schemaContracts';
-import { dispatchWebhook } from '@/lib/webhooks/dispatcher';
+import { dispatchWebhook, sanitizeDispatchError } from '@/lib/webhooks/dispatcher';
 import { generateSignaturesHeader } from '@/lib/webhooks/signature';
 import { logger } from '@/lib/logger';
+import { incrementCounter } from '@/lib/telemetry/metrics';
 
 const CONFIG = {
   pollingInterval: 10000,
@@ -37,36 +38,53 @@ export async function processWebhookDeliveries() {
     logger.info(`[Webhook Worker] Processing ${pendingDeliveries.length} deliveries`);
 
     const promises = pendingDeliveries.map(async (delivery) => {
-      const webhook = await webhooksCollection.findOne({ _id: delivery.webhookId });
-
-      if (!webhook || webhook.status !== 'active') {
-        // Webhook deleted or disabled
-        await deliveriesCollection.updateOne(
-          { _id: delivery._id },
-          { $set: { status: 'failed', updatedAt: new Date() } }
-        );
-        return;
-      }
-
-      const activeSecrets = webhook.secrets.filter(s => !s.expiresAt || s.expiresAt > new Date());
-      const payloadStr = JSON.stringify(delivery.payload);
-      const signatureHeader = activeSecrets.length > 0 
-        ? generateSignaturesHeader(payloadStr, activeSecrets) 
-        : null;
-
       const attemptRecord = {
         timestamp: new Date(),
         attemptNumber: (delivery.attempts?.length || 0) + 1,
       };
 
       try {
+        const webhook = await webhooksCollection.findOne({ _id: delivery.webhookId });
+
+        if (!webhook || webhook.status !== 'active') {
+          // Webhook deleted or disabled
+          await deliveriesCollection.updateOne(
+            { _id: delivery._id },
+            { $set: { status: 'failed', updatedAt: new Date() } }
+          );
+          return;
+        }
+
+        const activeSecrets = (webhook.secrets || []).filter(
+          (s) => !s.expiresAt || s.expiresAt > new Date()
+        );
+        const payloadStr = JSON.stringify(delivery.payload);
+        const signatureHeader = activeSecrets.length > 0
+          ? generateSignaturesHeader(payloadStr, activeSecrets)
+          : null;
+
         const start = Date.now();
+        // The dispatcher only returns a redacted, bounded and digested view of
+        // the subscriber response, so the record below can be persisted and
+        // served back to the webhook owner as-is (#173).
         const response = await dispatchWebhook(webhook.url, payloadStr, signatureHeader);
         attemptRecord.duration = Date.now() - start;
-        attemptRecord.responseStatus = response.status;
-        attemptRecord.responseBody = response.body ? response.body.substring(0, 1024) : ''; // Truncate
+        attemptRecord.responseStatus = response.responseStatus ?? response.status ?? null;
+        attemptRecord.responseHeaders = response.responseHeaders || {};
+        attemptRecord.responseBody = response.responseBody || '';
+        attemptRecord.responseBodyDigest = response.responseBodyDigest ?? null;
+        attemptRecord.responseBodyBytes = response.responseBodyBytes ?? 0;
+        attemptRecord.responseBodyTruncated = Boolean(response.responseBodyTruncated);
+        if (response.responseBodyOmittedReason) {
+          attemptRecord.responseBodyOmittedReason = response.responseBodyOmittedReason;
+        }
 
-        if (response.status >= 200 && response.status < 300) {
+        incrementCounter('webhook_response_captured_total', {
+          truncated: String(attemptRecord.responseBodyTruncated),
+          omitted: attemptRecord.responseBodyOmittedReason || 'none',
+        });
+
+        if (attemptRecord.responseStatus >= 200 && attemptRecord.responseStatus < 300) {
           // Success
           await deliveriesCollection.updateOne(
             { _id: delivery._id },
@@ -75,16 +93,30 @@ export async function processWebhookDeliveries() {
               $push: { attempts: attemptRecord }
             }
           );
-          logger.info(`[Webhook Worker] Delivery ${delivery._id} successful`);
+          logger.info(
+            `[Webhook Worker] Delivery ${delivery._id} successful (status=${attemptRecord.responseStatus} bytes=${attemptRecord.responseBodyBytes} digest=${attemptRecord.responseBodyDigest || 'none'})`
+          );
         } else {
           // HTTP Error
-          attemptRecord.error = `HTTP ${response.status}`;
+          attemptRecord.error = `HTTP ${attemptRecord.responseStatus}`;
           await handleFailure(deliveriesCollection, delivery, attemptRecord);
         }
       } catch (error) {
-        // Network or dispatch error
-        attemptRecord.error = error.message;
-        await handleFailure(deliveriesCollection, delivery, attemptRecord);
+        // Dispatch, signing or storage error. The message can embed the
+        // endpoint URL, its resolved address or upstream text, so it is
+        // redacted before it is persisted or logged.
+        attemptRecord.error = sanitizeDispatchError(error);
+        logger.warn(
+          `[Webhook Worker] Delivery ${delivery._id} attempt ${attemptRecord.attemptNumber} failed: ${attemptRecord.error}`
+        );
+        try {
+          await handleFailure(deliveriesCollection, delivery, attemptRecord);
+        } catch (persistError) {
+          // The delivery stays pending and is retried on the next poll.
+          logger.error(
+            `[Webhook Worker] Could not record failure for delivery ${delivery._id}: ${sanitizeDispatchError(persistError)}`
+          );
+        }
       }
     });
 
@@ -106,7 +138,9 @@ async function handleFailure(collection, delivery, attemptRecord) {
   if (isFinalAttempt) {
     updateDoc.$set.status = 'dead_letter';
     updateDoc.$set.nextAttemptAt = null;
-    logger.warn(`[Webhook Worker] Delivery ${delivery._id} moved to dead_letter`);
+    logger.warn(
+      `[Webhook Worker] Delivery ${delivery._id} moved to dead_letter (lastError=${attemptRecord.error || 'unknown'})`
+    );
   } else {
     const delay = calculateBackoff(attemptRecord.attemptNumber);
     updateDoc.$set.nextAttemptAt = new Date(Date.now() + delay);

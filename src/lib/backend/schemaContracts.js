@@ -577,6 +577,7 @@ export const REQUIRED_INDEXES = Object.freeze({
       options: {},
     },
   ],
+
   escrows: [
     {
       name: "escrows_escrow_id_unique",
@@ -916,8 +917,27 @@ export const COLLECTION_VALIDATORS = Object.freeze({
         status: {
           enum: ["pending", "success", "failed", "dead_letter"],
         },
+        // Attempt records hold only the redacted, bounded and digested view of
+        // the subscriber response (#173). Fields are optional so delivery
+        // records written before that change keep validating.
         attempts: {
           bsonType: "array",
+          items: {
+            bsonType: "object",
+            properties: {
+              timestamp: { bsonType: "date" },
+              attemptNumber: { bsonType: ["int", "long", "double"] },
+              duration: { bsonType: ["int", "long", "double"] },
+              responseStatus: { bsonType: ["int", "long", "null"] },
+              responseHeaders: { bsonType: "object" },
+              responseBody: { bsonType: "string" },
+              responseBodyDigest: { bsonType: ["string", "null"] },
+              responseBodyBytes: { bsonType: ["int", "long", "double"] },
+              responseBodyTruncated: { bsonType: "bool" },
+              responseBodyOmittedReason: { bsonType: "string" },
+              error: { bsonType: "string" },
+            },
+          },
         },
         nextAttemptAt: {
           bsonType: ["date", "null"],
