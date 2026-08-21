@@ -19,7 +19,18 @@ export class CacheEngine {
       .replace('{materialId}', dims.id);
   }
 
-  // Safe wrapper that fetches from cache or loads from database without stampedes
+  // Safe wrapper that fetches from cache or loads from database without stampedes.
+  //
+  // Negative-cache contract: `fallbackFetcher` returning `null` is treated as
+  // an AUTHORITATIVE negative result and is cached (briefly, via
+  // `config.negativeTtl`). A transient failure (RPC timeout, network error,
+  // backend outage, ...) is a different state entirely and must never be
+  // reported as `null` from the fetcher - it must throw instead. Thrown
+  // errors are never written to the cache as a negative envelope, so callers
+  // whose data source can genuinely fail (as opposed to confirming an
+  // absence) must reject/throw on failure rather than resolve with `null`,
+  // or a transient outage would otherwise be indistinguishable from - and
+  // get cached as - a confirmed "not found".
   public static async getOrSet<T>(
     registryKey: keyof typeof CACHE_REGISTRY,
     key: string,
@@ -44,6 +55,11 @@ export class CacheEngine {
       if (config.failPolicy === 'FAIL_CLOSED') {
         throw new Error(`Cache error on security-sensitive path: ${key}. Access locked.`);
       }
+      // FAIL_OPEN: the cache backend itself is unavailable. This is a
+      // transport failure, not a negative result - fall through to the
+      // fallback fetcher instead of treating the miss as "not found", and
+      // surface it so operators can see the cache is degraded.
+      console.warn(`[CacheEngine] cache read failed for ${key}, falling back to source`, error);
     }
 
     // Single-Flight: Coalesces identical concurrent requests
@@ -65,7 +81,12 @@ export class CacheEngine {
         await redis.set(key, JSON.stringify(envelope), 'EX', ttl);
         return freshData;
       } catch (error) {
+        // The fetcher threw: this is a transport/backend failure, not an
+        // authoritative negative, so it is intentionally NOT written to the
+        // cache under any polarity - caching it would let a transient
+        // outage masquerade as (and persist as) "confirmed absent".
         if (config.failPolicy === 'FAIL_CLOSED') throw error;
+        console.warn(`[CacheEngine] fallback fetch failed for ${key}, returning uncached miss`, error);
         return null;
       } finally {
         activeFlights.delete(key);
