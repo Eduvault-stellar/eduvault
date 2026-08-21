@@ -1,41 +1,38 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState } from "react";
 
-/**
- * Generate mock data points for the requested interval.
- */
-const generateMock = (interval) => {
-  const points = [];
-  const now = new Date();
-  const days = interval === '7d' ? 7 : interval === '30d' ? 30 : 365; // YTD approximated as 365 days
-  for (let i = days - 1; i >= 0; i--) {
-    const date = new Date(now);
-    date.setDate(now.getDate() - i);
-    // Mock values – you can replace with realistic distribution.
-    const earnings = Math.round(500 + Math.random() * 1500);
-    const gas = Math.round(50 + Math.random() * 200);
-    const royalties = Math.round(200 + Math.random() * 800);
-    points.push({
-      date: date.toISOString().split('T')[0], // YYYY-MM-DD
-      earnings,
-      gas,
-      royalties,
-      net: earnings - gas - royalties,
-    });
-  }
-  return points;
-};
+const INTERVAL_DAYS = Object.freeze({ "7d": 7, "30d": 30, ytd: 365 });
 
-/**
- * useEarningsData – mock hook that returns earnings data for the selected interval.
- * In a real implementation this would fetch from the backend.
- */
 export default function useEarningsData(interval) {
   const [data, setData] = useState([]);
 
   useEffect(() => {
-    const mock = generateMock(interval);
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setData(mock);
+    const controller = new AbortController();
+    const days = INTERVAL_DAYS[interval] || INTERVAL_DAYS["30d"];
+    const to = new Date();
+    const from = new Date(to);
+    from.setUTCDate(from.getUTCDate() - (days - 1));
+
+    async function load() {
+      const params = new URLSearchParams({ from: from.toISOString(), to: to.toISOString() });
+      const response = await fetch(`/api/creator/analytics?${params}`, { signal: controller.signal });
+      if (!response.ok) throw new Error(`Creator analytics request failed (${response.status})`);
+      const result = await response.json();
+      setData(
+        (result.chartData || []).map((point) => ({
+          date: point.date,
+          earnings: Number(point.revenue || 0),
+          gas: 0,
+          royalties: 0,
+          net: Number(point.revenue || 0),
+          assetKey: result.assetKey,
+        })),
+      );
+    }
+
+    load().catch((error) => {
+      if (error.name !== "AbortError") setData([]);
+    });
+    return () => controller.abort();
   }, [interval]);
 
   return data;

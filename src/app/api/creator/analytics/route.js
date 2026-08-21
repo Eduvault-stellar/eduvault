@@ -1,55 +1,39 @@
-import { NextResponse } from "next/server";
-import { getDb } from "@/lib/mongodb";
-import { getUserFromCookie } from "@/lib/api/auth";
-import { withApiHardening } from "@/lib/api/hardening";
-import { withAuthorization } from "@/lib/auth/authorize";
-import { withApiHardening } from "@/lib/api/api-hardening";
-import { auditLog } from "@/lib/api/audit";
-import { errorResponse } from "@/lib/api/errorResponse";
-
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-const COMPLETED_PURCHASE_STATUSES = ["confirmed", "settled", "completed"];
-const INCOMPLETE_PURCHASE_STATUSES = ["pending", "indexing"];
+import { NextResponse } from "next/server";
+
+import { auditLog } from "@/lib/api/audit";
+import { getUserFromCookie } from "@/lib/api/auth";
+import { withApiHardening } from "@/lib/api/hardening";
+import { getDb } from "@/lib/mongodb";
+import { ACCOUNTS } from "@/lib/ledger/accounts";
+import {
+  creatorTransactionDelta,
+  deriveCreatorLedgerAnalytics,
+  LedgerAnalyticsError,
+} from "@/lib/ledger/analytics";
+import { EVENT_TYPES, SETTLEMENT_STATES } from "@/lib/ledger/journal";
+import { fromStroops } from "@/lib/ledger/money";
+
 const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 function parseDateRange(url) {
-  const fromParam = url.searchParams.get("from");
-  const toParam = url.searchParams.get("to");
-
-  const to = toParam ? new Date(toParam) : new Date();
-  const from = fromParam
-    ? new Date(fromParam)
+  const to = url.searchParams.get("to") ? new Date(url.searchParams.get("to")) : new Date();
+  const from = url.searchParams.get("from")
+    ? new Date(url.searchParams.get("from"))
     : new Date(to.getTime() - 30 * 24 * 60 * 60 * 1000);
-
-  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) {
-    const fallbackTo = new Date();
-    return {
-      from: new Date(fallbackTo.getTime() - 30 * 24 * 60 * 60 * 1000),
-      to: fallbackTo,
-    };
+  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime()) || from > to) {
+    throw new RangeError("Invalid analytics date range");
   }
-
   return { from, to };
 }
 
-function formatCurrency(amount) {
-  return `$${Number(amount ?? 0).toFixed(2)}`;
+function materialKeys(material) {
+  return [material?._id, material?.materialId].filter(Boolean).map(String);
 }
 
-function formatDate(date) {
-  if (!date) return "Unknown";
-  const parsed = new Date(date);
-  if (Number.isNaN(parsed.getTime())) return "Unknown";
-  return parsed.toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
-}
-
-function getMaterialActivity(material) {
+function activity(material) {
   return (
     Number(material.views ?? material.viewCount ?? 0) +
     Number(material.downloads ?? material.downloadCount ?? 0) +
@@ -57,400 +41,225 @@ function getMaterialActivity(material) {
   );
 }
 
-function buildMaterialKeys(material) {
-  return [material?._id, material?.materialId]
-    .filter(Boolean)
-    .map((value) => String(value));
+function displayDate(value) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? "Unknown"
+    : date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
-function buildEmptyChart() {
-  const start = new Date();
-  start.setDate(start.getDate() - 6);
-  start.setHours(0, 0, 0, 0);
+async function analyticsResponse(request) {
+  const user = await getUserFromCookie(request);
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  return Array.from({ length: 7 }, (_, i) => {
-    const day = new Date(start);
-    day.setDate(day.getDate() + i);
+  const creatorId = user.walletAddress || user.address || user.sub;
+  if (!creatorId) return NextResponse.json({ error: "No creator identity on account" }, { status: 400 });
+
+  let range;
+  try {
+    range = parseDateRange(new URL(request.url));
+  } catch (error) {
+    return NextResponse.json({ error: error.message }, { status: 400 });
+  }
+
+  const url = new URL(request.url);
+  const requestedAsset = url.searchParams.get("asset") || null;
+  const db = await getDb();
+  const [transactions, creatorMaterials] = await Promise.all([
+    db.collection("ledger_transactions")
+      .find({
+        lines: {
+          $elemMatch: {
+            account: ACCOUNTS.CREATOR_PAYABLE,
+            subaccount: String(creatorId),
+          },
+        },
+      })
+      .sort({ occurredAt: 1, postedAt: 1 })
+      .toArray(),
+    db.collection("materials")
+      .find(
+        { userAddress: creatorId },
+        {
+          projection: {
+            _id: 1,
+            materialId: 1,
+            title: 1,
+            visibility: 1,
+            createdAt: 1,
+            views: 1,
+            viewCount: 1,
+            downloads: 1,
+            downloadCount: 1,
+            reviewsCount: 1,
+            reviewCount: 1,
+          },
+        },
+      )
+      .toArray(),
+  ]);
+
+  const ledger = deriveCreatorLedgerAnalytics(transactions, creatorId, {
+    requestedAsset,
+    from: range.from,
+    to: range.to,
+  });
+  const materialIds = [...new Set(creatorMaterials.flatMap(materialKeys))];
+  const savedDocs = materialIds.length
+    ? await db.collection("saved_materials").find({ materialId: { $in: materialIds } }).toArray()
+    : [];
+  const pendingCount = transactions.filter((transaction) => {
+    if (transaction.settlementState !== SETTLEMENT_STATES.PENDING) return false;
+    return creatorTransactionDelta(transaction, creatorId, ledger.assetKey) > 0n;
+  }).length;
+
+  const materialFinancials = new Map();
+  for (const transaction of transactions) {
+    const materialId = transaction.metadata?.materialId;
+    if (!materialId || transaction.settlementState === SETTLEMENT_STATES.PENDING) continue;
+    const key = String(materialId);
+    const totals = materialFinancials.get(key) || { revenue: 0n, sales: 0 };
+    const delta = creatorTransactionDelta(transaction, creatorId, ledger.assetKey);
+    totals.revenue += delta;
+    if (transaction.eventType === EVENT_TYPES.PURCHASE && delta > 0n) totals.sales += 1;
+    materialFinancials.set(key, totals);
+  }
+
+  const saveCounts = new Map();
+  for (const saved of savedDocs) {
+    const key = String(saved.materialId);
+    saveCounts.set(key, (saveCounts.get(key) || 0) + 1);
+  }
+  const topMaterials = creatorMaterials
+    .map((material) => {
+      const keys = materialKeys(material);
+      const financial = keys.reduce(
+        (total, key) => {
+          const next = materialFinancials.get(key);
+          return {
+            revenue: total.revenue + (next?.revenue || 0n),
+            sales: total.sales + (next?.sales || 0),
+          };
+        },
+        { revenue: 0n, sales: 0 },
+      );
+      return {
+        id: keys[0],
+        name: material.title || "Untitled material",
+        sales: financial.sales,
+        completedOrders: financial.sales,
+        revenue: fromStroops(financial.revenue),
+        learnerInterest: keys.reduce((sum, key) => sum + (saveCounts.get(key) || 0), 0),
+        activity: activity(material),
+        visibility: material.visibility || "private",
+        uploadedAt: material.createdAt || null,
+      };
+    })
+    .sort((a, b) => b.sales - a.sales || Number(b.learnerInterest) - Number(a.learnerInterest))
+    .slice(0, 5);
+
+  const titleById = new Map();
+  for (const material of creatorMaterials) {
+    for (const key of materialKeys(material)) titleById.set(key, material.title || "Untitled material");
+  }
+  const recentOrders = transactions
+    .filter((transaction) => {
+      if (transaction.eventType !== EVENT_TYPES.PURCHASE) return false;
+      return creatorTransactionDelta(transaction, creatorId, ledger.assetKey) > 0n;
+    })
+    .sort((a, b) => new Date(b.occurredAt) - new Date(a.occurredAt))
+    .slice(0, 5)
+    .map((transaction) => {
+      const amount = creatorTransactionDelta(transaction, creatorId, ledger.assetKey);
+      const materialId = transaction.metadata?.materialId ? String(transaction.metadata.materialId) : null;
+      return {
+        id: transaction.id,
+        material: titleById.get(materialId) || "Ledger purchase",
+        buyer: transaction.metadata?.buyerAddress || "Not recorded",
+        amount: fromStroops(amount),
+        assetKey: ledger.assetKey,
+        status: transaction.settlementState,
+        date: displayDate(transaction.occurredAt),
+      };
+    });
+
+  const sevenDayUploads = new Map();
+  const sevenDayInterest = new Map();
+  for (const material of creatorMaterials) {
+    const date = new Date(material.createdAt || 0);
+    if (!Number.isNaN(date.getTime())) {
+      const key = date.toISOString().slice(0, 10);
+      sevenDayUploads.set(key, (sevenDayUploads.get(key) || 0) + 1);
+    }
+  }
+  for (const saved of savedDocs) {
+    const date = new Date(saved.savedAt || 0);
+    if (!Number.isNaN(date.getTime())) {
+      const key = date.toISOString().slice(0, 10);
+      sevenDayInterest.set(key, (sevenDayInterest.get(key) || 0) + 1);
+    }
+  }
+  const chartData = ledger.chart.map((day) => {
+    const date = new Date(`${day.date}T00:00:00.000Z`);
     return {
-      day: DAY_LABELS[day.getDay()],
-      revenue: 0,
-      orders: 0,
-      uploads: 0,
-      interest: 0,
+      day: DAY_LABELS[date.getUTCDay()],
+      date: day.date,
+      revenue: day.revenue,
+      revenueStroops: day.revenueStroops,
+      orders: day.orders,
+      uploads: sevenDayUploads.get(day.date) || 0,
+      interest: sevenDayInterest.get(day.date) || 0,
     };
   });
-}
 
-async function safeFindArray(collection, query, options) {
-  try {
-    return await collection.find(query, options).toArray();
-  } catch {
-    return [];
-  }
+  const publishedCount = creatorMaterials.filter((material) => material.visibility !== "private").length;
+  const materialActivity = creatorMaterials.reduce((sum, material) => sum + activity(material), 0);
+  const learnerInterest = savedDocs.length + pendingCount;
+  return NextResponse.json({
+    ledgerSource: "ledger_transactions",
+    assetKey: ledger.assetKey,
+    earningsByAsset: ledger.balances,
+    totalRevenue: ledger.totalRevenue,
+    pendingRevenue: ledger.pendingRevenue,
+    totalEarnings: ledger.totalEarnings,
+    totalSales: ledger.completedOrders,
+    completedOrders: ledger.completedOrders,
+    monthlySales: ledger.periodOrders,
+    pendingCount,
+    indexingCount: 0,
+    uploadCount: creatorMaterials.length,
+    publishedCount,
+    draftCount: creatorMaterials.length - publishedCount,
+    materialActivity,
+    learnerInterest,
+    savedCount: savedDocs.length,
+    hasActivity: creatorMaterials.length > 0 || transactions.length > 0 || savedDocs.length > 0,
+    chartData,
+    topMaterials,
+    recentOrders,
+    withdrawals: [],
+    dateRange: { from: range.from.toISOString(), to: range.to.toISOString() },
+  });
 }
 
 export async function GET(request) {
   return withApiHardening(
     request,
     { route: "creator-analytics", rateLimit: { limit: 30, windowMs: 60_000 } },
-    async () => getCreatorAnalytics(request)
-  );
-}
-
-async function getCreatorAnalytics(request) {
-  try {
-    const user = await getUserFromCookie(request);
-    if (!user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-export const GET = withApiHardening(
-  withAuthorization(
-    async (authorizedRequest) => {
-      const { userId } = authorizedRequest;
-      const creatorAddress = userId;
-
-      if (!creatorAddress) {
+    async () => {
+      try {
+        return await analyticsResponse(request);
+      } catch (error) {
         auditLog({
           event: "creator_analytics_failed",
           route: "creator/analytics",
           method: "GET",
-          status: 400,
-          reason: "No wallet address on account",
-          actor: userId,
+          status: 500,
+          reason: error instanceof LedgerAnalyticsError ? error.name : "analytics_error",
+          transactionId: error instanceof LedgerAnalyticsError ? error.transactionId : undefined,
         });
-        return errorResponse("No wallet address on account", 400);
+        return NextResponse.json({ error: "Unable to derive creator analytics" }, { status: 500 });
       }
-
-      const url = new URL(authorizedRequest.url);
-      const { from, to } = parseDateRange(url);
-
-      const db = await getDb();
-      const purchases = db.collection("purchases");
-      const materials = db.collection("materials");
-
-      const creatorMaterials = await materials
-        .find(
-          { userAddress: creatorAddress },
-          {
-            projection: {
-              _id: 1,
-              materialId: 1,
-              title: 1,
-              visibility: 1,
-              price: 1,
-              createdAt: 1,
-              updatedAt: 1,
-              views: 1,
-              viewCount: 1,
-              downloads: 1,
-              downloadCount: 1,
-              reviewsCount: 1,
-              reviewCount: 1,
-            },
-          }
-        )
-        .toArray();
-
-      const materialIdStrings = [...new Set(creatorMaterials.flatMap(buildMaterialKeys))];
-      const materialTitleMap = new Map();
-
-      for (const material of creatorMaterials) {
-        const keys = buildMaterialKeys(material);
-        const title = material.title || "Untitled material";
-        for (const key of keys) {
-          materialTitleMap.set(key, title);
-        }
-      }
-
-      if (materialIdStrings.length === 0) {
-        return NextResponse.json({
-          totalRevenue: 0,
-          totalSales: 0,
-          monthlySales: 0,
-          pendingCount: 0,
-          indexingCount: 0,
-          uploadCount: 0,
-          publishedCount: 0,
-          draftCount: 0,
-          materialActivity: 0,
-          learnerInterest: 0,
-          savedCount: 0,
-          completedOrders: 0,
-          hasActivity: false,
-          chartData: buildEmptyChart(),
-          topMaterials: [],
-          recentOrders: [],
-          withdrawals: [],
-          dateRange: {
-            from: from.toISOString(),
-            to: to.toISOString(),
-          },
-        });
-      }
-
-      const completedMatch = {
-        materialId: { $in: materialIdStrings },
-        status: { $in: COMPLETED_PURCHASE_STATUSES },
-      };
-      const sevenDaysAgo = new Date();
-      sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
-      sevenDaysAgo.setHours(0, 0, 0, 0);
-
-      const [
-        allTimeAgg,
-        monthlySalesAgg,
-        incompleteAgg,
-        chartAgg,
-        topMaterialsAgg,
-        recentOrdersDocs,
-        savedDocs,
-      ] = await Promise.all([
-        purchases
-          .aggregate([
-            { $match: completedMatch },
-            {
-              $group: {
-                _id: null,
-                total: { $sum: { $toDouble: "$amount" } },
-                count: { $sum: 1 },
-              },
-            },
-          ])
-          .toArray(),
-        purchases
-          .aggregate([
-            {
-              $match: {
-                ...completedMatch,
-                purchasedAt: { $gte: from, $lte: to },
-              },
-            },
-            { $count: "count" },
-          ])
-          .toArray(),
-        purchases
-          .aggregate([
-            {
-              $match: {
-                materialId: { $in: materialIdStrings },
-                status: { $in: INCOMPLETE_PURCHASE_STATUSES },
-              },
-            },
-            {
-              $group: {
-                _id: "$status",
-                count: { $sum: 1 },
-              },
-            },
-          ])
-          .toArray(),
-        purchases
-          .aggregate([
-            {
-              $match: {
-                ...completedMatch,
-                purchasedAt: { $gte: sevenDaysAgo },
-              },
-            },
-            {
-              $group: {
-                _id: {
-                  $dateToString: { format: "%Y-%m-%d", date: "$purchasedAt" },
-                },
-                revenue: { $sum: { $toDouble: "$amount" } },
-                orders: { $sum: 1 },
-              },
-            },
-            { $sort: { _id: 1 } },
-          ])
-          .toArray(),
-        purchases
-          .aggregate([
-            { $match: completedMatch },
-            {
-              $group: {
-                _id: "$materialId",
-                sales: { $sum: 1 },
-                revenue: { $sum: { $toDouble: "$amount" } },
-              },
-            },
-            { $sort: { sales: -1 } },
-            { $limit: 10 },
-          ])
-          .toArray(),
-        purchases
-          .find(completedMatch)
-          .sort({ purchasedAt: -1, createdAt: -1, updatedAt: -1 })
-          .limit(5)
-          .toArray(),
-        safeFindArray(db.collection("saved_materials"), {
-          materialId: { $in: materialIdStrings },
-        }),
-      ]);
-
-      const totalRevenue = allTimeAgg[0]?.total ?? 0;
-      const totalSales = allTimeAgg[0]?.count ?? 0;
-      const monthlySales = monthlySalesAgg[0]?.count ?? 0;
-      const pendingCount = incompleteAgg.find((g) => g._id === "pending")?.count ?? 0;
-      const indexingCount = incompleteAgg.find((g) => g._id === "indexing")?.count ?? 0;
-      const savedCount = savedDocs.length;
-      const learnerInterest = savedCount + pendingCount + indexingCount;
-      const materialActivity = creatorMaterials.reduce(
-        (total, material) => total + getMaterialActivity(material),
-        0
-      );
-      const publishedCount = creatorMaterials.filter((m) => m.visibility !== "private").length;
-      const draftCount = creatorMaterials.length - publishedCount;
-
-      const saveCounts = new Map();
-      for (const doc of savedDocs) {
-        const key = String(doc.materialId);
-        saveCounts.set(key, (saveCounts.get(key) ?? 0) + 1);
-      }
-
-      const salesByMaterial = new Map();
-      for (const material of topMaterialsAgg) {
-        salesByMaterial.set(String(material._id), {
-          sales: material.sales ?? 0,
-          revenue: material.revenue ?? 0,
-        });
-      }
-
-      const topMaterials = creatorMaterials
-        .map((material) => {
-          const keys = buildMaterialKeys(material);
-          const key = keys[0];
-          const totals = keys.reduce(
-            (current, materialKey) => {
-              const next = salesByMaterial.get(materialKey);
-              return {
-                sales: current.sales + (next?.sales ?? 0),
-                revenue: current.revenue + (next?.revenue ?? 0),
-              };
-            },
-            { sales: 0, revenue: 0 }
-          );
-          const saves = buildMaterialKeys(material).reduce(
-            (total, materialKey) => total + (saveCounts.get(materialKey) ?? 0),
-            0
-          );
-          const activity = getMaterialActivity(material);
-          return {
-            id: key,
-            name: material.title || "Untitled material",
-            sales: totals.sales,
-            completedOrders: totals.sales,
-            learnerInterest: saves,
-            activity,
-            revenue: formatCurrency(totals.revenue),
-            visibility: material.visibility || "private",
-            uploadedAt: material.createdAt || null,
-          };
-        })
-        .sort((a, b) => {
-          if (b.completedOrders !== a.completedOrders) return b.completedOrders - a.completedOrders;
-          if (b.learnerInterest !== a.learnerInterest) return b.learnerInterest - a.learnerInterest;
-          if (b.activity !== a.activity) return b.activity - a.activity;
-          return new Date(b.uploadedAt || 0) - new Date(a.uploadedAt || 0);
-        })
-        .slice(0, 5);
-
-      const chartMap = Object.fromEntries(
-        chartAgg.map((d) => [d._id, { revenue: d.revenue ?? 0, orders: d.orders ?? 0 }])
-      );
-      const uploadMap = new Map();
-      const interestMap = new Map();
-
-      for (const material of creatorMaterials) {
-        const createdAt = new Date(material.createdAt || 0);
-        if (!Number.isNaN(createdAt.getTime()) && createdAt >= sevenDaysAgo) {
-          const key = createdAt.toISOString().slice(0, 10);
-          uploadMap.set(key, (uploadMap.get(key) ?? 0) + 1);
-        }
-      }
-
-      for (const saved of savedDocs) {
-        const savedAt = new Date(saved.savedAt || 0);
-        if (!Number.isNaN(savedAt.getTime()) && savedAt >= sevenDaysAgo) {
-          const key = savedAt.toISOString().slice(0, 10);
-          interestMap.set(key, (interestMap.get(key) ?? 0) + 1);
-        }
-      }
-
-      const chartData = Array.from({ length: 7 }, (_, i) => {
-        const day = new Date(sevenDaysAgo);
-        day.setDate(day.getDate() + i);
-        const key = day.toISOString().slice(0, 10);
-        return {
-          day: DAY_LABELS[day.getDay()],
-          revenue: chartMap[key]?.revenue ?? 0,
-          orders: chartMap[key]?.orders ?? 0,
-          uploads: uploadMap.get(key) ?? 0,
-          interest: interestMap.get(key) ?? 0,
-        };
-      });
-
-      const recentOrders = recentOrdersDocs.map((order) => {
-        const materialId = String(order.materialId);
-        return {
-          id: String(order._id || `${materialId}-${order.buyerAddress || "buyer"}`),
-          material: materialTitleMap.get(materialId) || "Unknown material",
-          buyer: order.buyerAddress || "Unknown buyer",
-          amount: formatCurrency(order.amount),
-          status: order.status || "completed",
-          date: formatDate(order.purchasedAt || order.createdAt || order.updatedAt),
-        };
-      });
-
-      let withdrawals = [];
-      try {
-        const payoutDocs = await db
-          .collection("payouts")
-          .find({ creatorAddress })
-          .sort({ createdAt: -1 })
-          .limit(5)
-          .toArray();
-
-        withdrawals = payoutDocs.map((p) => ({
-          date: formatDate(p.createdAt),
-          amount: formatCurrency(p.amount),
-          status: p.status === "completed" ? "Success" : "Pending",
-        }));
-      } catch {
-        withdrawals = [];
-      }
-
-      return NextResponse.json({
-        totalRevenue,
-        totalSales,
-        monthlySales,
-        pendingCount,
-        indexingCount,
-        uploadCount: creatorMaterials.length,
-        publishedCount,
-        draftCount,
-        materialActivity,
-        learnerInterest,
-        savedCount,
-        completedOrders: totalSales,
-        hasActivity:
-          creatorMaterials.length > 0 ||
-          totalSales > 0 ||
-          learnerInterest > 0 ||
-          materialActivity > 0,
-        chartData,
-        topMaterials,
-        recentOrders,
-        withdrawals,
-        dateRange: {
-          from: from.toISOString(),
-          to: to.toISOString(),
-        },
-      });
     },
-    {
-      checkOwnership: async () => true, // Any authenticated user can view their own analytics
-    }
-  ),
-  { route: "creator-analytics", rateLimit: { limit: 60, windowMs: 60_000 } }
-);
+  );
+}
