@@ -574,6 +574,9 @@ export const REQUIRED_INDEXES = Object.freeze({
     {
       name: "quarantine_status_lease",
       keys: { status: 1, leaseUntil: 1 },
+      options: {},
+    },
+  ],
   escrows: [
     {
       name: "escrows_escrow_id_unique",
