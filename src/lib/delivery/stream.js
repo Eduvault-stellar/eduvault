@@ -15,6 +15,7 @@
 import { getDb } from '@/lib/mongodb';
 import { IPFS_GATEWAY_URL } from '@/lib/config/chain';
 import { normalizeDownloadFilename, normalizeExternalUrl } from '@/lib/security/input';
+import { verifyDeliveryIntegrity } from '@/lib/provenance/verify';
 
 const DEFAULT_UPSTREAM_TIMEOUT_MS = 30_000; // 30s upstream timeout
 const MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024 * 1024; // 5GB hard limit
@@ -64,6 +65,51 @@ export async function getMaterialRecord(materialId) {
     fileName: normalizeDownloadFilename(material.fileName || material.title || materialId),
     contentType: material.contentType || 'application/octet-stream',
     fileSize: material.fileSize || 0,
+  };
+}
+
+/**
+ * Resolve a protected deliverable and verify its provenance integrity.
+ *
+ * Ties the (mutable) CID mapping on the material record to the purchased
+ * version manifest — the manifest digest must be intact and the CID to be
+ * served must match the manifest's file CID. The streaming route runs this
+ * BEFORE any protected bytes are served (Issue #168); a mismatch is a hard
+ * denial, never a warning.
+ *
+ * @param {object} params
+ * @param {string} params.materialId
+ * @param {string} params.buyerAddress - The buyer's wallet address (from the delivery token)
+ * @returns {Promise<{material: object, version: number, manifestCid: string}|{error: {statusCode: number, reason: string, detail: string}}>}
+ */
+export async function resolveVerifiedDeliverable({ materialId, buyerAddress }) {
+  const material = await getMaterialRecord(materialId);
+  if (!material || !material.cid) {
+    return {
+      error: { statusCode: 404, reason: 'material_not_found', detail: 'Material not found' },
+    };
+  }
+
+  const integrity = await verifyDeliveryIntegrity({
+    materialId,
+    buyerAddress,
+    requestedCid: material.cid,
+  });
+
+  if (!integrity.valid) {
+    return {
+      error: {
+        statusCode: integrity.statusCode,
+        reason: integrity.reason,
+        detail: integrity.detail,
+      },
+    };
+  }
+
+  return {
+    material,
+    version: integrity.version,
+    manifestCid: integrity.manifestCid,
   };
 }
 
