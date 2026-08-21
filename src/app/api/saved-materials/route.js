@@ -119,26 +119,35 @@ export async function POST(request) {
           return NextResponse.json({ error: "Material not found" }, { status: 404 });
         }
 
-        // Idempotent insert - skip if already saved
-        const existing = await db.collection("saved_materials").findOne({
-          walletAddress,
-          materialId,
-        });
-
-        if (existing) {
-          return NextResponse.json({ saved: true, id: existing._id, materialId });
-        }
-
         const doc = {
           walletAddress,
           materialId,
           savedAt: new Date(),
         };
+        const savedMaterials = db.collection("saved_materials");
+        let upsertResult;
 
-        const result = await db.collection("saved_materials").insertOne(doc);
+        try {
+          upsertResult = await savedMaterials.updateOne(
+            { walletAddress, materialId },
+            { $setOnInsert: doc },
+            { upsert: true },
+          );
+        } catch (error) {
+          // A unique index is the final concurrency boundary. If two requests
+          // race during an upsert, the loser still observes an idempotent save.
+          if (error?.code !== 11000 && error?.codeName !== "DuplicateKey") throw error;
+        }
 
-        auditLog({ event: "material_saved", route: "saved-materials", method: "POST", status: 201, actor: user.sub, materialId });
-        return NextResponse.json({ saved: true, id: result.insertedId, materialId }, { status: 201 });
+        const saved = await savedMaterials.findOne(
+          { walletAddress, materialId },
+          { projection: { _id: 1 } },
+        );
+        const created = upsertResult?.upsertedCount === 1;
+        const status = created ? 201 : 200;
+
+        auditLog({ event: "material_saved", route: "saved-materials", method: "POST", status, actor: user.sub, materialId, created });
+        return NextResponse.json({ saved: true, id: saved?._id, materialId }, { status });
       } catch (err) {
         if (err.name === "ValidationError") throw err;
         auditLog({ event: "material_save_failed", route: "saved-materials", method: "POST", status: 500, reason: err.message });

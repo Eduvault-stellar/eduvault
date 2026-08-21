@@ -157,6 +157,13 @@ function safeJson(value, fallback = null) {
   }
 }
 
+function createImportId() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return `import-${crypto.randomUUID()}`;
+  }
+  return `import-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
+}
+
 export default function BulkMaterialReview({ initialUser }) {
   const storageKey = useMemo(() => {
     const identifier = initialUser?.walletAddress || initialUser?.email || "creator";
@@ -164,6 +171,7 @@ export default function BulkMaterialReview({ initialUser }) {
   }, [initialUser]);
 
   const [fileName, setFileName] = useState("");
+  const [importId, setImportId] = useState("");
   const [rows, setRows] = useState([]);
   const [validation, setValidation] = useState(null);
   const [status, setStatus] = useState("empty");
@@ -176,6 +184,7 @@ export default function BulkMaterialReview({ initialUser }) {
     const draft = typeof window === "undefined" ? null : safeJson(window.localStorage.getItem(storageKey));
     if (!draft || !Array.isArray(draft.rows) || draft.rows.length === 0) return;
     setFileName(draft.fileName || "Saved draft");
+    setImportId(draft.importId || createImportId());
     setRows(draft.rows);
     setStatus("draft");
   }, [storageKey]);
@@ -205,6 +214,7 @@ export default function BulkMaterialReview({ initialUser }) {
     setValidation(null);
     setStatus("loading");
     setFileName(file.name);
+    setImportId(createImportId());
 
     try {
       const text = await file.text();
@@ -274,6 +284,7 @@ export default function BulkMaterialReview({ initialUser }) {
       storageKey,
       JSON.stringify({
         fileName,
+        importId: importId || createImportId(),
         rows,
         savedAt: new Date().toISOString(),
       })
@@ -297,6 +308,8 @@ export default function BulkMaterialReview({ initialUser }) {
     setSuccess(null);
 
     try {
+      const activeImportId = importId || createImportId();
+      if (!importId) setImportId(activeImportId);
       const response = await fetch("/api/materials/import", {
         method: "POST",
         headers: {
@@ -305,7 +318,8 @@ export default function BulkMaterialReview({ initialUser }) {
         body: JSON.stringify({
           format: "json",
           dryRun: false,
-          records: validRows.map(toImportRecord),
+          importId: activeImportId,
+          records: validRows.map((row) => ({ ...toImportRecord(row), recordId: row.id })),
         }),
       });
 
@@ -314,10 +328,24 @@ export default function BulkMaterialReview({ initialUser }) {
         throw new Error(data?.error || data?.message || "Publish failed.");
       }
 
-      setSuccess(`${data.imported || validRows.length} row(s) published. ${latestInvalidRows.size} invalid row(s) were skipped.`);
-      setStatus("published");
-      if (typeof window !== "undefined") {
+      if (data.complete) {
+        setSuccess(
+          `${data.imported} row(s) published and ${data.reused} already-completed row(s) confirmed.`,
+        );
+        setStatus("published");
+      } else {
+        setSuccess(
+          `${data.completed} of ${data.total} row(s) are durable. Retry to resume the remaining rows.`,
+        );
+        setStatus("partial");
+      }
+      if (typeof window !== "undefined" && data.complete) {
         window.localStorage.removeItem(storageKey);
+      } else if (typeof window !== "undefined") {
+        window.localStorage.setItem(
+          storageKey,
+          JSON.stringify({ fileName, importId: activeImportId, rows, savedAt: new Date().toISOString() }),
+        );
       }
     } catch (err) {
       setStatus("error");
@@ -442,7 +470,7 @@ export default function BulkMaterialReview({ initialUser }) {
                   className="inline-flex items-center gap-2 rounded-2xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <FaPaperPlane />
-                  {isPublishing ? "Publishing..." : "Publish valid rows"}
+                  {isPublishing ? "Publishing..." : status === "partial" ? "Resume import" : "Publish valid rows"}
                 </button>
               </div>
             </div>

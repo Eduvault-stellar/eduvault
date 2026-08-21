@@ -162,6 +162,19 @@ describe("validateImportRow", () => {
     assert.equal(result.data.visibility, "private");
   });
 
+  test("rejects duplicate source record IDs in one import", () => {
+    const result = validateImportPayload({
+      records: [
+        { recordId: "same-row", title: "First", storageKey: "ipfs://first" },
+        { recordId: "same-row", title: "Second", storageKey: "ipfs://second" },
+      ],
+    });
+
+    assert.equal(result.valid, 1);
+    assert.equal(result.invalid, 1);
+    assert.equal(result.invalidRows[0].errors[0].field, "recordId");
+  });
+
   test("accepts fileUrl as alternative to storageKey", () => {
     const result = validateImportRow({
       title: "Test",

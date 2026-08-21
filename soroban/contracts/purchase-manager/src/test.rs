@@ -2285,3 +2285,140 @@ fn sac_purchase_uses_real_balances_and_explicit_buyer_authorization() {
     assert_eq!(token.balance(&contract_id), 950_000);
     assert!(client.has_entitlement(&material_id, &buyer));
 }
+
+// ============== Oracle Safety Tests (#163) ==============
+
+fn oracle_policy(oracle: &Address, base_asset: &Address, quote_asset: &Address) -> OraclePolicy {
+    OraclePolicy {
+        oracle: oracle.clone(),
+        base_asset: base_asset.clone(),
+        quote_asset: quote_asset.clone(),
+        scale: 7,
+        max_age_ledgers: 10,
+        max_deviation_bps: 500,
+    }
+}
+
+fn oracle_observation(
+    base_asset: &Address,
+    quote_asset: &Address,
+    price: i128,
+    observed_ledger: u32,
+) -> OracleObservation {
+    OracleObservation {
+        base_asset: base_asset.clone(),
+        quote_asset: quote_asset.clone(),
+        price,
+        scale: 7,
+        observed_ledger,
+    }
+}
+
+#[test]
+fn oracle_validation_accepts_fresh_quote_at_deviation_boundary() {
+    let env = Env::default();
+    env.ledger().set_sequence_number(100);
+    let policy = oracle_policy(
+        &Address::generate(&env),
+        &Address::generate(&env),
+        &Address::generate(&env),
+    );
+    let observation = oracle_observation(&policy.base_asset, &policy.quote_asset, 1_050_000, 90);
+
+    assert_eq!(
+        validate_oracle_observation(&env, &policy, &observation, 1_000_000),
+        Ok(())
+    );
+}
+
+#[test]
+fn oracle_validation_rejects_stale_future_and_wrong_pair_quotes() {
+    let env = Env::default();
+    env.ledger().set_sequence_number(100);
+    let policy = oracle_policy(
+        &Address::generate(&env),
+        &Address::generate(&env),
+        &Address::generate(&env),
+    );
+
+    let stale = oracle_observation(&policy.base_asset, &policy.quote_asset, 1_000_000, 89);
+    assert_eq!(
+        validate_oracle_observation(&env, &policy, &stale, 1_000_000),
+        Err(PurchaseError::OracleQuoteStale)
+    );
+
+    let future = oracle_observation(&policy.base_asset, &policy.quote_asset, 1_000_000, 101);
+    assert_eq!(
+        validate_oracle_observation(&env, &policy, &future, 1_000_000),
+        Err(PurchaseError::OracleQuoteStale)
+    );
+
+    let wrong_pair = oracle_observation(
+        &Address::generate(&env),
+        &policy.quote_asset,
+        1_000_000,
+        100,
+    );
+    assert_eq!(
+        validate_oracle_observation(&env, &policy, &wrong_pair, 1_000_000),
+        Err(PurchaseError::OraclePairMismatch)
+    );
+}
+
+#[test]
+fn oracle_validation_rejects_scale_deviation_and_overflow() {
+    let env = Env::default();
+    env.ledger().set_sequence_number(100);
+    let policy = oracle_policy(
+        &Address::generate(&env),
+        &Address::generate(&env),
+        &Address::generate(&env),
+    );
+
+    let mut wrong_scale =
+        oracle_observation(&policy.base_asset, &policy.quote_asset, 1_000_000, 100);
+    wrong_scale.scale = 6;
+    assert_eq!(
+        validate_oracle_observation(&env, &policy, &wrong_scale, 1_000_000),
+        Err(PurchaseError::OracleScaleMismatch)
+    );
+
+    let excessive = oracle_observation(&policy.base_asset, &policy.quote_asset, 1_050_001, 100);
+    assert_eq!(
+        validate_oracle_observation(&env, &policy, &excessive, 1_000_000),
+        Err(PurchaseError::OracleDeviationExceeded)
+    );
+
+    let near_limit =
+        oracle_observation(&policy.base_asset, &policy.quote_asset, i128::MAX - 1, 100);
+    assert_eq!(
+        validate_oracle_observation(&env, &policy, &near_limit, i128::MAX),
+        Err(PurchaseError::ArithmeticOverflow)
+    );
+}
+
+#[test]
+fn oracle_policy_requires_admin_and_bounded_configuration() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let registry = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let asset = Address::generate(&env);
+    let base_asset = Address::generate(&env);
+    let oracle = Address::generate(&env);
+    let (_, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
+
+    assert_eq!(
+        client.try_set_oracle_policy(&admin, &asset, &oracle, &base_asset, &7, &0, &500,),
+        Err(Ok(PurchaseError::InvalidOracleConfig))
+    );
+
+    client.set_oracle_policy(&admin, &asset, &oracle, &base_asset, &7, &10, &500);
+    let stored = client.get_oracle_policy(&asset).unwrap();
+    assert_eq!(stored.quote_asset, asset);
+    assert_eq!(stored.base_asset, base_asset);
+
+    client.clear_oracle_policy(&admin, &asset);
+    assert_eq!(client.get_oracle_policy(&asset), None);
+}
