@@ -375,10 +375,12 @@ export default function StudentVerificationForm({ onSuccess, userAddress }) {
           Privacy Notice
         </h4>
         <p className="text-xs text-gray-600">
-          Your information will be used solely for student verification purposes
-          and will be stored securely. We will not share your data with third
-          parties without your consent. Documents will be reviewed within 1-3
-          business days.
+          Your information will be used solely for student verification purposes.
+          Your document is encrypted before storage and is only decrypted for
+          admin review. We will not share your data with third parties without
+          your consent. Documents are reviewed within 1-3 business days and are
+          automatically and permanently deleted from our systems if not
+          reviewed within 14 days, at which point you will need to resubmit.
         </p>
       </div>
 

@@ -1,108 +1,107 @@
-import { NextResponse } from 'next/server';
-import { getDb } from '@/lib/mongodb';
-import { auditLog } from '@/lib/api/audit';
-import { withAuthorization } from '@/lib/auth/authorize';
-import { isAdmin } from '@/lib/auth/policies';
-import { errorResponse } from '@/lib/api/errorResponse';
+import { NextResponse } from "next/server";
+import { withAuthorization } from "@/lib/auth/authorize";
+import { isAdmin } from "@/lib/auth/policies";
+import {
+  reviewStudentVerification,
+  listPendingApplications,
+  getDecryptedDocumentForReview,
+  VerificationLifecycleError,
+  statusToHttp,
+} from "@/lib/verification/studentVerificationLifecycle";
 
+/**
+ * POST /api/admin/verification
+ * Approve or reject a pending student verification application.
+ *
+ * Body: { applicationId, action: "approve" | "reject", reviewNotes? }
+ * Optional: { applicationId, action: "view" } decrypts the document for
+ * review without changing its status (still requires it be pending and
+ * inside its review window — see #165).
+ */
 export const POST = withAuthorization(
   async (request) => {
+    const { userId } = request;
+
+    let body;
     try {
-      const { userId, fullUser } = request;
-      const body = await request.json();
-      const { applicationId, action } = body;
+      body = await request.json();
+    } catch {
+      return NextResponse.json({ error: "Invalid JSON payload" }, { status: 400 });
+    }
 
-      if (!applicationId || !['approve', 'reject'].includes(action)) {
-        return errorResponse(
-          'applicationId and valid action (approve/reject) are required',
-          400
+    const { applicationId, action, reviewNotes } = body || {};
+
+    if (!applicationId) {
+      return NextResponse.json({ error: "applicationId is required" }, { status: 400 });
+    }
+
+    try {
+      if (action === "view") {
+        const document = await getDecryptedDocumentForReview(applicationId);
+        return NextResponse.json({
+          success: true,
+          filename: document.filename,
+          mimetype: document.mimetype,
+          // Base64 so the JSON response can carry binary bytes; decrypted
+          // in-memory only for this request, never re-persisted.
+          data: document.buffer.toString("base64"),
+        });
+      }
+
+      if (!["approve", "reject"].includes(action)) {
+        return NextResponse.json(
+          { error: "action must be one of: approve, reject, view" },
+          { status: 400 }
         );
       }
 
-      const db = await getDb();
-      const applications = db.collection('verification_applications');
-      const profiles = db.collection('profiles');
-
-      const application = await applications.findOne({ _id: applicationId });
-      if (!application) {
-        return errorResponse('Application not found', 404);
-      }
-
-      if (application.status !== 'pending') {
-        return errorResponse(
-          `Application is already ${application.status}`,
-          400
-        );
-      }
-
-      const newStatus = action === 'approve' ? 'approved' : 'rejected';
-      const updateFields = {
-        status: newStatus,
-        reviewedBy: userId,
-        reviewedAt: new Date(),
-        updatedAt: new Date(),
-      };
-
-      await applications.updateOne(
-        { _id: applicationId },
-        { $set: updateFields }
-      );
-
-      if (action === 'approve') {
-        await profiles.updateOne(
-          { uuid: application.userUuid },
-          {
-            $set: {
-              profileType: application.requestedType || 'institution',
-              verifiedAt: new Date(),
-              updatedAt: new Date(),
-            },
-          }
-        );
-      }
-
-      auditLog({
-        event: `admin_verification_${action}`,
-        route: 'admin/verification',
-        method: 'POST',
-        status: 200,
-        actor: userId,
-        materialId: applicationId,
+      const updated = await reviewStudentVerification({
+        applicationId,
+        actorId: userId,
+        action,
+        reviewNotes: reviewNotes || null,
       });
 
-      return NextResponse.json({ success: true, status: newStatus });
+      return NextResponse.json({ success: true, status: updated.status });
     } catch (error) {
-      console.error('[admin/verification] POST error:', error);
-      return errorResponse(error.message || 'Internal Server Error', 500);
+      if (error instanceof VerificationLifecycleError) {
+        return NextResponse.json(
+          { error: error.message, code: error.code },
+          { status: statusToHttp(error.code) }
+        );
+      }
+      console.error("[admin/verification] POST error:", error);
+      return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
     }
   },
   {
-    checkOwnership: async (userId, fullUser) => {
-      return isAdmin(fullUser);
-    },
+    checkOwnership: async (userId, fullUser) => isAdmin(fullUser),
   }
 );
 
+/**
+ * GET /api/admin/verification
+ * Lists pending student verification applications awaiting review.
+ * Never includes the encrypted document payload; applications whose review
+ * window has elapsed are lazily expired (and excluded) before listing.
+ */
 export const GET = withAuthorization(
-  async (request) => {
+  async () => {
     try {
-      const db = await getDb();
-      const applications = await db
-        .collection('verification_applications')
-        .find({ status: 'pending' })
-        .sort({ createdAt: -1 })
-        .limit(50)
-        .toArray();
-
-      return NextResponse.json({ applications });
+      const applications = await listPendingApplications();
+      return NextResponse.json({
+        success: true,
+        applications: applications.map((application) => ({
+          ...application,
+          _id: application._id.toString(),
+        })),
+      });
     } catch (error) {
-      console.error('[admin/verification] GET error:', error);
-      return errorResponse('Internal Server Error', 500);
+      console.error("[admin/verification] GET error:", error);
+      return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
     }
   },
   {
-    checkOwnership: async (userId, fullUser) => {
-      return isAdmin(fullUser);
-    },
+    checkOwnership: async (userId, fullUser) => isAdmin(fullUser),
   }
 );

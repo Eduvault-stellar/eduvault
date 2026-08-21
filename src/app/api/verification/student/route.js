@@ -1,210 +1,130 @@
 import { NextResponse } from "next/server";
-import connectToDatabase from "@/lib/mongodb";
-import { withAuthorization } from "@/lib/auth/authorize";
-import { getDb } from "@/lib/mongodb";
 import { validateAuth } from "@/lib/auth/session";
 import { withApiHardening } from "@/lib/api/hardening";
+import {
+  submitStudentVerification,
+  getVerificationStatusForWallet,
+  VerificationLifecycleError,
+  statusToHttp,
+} from "@/lib/verification/studentVerificationLifecycle";
 
 /**
  * POST /api/verification/student
- * Submit student verification application with documents
+ * Submit student verification application with documents.
+ *
+ * The uploaded document is AES-256-GCM encrypted before it is persisted
+ * (src/lib/security/documentCipher.js) and carries an expiring review
+ * window (src/lib/verification/studentVerificationLifecycle.js) — see #165.
  */
 export async function POST(request) {
   return withApiHardening(
     request,
     { route: "verification-student", rateLimit: { limit: 5, windowMs: 60 * 60_000 } },
-    async () => submitStudentVerification(request)
+    async () => submitStudentVerificationHandler(request)
   );
 }
 
-async function submitStudentVerification(request) {
+async function submitStudentVerificationHandler(request) {
+  const authResult = await validateAuth(request);
+  if (!authResult.valid) {
+    return NextResponse.json({ error: "Authentication required" }, { status: 401 });
+  }
+
+  const authenticatedAddress = String(authResult.address).toLowerCase();
+
+  let formData;
   try {
-    // Authenticate user
-    const authResult = await validateAuth(request);
-    if (!authResult.valid) {
-      return NextResponse.json(
-        { error: "Authentication required" },
-        { status: 401 },
-      );
-    }
+    formData = await request.formData();
+  } catch {
+    return NextResponse.json({ error: "Invalid multipart/form-data payload" }, { status: 400 });
+  }
 
-    const { address } = authResult;
-    const formData = await request.formData();
-export const POST = withAuthorization(
-  async (request) => {
-    const { userId } = request; // userId is now available from withAuthorization
-    const formData = request.parsedFormData; // Use parsedFormData from checkOwnership
+  const walletAddress = formData.get("walletAddress");
+  if (!walletAddress || String(walletAddress).toLowerCase() !== authenticatedAddress) {
+    return NextResponse.json(
+      { error: "Forbidden: walletAddress must match the authenticated session" },
+      { status: 403 }
+    );
+  }
 
-    // Extract form fields
-    const walletAddress = formData.get("walletAddress");
-    const fullName = formData.get("fullName");
-    const email = formData.get("email");
-    const institution = formData.get("institution");
-    const studentId = formData.get("studentId");
-    const expectedGraduation = formData.get("expectedGraduation");
-    const document = formData.get("document");
+  const fullName = formData.get("fullName");
+  const email = formData.get("email");
+  const institution = formData.get("institution");
+  const studentId = formData.get("studentId");
+  const expectedGraduation = formData.get("expectedGraduation");
+  const document = formData.get("document");
 
-    // Validate required fields
-    if (
-      !fullName ||
-      !email ||
-      !institution ||
-      !studentId ||
-      !expectedGraduation ||
-      !document
-    ) {
-      return NextResponse.json(
-        { error: "All fields are required" },
-        { status: 400 },
-      );
-    }
+  if (!fullName || !email || !institution || !studentId || !expectedGraduation || !document) {
+    return NextResponse.json({ error: "All fields are required" }, { status: 400 });
+  }
 
-    // Validate file size (5MB max)
-    if (document.size > 5 * 1024 * 1024) {
-      return NextResponse.json(
-        { error: "File size exceeds 5MB limit" },
-        { status: 400 },
-      );
-    }
-
-    // Validate file type
-    const validTypes = [
-      "image/jpeg",
-      "image/png",
-      "image/jpg",
-      "application/pdf",
-    ];
-    if (!validTypes.includes(document.type)) {
-      return NextResponse.json(
-        { error: "Invalid file type. Only JPG, PNG, and PDF are allowed" },
-        { status: 400 },
-      );
-    }
-
-    // removed duplicate getDb
-
-    // Check for existing pending or approved verification
-    const existingVerification = await db
-      .collection("student_verifications")
-      .findOne({
-        walletAddress: userId.toLowerCase(), // Use userId from auth
-        status: { $in: ["pending", "approved"] },
-      });
-
-    if (existingVerification) {
-      return NextResponse.json(
-        {
-          error:
-            "You already have a pending or approved verification application",
-          status: existingVerification.status,
-        },
-        { status: 409 },
-      );
-    }
-
-    // Convert file to buffer for storage
+  let documentBuffer;
+  try {
     const bytes = await document.arrayBuffer();
-    const buffer = Buffer.from(bytes);
+    documentBuffer = Buffer.from(bytes);
+  } catch {
+    return NextResponse.json({ error: "Failed to read uploaded document" }, { status: 400 });
+  }
 
-    // Create verification record
-    const verification = {
-      walletAddress: userId.toLowerCase(), // Use userId from auth
+  try {
+    const verification = await submitStudentVerification({
+      walletAddress: authenticatedAddress,
       fullName,
-      email: email.toLowerCase(),
+      email,
       institution,
       studentId,
       expectedGraduation,
-      document: {
-        filename: document.name,
-        mimetype: document.type,
-        size: document.size,
-        data: buffer, // In production, upload to cloud storage instead
-      },
-      status: "pending",
-      submittedAt: new Date(),
-      reviewedAt: null,
-      reviewedBy: null,
-      reviewNotes: null,
-      verificationExpiry: null,
-    };
-
-    const result = await db
-      .collection("student_verifications")
-      .insertOne(verification);
-
-    // Create admin moderation queue entry
-    await db.collection("admin_moderation_queue").insertOne({
-      type: "student_verification",
-      verificationId: result.insertedId,
-      walletAddress: userId.toLowerCase(), // Use userId from auth
-      submittedAt: new Date(),
-      status: "pending",
-      priority: "normal",
+      documentBuffer,
+      documentFilename: document.name,
+      documentMimeType: document.type,
+      documentSize: document.size,
     });
 
     return NextResponse.json(
       {
         success: true,
-        verificationId: result.insertedId.toString(),
+        verificationId: verification._id.toString(),
         message: "Verification application submitted successfully",
-        status: "pending",
+        status: verification.status,
+        documentExpiresAt: verification.documentExpiresAt,
       },
-      { status: 201 },
+      { status: 201 }
     );
-  },
-  {
-    checkOwnership: async (userId, fullUser, request) => {
-      const formData = await request.formData();
-      request.parsedFormData = formData; // Store for the handler
-      const walletAddress = formData.get("walletAddress");
-      return walletAddress.toLowerCase() === userId.toLowerCase();
-    },
-  },
-);
+  } catch (error) {
+    if (error instanceof VerificationLifecycleError) {
+      return NextResponse.json({ error: error.message, code: error.code }, { status: statusToHttp(error.code) });
+    }
+    console.error("[verification/student] POST error:", error);
+    return NextResponse.json({ error: "Failed to submit verification application" }, { status: 500 });
+  }
+}
 
 /**
  * GET /api/verification/student
- * Check student verification status for authenticated user
+ * Check student verification status for the authenticated user. Never
+ * returns the encrypted document payload; a pending application whose
+ * review window has elapsed is reported (and lazily transitioned) as
+ * "expired" rather than staying silently stuck at "pending".
  */
 export async function GET(request) {
   return withApiHardening(
     request,
     { route: "verification-student", rateLimit: { limit: 30, windowMs: 60_000 } },
-    async () => getStudentVerificationStatus(request)
+    async () => getStudentVerificationStatusHandler(request)
   );
 }
 
-async function getStudentVerificationStatus(request) {
-export const GET = withAuthorization(async (request) => {
-  const { userId } = request; // userId is now available from withAuthorization
+async function getStudentVerificationStatusHandler(request) {
+  const authResult = await validateAuth(request);
+  if (!authResult.valid) {
+    return NextResponse.json({ error: "Authentication required" }, { status: 401 });
+  }
+
   try {
-    const { db } = await connectToDatabase();
-    const authResult = await validateAuth(request);
-    if (!authResult.valid) {
-      return NextResponse.json(
-        { error: "Authentication required" },
-        { status: 401 },
-      );
-    }
-
-    const { address } = authResult;
-
-    const verification = await db.collection("student_verifications").findOne(
-      { walletAddress: userId.toLowerCase() }, // Use userId from auth
-      {
-        projection: {
-          "document.data": 0, // Exclude binary document data
-        },
-        sort: { submittedAt: -1 },
-      },
-    );
+    const verification = await getVerificationStatusForWallet(authResult.address);
 
     if (!verification) {
-      return NextResponse.json({
-        success: true,
-        verified: false,
-        status: "not_applied",
-      });
+      return NextResponse.json({ success: true, verified: false, status: "not_applied" });
     }
 
     return NextResponse.json({
@@ -217,10 +137,10 @@ export const GET = withAuthorization(async (request) => {
       },
     });
   } catch (error) {
-    console.error("Error checking verification status:", error);
+    console.error("[verification/student] GET error:", error);
     return NextResponse.json(
       { error: "Failed to check verification status", details: error.message },
-      { status: 500 },
+      { status: 500 }
     );
   }
-});
+}
