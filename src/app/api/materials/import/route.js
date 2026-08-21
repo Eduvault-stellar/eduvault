@@ -5,7 +5,12 @@ import { auditLog } from "@/lib/api/audit";
 import { withApiHardening } from "@/lib/api/hardening";
 import { getUserFromCookie } from "@/lib/api/auth";
 import { getDb } from "@/lib/mongodb";
-import { validateImportPayload, ImportValidationError } from "@/lib/backend/materialImport";
+import {
+  validateImportPayload,
+  publishMaterialImport,
+  ImportConflictError,
+  ImportValidationError,
+} from "@/lib/backend/materialImport";
 
 export const runtime = "nodejs";
 
@@ -56,39 +61,44 @@ export async function POST(request) {
           }, { status: validation.invalid > 0 ? 400 : 200 });
         }
 
-        // Save valid records
+        // Save valid records behind a durable import/row identity. The client
+        // can replay the exact request after a disconnect without duplicating
+        // materials that were committed before the response was lost.
         const db = await getDb();
-        const now = new Date();
-
-        const docs = validation.validRecords.map((record) => ({
-          ...record,
+        const importId = body.importId || request.headers.get("idempotency-key");
+        const result = await publishMaterialImport(db, {
+          ownerId: user.sub || userAddress,
           userAddress,
-          createdAt: now,
-          updatedAt: now,
-        }));
-
-        const result = await db.collection("materials").insertMany(docs);
+          importId,
+          records: validation.validRecords,
+        });
+        const status = result.complete ? (result.imported > 0 ? 201 : 200) : 207;
 
         auditLog({
-          event: "materials_imported",
+          event: result.complete ? "materials_imported" : "materials_import_partial",
           route: "materials-import",
           method: "POST",
-          status: 201,
+          status,
           actor: user.sub,
-          imported: result.insertedCount,
+          importId: result.importId,
+          imported: result.imported,
+          reused: result.reused,
+          failed: result.failed,
         });
 
         return NextResponse.json({
           dryRun: false,
-          total: validation.total,
+          ...result,
           valid: validation.valid,
           invalid: validation.invalid,
-          imported: result.insertedCount,
           invalidRows: validation.invalidRows,
-        }, { status: 201 });
+        }, { status });
       } catch (err) {
         if (err instanceof ImportValidationError) {
           return NextResponse.json({ error: err.message, details: err.details }, { status: 400 });
+        }
+        if (err instanceof ImportConflictError) {
+          return NextResponse.json({ error: err.message, details: err.details }, { status: 409 });
         }
         if (err.name === "ValidationError") throw err;
         auditLog({ event: "materials_import_failed", route: "materials-import", method: "POST", status: 500, reason: err.message });
