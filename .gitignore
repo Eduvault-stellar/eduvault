@@ -21,6 +21,9 @@ yarn.lock
 /coverage
 /artifacts
 /cache
+/test-results/
+/playwright-report/
+/blob-report/
 
 # next.js
 /.next/
