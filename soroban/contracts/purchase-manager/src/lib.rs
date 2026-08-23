@@ -53,12 +53,21 @@ pub enum AssetKind {
     CreatorToken = 2,
 }
 
+/// Allowlist record stored for each approved payment asset (legacy v1 schema).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AssetInfoV1 {
+    pub kind: AssetKind,
+    pub enabled: bool,
+}
+
 /// Allowlist record stored for each approved payment asset.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AssetInfo {
     pub kind: AssetKind,
     pub enabled: bool,
+    pub decimals: u32,
 }
 
 /// Asset quote structure from registry
@@ -177,6 +186,7 @@ pub enum PurchaseError {
     InvalidQuoteAmount = 13,
     AssetNotAcceptedForMaterial = 14,
     EntitlementAlreadyExists = 15,
+    InvalidAssetDecimals = 16,
 
     // Payout errors
     PayoutTransferFailed = 20,
@@ -245,6 +255,7 @@ pub struct AssetPolicyUpdatedEvent {
     pub asset: Address,
     pub kind: AssetKind,
     pub enabled: bool,
+    pub decimals: u32,
 }
 
 /// Event: admin.platform_config_updated
@@ -627,18 +638,26 @@ impl PurchaseManager {
     ///
     /// `kind` classifies the asset: `Native` for XLM, `Token` for SAC-wrapped
     /// fungible tokens such as USDC, and `CreatorToken` for creator-specific
-    /// tokens. The classification is stored for informational purposes and
-    /// future filtering.
+    /// tokens. `decimals` specifies explicit asset precision (at most 18).
     pub fn set_asset_allowed(
         env: Env,
         admin: Address,
         asset: Address,
         kind: AssetKind,
         enabled: bool,
+        decimals: u32,
     ) -> Result<(), PurchaseError> {
         auth::require_admin(&env, &admin)?;
 
-        let info = AssetInfo { kind, enabled };
+        if decimals > 18 {
+            return Err(PurchaseError::InvalidAssetDecimals);
+        }
+
+        let info = AssetInfo {
+            kind,
+            enabled,
+            decimals,
+        };
         env.storage()
             .persistent()
             .set(&DataKey::AllowedAsset(asset.clone()), &info);
@@ -648,6 +667,7 @@ impl PurchaseManager {
             asset,
             kind,
             enabled,
+            decimals,
         }
         .publish(&env);
 
@@ -699,10 +719,29 @@ impl PurchaseManager {
     }
 
     /// Returns the full `AssetInfo` record for `asset`, if present.
+    /// Supports backward compatibility fallback for legacy `AssetInfoV1` records.
     pub fn get_asset_info(env: Env, asset: Address) -> Option<AssetInfo> {
-        env.storage()
+        if let Some(info) = env
+            .storage()
             .persistent()
-            .get(&DataKey::AllowedAsset(asset))
+            .get::<DataKey, AssetInfo>(&DataKey::AllowedAsset(asset.clone()))
+        {
+            return Some(info);
+        }
+
+        if let Some(v1_info) = env
+            .storage()
+            .persistent()
+            .get::<DataKey, AssetInfoV1>(&DataKey::AllowedAsset(asset))
+        {
+            return Some(AssetInfo {
+                kind: v1_info.kind,
+                enabled: v1_info.enabled,
+                decimals: 7,
+            });
+        }
+
+        None
     }
 
     /// Migrate PlatformConfig from V1 (with oracle) to V2 (without oracle).
