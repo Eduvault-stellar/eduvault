@@ -33,6 +33,13 @@ export const COLLECTIONS = Object.freeze({
   files: "files",
   fileCleanupOutbox: "file_cleanup_outbox",
   uploadQuarantine: "upload_quarantine",
+
+  // Student verification applications (#165).
+  // A wallet may have at most one active (pending|approved) record; one
+  // approved record per wallet is the terminal state. See #107 — the
+  // uniqueness invariants are enforced by a partial unique index defined in
+  // REQUIRED_INDEXES below and installed by migration 006.
+  studentVerifications: "student_verifications",
 });
 
 // File lifecycle states (#98). A file object moves:
@@ -627,6 +634,41 @@ export const REQUIRED_INDEXES = Object.freeze({
       name: "payouts_escrow_id",
       keys: { escrowId: 1 },
       options: {},
+    },
+  ],
+
+  student_verifications: [
+    // #107: at most one ACTIVE (pending | approved) application per wallet.
+    // A partial filter expression restricts the unique constraint to the
+    // two non-terminal status values; once a record becomes "rejected" or
+    // "expired" (terminal failure) the wallet may resubmit. The DB itself,
+    // not just application code, is the final concurrency boundary —
+    // submissions that race past the application-level findOne are still
+    // rejected here with E11000.
+    {
+      name: "student_verifications_wallet_active_unique",
+      keys: { walletAddress: 1 },
+      options: {
+        unique: true,
+        partialFilterExpression: {
+          status: { $in: ["pending", "approved"] },
+        },
+      },
+    },
+    {
+      name: "student_verifications_status_submitted",
+      keys: { status: 1, submittedAt: -1 },
+      options: {},
+    },
+    {
+      name: "student_verifications_document_expires_at",
+      keys: { documentExpiresAt: 1 },
+      options: {
+        partialFilterExpression: {
+          documentExpiresAt: { $type: "date" },
+          status: "pending",
+        },
+      },
     },
   ],
 });

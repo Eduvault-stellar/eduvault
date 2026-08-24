@@ -3,6 +3,7 @@ import migration002 from "./002-resolve-legacy-duplicates.js";
 import migration003 from "./003-enforce-unique-indexes.js";
 import migration004 from "./004-material-lifecycle.js";
 import migration005 from "./005-saved-material-uniqueness.js";
+import migration006 from "./006-student-verification-uniqueness.js";
 
 export const MIGRATIONS = Object.freeze([
   migration001,
@@ -10,6 +11,7 @@ export const MIGRATIONS = Object.freeze([
   migration003,
   migration004,
   migration005,
+  migration006,
 ]);
 
 export function validateMigrationRegistry(

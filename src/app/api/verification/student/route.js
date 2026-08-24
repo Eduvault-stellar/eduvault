@@ -88,14 +88,22 @@ async function submitStudentVerificationHandler(request) {
         status: verification.status,
         documentExpiresAt: verification.documentExpiresAt,
       },
-      { status: 201 }
+      { status: 201 },
     );
   } catch (error) {
     if (error instanceof VerificationLifecycleError) {
-      return NextResponse.json({ error: error.message, code: error.code }, { status: statusToHttp(error.code) });
+      // #107: losing concurrent requests receive a typed 409 (or 410 for
+      // expired, 503 for encryption_unavailable) — never a generic 500.
+      return NextResponse.json(
+        { error: error.message, code: error.code },
+        { status: statusToHttp(error.code) },
+      );
     }
     console.error("[verification/student] POST error:", error);
-    return NextResponse.json({ error: "Failed to submit verification application" }, { status: 500 });
+    return NextResponse.json(
+      { error: "Failed to submit verification application" },
+      { status: 500 },
+    );
   }
 }
 

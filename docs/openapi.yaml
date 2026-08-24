@@ -324,6 +324,18 @@ components:
       content:
         application/problem+json:
           schema: { $ref: "#/components/schemas/Problem" }
+    Conflict:
+      description: |
+        The request conflicts with the current state of the target resource.
+        For verification routes (#107) the `code` field is one of:
+          - `duplicate_submission` — the wallet already has a pending or approved application.
+          - `channel_unavailable` — the verification channel is not accepting applications right now.
+          - `invalid_transition` — the application is no longer in a state that supports this action
+            (e.g. a concurrent reviewer approved/rejected it first).
+          - `conflict` — the application's status changed between read and write; the request should be retried.
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
     Problem:
       description: RFC 9457 problem response
       content:
@@ -987,6 +999,201 @@ paths:
                 $ref: "#/components/schemas/ProfileResult"
         "400":
           $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        default:
+          $ref: "#/components/responses/Problem"
+
+  # ---------------------------------------------------------------------------
+  # Student verification (#165, race-safety hardening in #107)
+  #
+  # The lifecycle is backed by a partial unique index on
+  # { walletAddress } filtered to active (pending|approved) statuses. Even if
+  # two concurrent POSTs slip past the application-level duplicate check, the
+  # second insertOne receives MongoDB's E11000 which the lifecycle maps to a
+  # typed `duplicate_submission` 409 — losing requests never receive a 500.
+  # Concurrent admins approving the same application hit the same typed 409
+  # via the `conflict` / `invalid_transition` codes.
+  # ---------------------------------------------------------------------------
+  /api/verification/student:
+    post:
+      summary: Submit a student verification application
+      description: |
+        Submits a multipart/form-data payload containing the applicant's
+        identity fields plus an AES-256-GCM-encrypted proof-of-studenthood
+        document. The document is encrypted at rest before it is written to
+        MongoDB and carries an expiring review window.
+
+        Concurrency / race-safety (#107):
+          - The collection has a partial unique index on `walletAddress` for
+            records in `pending|approved` status. Two concurrent submissions
+            for the same wallet cannot both succeed; exactly one wins and the
+            other receives a typed 409 (see Conflict).
+          - If the verification channel is closed (env flag
+            `VERIFICATION_ACCEPTING_APPLICATIONS=false`) new submissions are
+            rejected with `channel_unavailable` (also a typed 409).
+      operationId: submitStudentVerification
+      tags: [Verification]
+      security: [{ cookieAuth: [] }]
+      x-api-version: 1
+      x-idempotency: wallet
+      x-pagination: none
+      x-example: { walletAddress: GABC, fullName: Ada, email: ada@example.com, institution: EduVault, studentId: S12345, expectedGraduation: "2027-06-01" }
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [walletAddress, fullName, email, institution, studentId, expectedGraduation, document]
+              properties:
+                walletAddress:      { type: string, description: Stellar public key of the authenticated student. }
+                fullName:           { type: string, maxLength: 200 }
+                email:              { type: string, maxLength: 200 }
+                institution:        { type: string, maxLength: 200 }
+                studentId:          { type: string, maxLength: 100 }
+                expectedGraduation: { type: string }
+                document:
+                  type: string
+                  format: binary
+                  description: PDF, PNG, or JPG up to 5 MB.
+      responses:
+        "201":
+          description: Application accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:           { type: boolean }
+                  verificationId:    { type: string }
+                  status:            { type: string, enum: [pending] }
+                  documentExpiresAt: { type: string, format: date-time }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: walletAddress does not match the authenticated session.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        default:
+          $ref: "#/components/responses/Problem"
+    get:
+      summary: Check the authenticated student's verification status
+      operationId: getStudentVerificationStatus
+      tags: [Verification]
+      security: [{ cookieAuth: [] }]
+      x-api-version: 1
+      x-idempotency: wallet
+      x-pagination: none
+      x-example: { verified: true, status: approved }
+      responses:
+        "200":
+          description: Current status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:   { type: boolean }
+                  verified:  { type: boolean }
+                  status:    { type: string, enum: [not_applied, pending, approved, rejected, expired] }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        default:
+          $ref: "#/components/responses/Problem"
+
+  /api/admin/verification:
+    post:
+      summary: Approve, reject, or view a pending student verification application
+      description: |
+        Admin-only endpoint. Three actions are supported:
+          - `view`     — decrypt and return the document for review without changing state.
+          - `approve`  — transition a pending application to `approved`.
+          - `reject`   — transition a pending application to `rejected`.
+
+        Concurrency / race-safety (#107):
+          - Approval uses an atomic guarded findOneAndUpdate on
+            `{ _id, status: "pending" }`. If a concurrent admin already
+            decided the application, the loser receives a typed 409 with
+            `code: invalid_transition` or `code: conflict`.
+          - The status change + audit log + downstream user-record mutation
+            commit or roll back together inside a Mongo transaction on
+            replica-set deployments, falling back to non-transactional writes
+            on standalone deployments (still race-safe via the guard filter).
+      operationId: reviewStudentVerification
+      tags: [Verification]
+      security: [{ cookieAuth: [] }]
+      x-api-version: 1
+      x-idempotency: application-id-and-action
+      x-pagination: none
+      x-example: { applicationId: "6650abc", action: approve }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [applicationId, action]
+              properties:
+                applicationId: { type: string }
+                action:        { type: string, enum: [approve, reject, view] }
+                reviewNotes:   { type: string, nullable: true }
+      responses:
+        "200":
+          description: Action recorded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:   { type: boolean }
+                  status:    { type: string, enum: [approved, rejected] }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: Application not found.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          description: Review window expired; the document has been purged.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        default:
+          $ref: "#/components/responses/Problem"
+    get:
+      summary: List pending student verification applications
+      operationId: listPendingStudentVerifications
+      tags: [Verification]
+      security: [{ cookieAuth: [] }]
+      x-api-version: 1
+      x-idempotency: none
+      x-pagination: none
+      x-example: { applications: [] }
+      responses:
+        "200":
+          description: Pending applications (ciphertext redacted).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  applications:
+                    type: array
+                    items: { type: object }
         "401":
           $ref: "#/components/responses/Unauthorized"
         default:
