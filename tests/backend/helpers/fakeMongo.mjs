@@ -14,6 +14,7 @@
  * than silently returning wrong results.
  */
 
+import { randomBytes } from "node:crypto";
 import { REQUIRED_INDEXES } from "../../../src/lib/backend/schemaContracts.js";
 
 function duplicateKeyError(indexName, key) {
@@ -24,6 +25,46 @@ function duplicateKeyError(indexName, key) {
   return error;
 }
 
+/**
+ * Minimal ObjectId stand-in that satisfies the equality checks used by the
+ * indexer / lifecycle tests. We don't need a real 12-byte ObjectId — only
+ * stable identity and a stringification that matches what production code
+ * does (`String(id)`) when comparing ids.
+ */
+class FakeObjectId {
+  constructor(hex) {
+    this.hex = hex || randomBytes(12).toString("hex");
+  }
+  toString() {
+    return this.hex;
+  }
+  toJSON() {
+    return this.hex;
+  }
+}
+function isFakeObjectId(value) {
+  return value instanceof FakeObjectId;
+}
+
+/**
+ * Mirrors MongoDB's `$unset` semantics for dotted paths (e.g.
+ * "document.encrypted") by walking the path and removing only the leaf key
+ * if every intermediate object exists. This is intentionally narrower than
+ * Mongo's full behaviour — we only support unsetting existing leaves, which
+ * is all the lifecycle / indexer code we test needs.
+ */
+function unsetNestedField(target, path) {
+  const segments = path.split(".");
+  let cursor = target;
+  for (let index = 0; index < segments.length - 1; index += 1) {
+    const segment = segments[index];
+    if (cursor == null || typeof cursor !== "object") return;
+    cursor = cursor[segment];
+  }
+  if (cursor == null || typeof cursor !== "object") return;
+  delete cursor[segments[segments.length - 1]];
+}
+
 const TYPE_CHECKS = {
   string: (value) => typeof value === "string",
   int: (value) => Number.isInteger(value),
@@ -32,7 +73,13 @@ const TYPE_CHECKS = {
 };
 
 function matchesCondition(value, condition) {
-  if (condition && typeof condition === "object" && !Array.isArray(condition) && !(condition instanceof Date)) {
+  if (
+    condition &&
+    typeof condition === "object" &&
+    !Array.isArray(condition) &&
+    !(condition instanceof Date) &&
+    !isFakeObjectId(condition)
+  ) {
     for (const [operator, operand] of Object.entries(condition)) {
       switch (operator) {
         case "$in":
@@ -76,6 +123,13 @@ function matchesCondition(value, condition) {
   }
 
   if (value instanceof Date && condition instanceof Date) return value.getTime() === condition.getTime();
+  if (isFakeObjectId(condition)) {
+    if (isFakeObjectId(value)) return value.toString() === condition.toString();
+    return value === condition.toString();
+  }
+  if (isFakeObjectId(value) && typeof condition === "string") return value.toString() === condition;
+  if (typeof value === "string" && isFakeObjectId(condition)) return value === condition.toString();
+  if (isFakeObjectId(value) && isFakeObjectId(condition)) return value.toString() === condition.toString();
   return value === condition;
 }
 
@@ -156,12 +210,15 @@ class FakeCollection {
 
   async insertOne(doc) {
     this.#maybeFail("insertOne");
-    if (doc._id !== undefined && this.docs.some((existing) => existing._id === doc._id)) {
-      throw duplicateKeyError(`${this.name}_id_`, { _id: doc._id });
+    const candidate = { ...doc };
+    if (candidate._id === undefined) {
+      candidate._id = new FakeObjectId();
+    } else if (this.docs.some((existing) => existing._id === candidate._id)) {
+      throw duplicateKeyError(`${this.name}_id_`, { _id: candidate._id });
     }
-    this.#assertUnique(doc, null);
-    this.docs.push({ ...doc });
-    return { insertedId: doc._id };
+    this.#assertUnique(candidate, null);
+    this.docs.push(candidate);
+    return { insertedId: candidate._id };
   }
 
   async updateOne(filter, update, options = {}) {
@@ -199,7 +256,7 @@ class FakeCollection {
     const candidate = { ...existing, ...(update.$set || {}) };
     this.#assertUnique(candidate, existing);
     Object.assign(existing, update.$set || {});
-    for (const field of Object.keys(update.$unset || {})) delete existing[field];
+    for (const field of Object.keys(update.$unset || {})) unsetNestedField(existing, field);
     return options.returnDocument === "after" ? { ...existing } : before;
   }
 
@@ -218,6 +275,25 @@ class FakeCollection {
   find(filter = {}) {
     let results = this.docs.filter((doc) => matchesFilter(doc, filter));
     const cursor = {
+      sort(spec) {
+        const entries = Object.entries(spec || {});
+        results = [...results].sort((left, right) => {
+          for (const [field, direction] of entries) {
+            const lhs = left[field];
+            const rhs = right[field];
+            if (lhs === rhs) continue;
+            if (lhs === undefined || lhs === null) return direction === 1 ? -1 : 1;
+            if (rhs === undefined || rhs === null) return direction === 1 ? 1 : -1;
+            if (lhs instanceof Date && rhs instanceof Date) {
+              return direction === 1 ? lhs.getTime() - rhs.getTime() : rhs.getTime() - lhs.getTime();
+            }
+            if (lhs < rhs) return direction === 1 ? -1 : 1;
+            if (lhs > rhs) return direction === 1 ? 1 : -1;
+          }
+          return 0;
+        });
+        return cursor;
+      },
       limit(count) {
         results = results.slice(0, count);
         return cursor;
