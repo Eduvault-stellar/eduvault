@@ -95,34 +95,58 @@ export async function getMaterialAccessStatus(db, materialId, buyerAddress) {
   }
 
   if (isCompletedPurchaseStatus(purchase.status)) {
+    const purchasedVersion = purchase.purchasedVersion ?? purchase.version ?? 1;
+    const purchasedManifestDigest = purchase.purchasedManifestDigest ?? purchase.manifestDigest ?? null;
     return {
       status: "active",
       hasAccess: true,
       accessGranted: true,
       source: "purchases-db",
       purchaseStatus: purchase.status,
-      entitlement: purchase,
+      purchasedVersion,
+      purchasedManifestDigest,
+      entitlement: {
+        ...purchase,
+        purchasedVersion,
+        purchasedManifestDigest,
+      },
     };
   }
 
   if (isFailedPurchaseStatus(purchase.status)) {
+    const purchasedVersion = purchase.purchasedVersion ?? purchase.version ?? 1;
+    const purchasedManifestDigest = purchase.purchasedManifestDigest ?? purchase.manifestDigest ?? null;
     return {
       status: "payment_failed",
       hasAccess: false,
       accessGranted: false,
       source: "purchases-db",
       purchaseStatus: purchase.status,
-      entitlement: purchase,
+      purchasedVersion,
+      purchasedManifestDigest,
+      entitlement: {
+        ...purchase,
+        purchasedVersion,
+        purchasedManifestDigest,
+      },
     };
   }
 
+  const purchasedVersion = purchase.purchasedVersion ?? purchase.version ?? 1;
+  const purchasedManifestDigest = purchase.purchasedManifestDigest ?? purchase.manifestDigest ?? null;
   return {
     status: "pending",
     hasAccess: false,
     accessGranted: false,
     source: "purchases-db",
     purchaseStatus: purchase.status || "pending",
-    entitlement: purchase,
+    purchasedVersion,
+    purchasedManifestDigest,
+    entitlement: {
+      ...purchase,
+      purchasedVersion,
+      purchasedManifestDigest,
+    },
   };
 }
 
@@ -132,6 +156,10 @@ export async function createPendingAccessRequest(db, materialId, buyerAddress, d
     return current;
   }
 
+  const material = await findMaterial(db, materialId);
+  const versionToPin = details.purchasedVersion ?? details.version ?? material?.version ?? material?.currentVersion ?? 1;
+  const digestToPin = details.purchasedManifestDigest ?? details.manifestDigest ?? material?.digest ?? material?.manifestDigest ?? null;
+
   const normalised = normalizeBuyerAddress(buyerAddress);
   const now = new Date();
 
@@ -140,6 +168,8 @@ export async function createPendingAccessRequest(db, materialId, buyerAddress, d
       materialId,
       buyerAddress: normalised,
       status: "pending",
+      purchasedVersion: versionToPin,
+      purchasedManifestDigest: digestToPin,
       amount: details.amount ?? null,
       asset: details.asset ?? null,
       userEmail: details.email || null,
@@ -164,5 +194,7 @@ export async function createPendingAccessRequest(db, materialId, buyerAddress, d
     accessGranted: false,
     source: "access-request",
     purchaseStatus: "pending",
+    purchasedVersion: versionToPin,
+    purchasedManifestDigest: digestToPin,
   };
 }
