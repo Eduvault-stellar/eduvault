@@ -13,6 +13,15 @@ const MAX_PAYOUT_RECIPIENTS: u32 = 5;
 const ESCROW_LOCK_PERIOD_LEDGERS: u32 = 35_000;
 const MAX_ORACLE_SCALE: u32 = 18;
 
+/// Upper bound on `transaction_id`, the off-chain correlation identifier a
+/// purchase is reconciled against. This codebase's own tests use UUID-style
+/// values (36-37 ASCII bytes, e.g. "550e8400-e29b-41d4-a716-446655440000"),
+/// and a raw Stellar transaction hash is 32 bytes (64 bytes hex-encoded) --
+/// 64 comfortably covers every currently-legitimate shape without assuming
+/// one specific encoding, while still bounding storage/event cost against an
+/// arbitrarily large caller-supplied blob.
+const MAX_TRANSACTION_ID_LEN: u32 = 64;
+
 /// Volume-tier discounted fee rates (basis points).
 /// Tier 1: 2.5 %, Tier 2: 1.5 %.
 const TIER1_FEE_BPS: u32 = 250;
@@ -205,6 +214,7 @@ pub enum PurchaseError {
     InvalidQuoteAmount = 13,
     AssetNotAcceptedForMaterial = 14,
     EntitlementAlreadyExists = 15,
+    InvalidTransactionId = 16,
 
     // Payout errors
     PayoutTransferFailed = 20,
@@ -1106,6 +1116,8 @@ fn execute_purchase(
 ) -> Result<u64, PurchaseError> {
     buyer.require_auth();
 
+    validate_transaction_id(&transaction_id)?;
+
     let config = get_platform_config(&env)?;
 
     if config.paused {
@@ -1370,6 +1382,19 @@ fn transfer_asset(
     // Delegate to the Stellar Asset Contract (SAC) via the SEP-41 interface.
     // Works for XLM (native SAC), USDC, and any other SAC-wrapped token.
     SacToken::new(env, asset).transfer(from, to, amount);
+    Ok(())
+}
+
+/// Reject a `transaction_id` that cannot serve as a correlation identifier:
+/// empty (the bug this guards against -- see `empty_transaction_id_is_rejected`
+/// in `test.rs`) or larger than `MAX_TRANSACTION_ID_LEN`, which would let an
+/// unbounded caller-supplied blob inflate escrow-record and event storage.
+/// O(1): only inspects the byte length, never the contents.
+fn validate_transaction_id(transaction_id: &Bytes) -> Result<(), PurchaseError> {
+    let len = transaction_id.len();
+    if len == 0 || len > MAX_TRANSACTION_ID_LEN {
+        return Err(PurchaseError::InvalidTransactionId);
+    }
     Ok(())
 }
 
