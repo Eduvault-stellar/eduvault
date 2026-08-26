@@ -28,6 +28,8 @@ const SAFE_FIELDS = new Set([
   "policyVersion",
   "approvalId",
   "emergencyId",
+  "refundId",
+  "purchaseId",
   "scope",
   "role",
 ]);

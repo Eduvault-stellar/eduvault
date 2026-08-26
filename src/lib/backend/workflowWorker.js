@@ -19,6 +19,7 @@ import {
 import { getDb } from "@/lib/mongodb";
 import { COLLECTIONS } from "./schemaContracts";
 import { processOutboxEvents } from "./outboxWorker";
+import { reconcileRefunds } from "@/lib/stellar/refundService";
 import { runWithContext } from "../telemetry/context.js";
 import { withSpan } from "../telemetry/tracing.js";
 import { incrementCounter } from "../telemetry/metrics.js";
@@ -192,6 +193,27 @@ async function reconcileTransaction(workflow) {
 }
 
 /**
+ * Restart-safe reconciliation pass for the refund workflow (#27).
+ * Converges refunds stranded by Horizon timeouts, crashes, or missed
+ * entitlement revocation. Never allowed to kill the worker loop.
+ */
+async function reconcileIncompleteRefundsSafe() {
+  try {
+    const summary = await reconcileRefunds({ limit: 25 });
+    if (
+      summary.recoveredLeases ||
+      summary.verified ||
+      summary.failedOnChain ||
+      summary.revoked
+    ) {
+      logger.info({ summary }, "[Worker] Refund reconciliation progressed");
+    }
+  } catch (error) {
+    logger.error({ err: error }, "[Worker] Refund reconciliation failed");
+  }
+}
+
+/**
  * Main worker loop
  */
 export async function runWorker() {
@@ -206,6 +228,7 @@ export async function runWorker() {
       if (workflows.length === 0) {
         // Also process outbox events before sleeping
         const outboxCount = await processOutboxEvents();
+        await reconcileIncompleteRefundsSafe();
         if (outboxCount === 0) {
           console.log("[Worker] No workflows or outbox events to process, waiting...");
         }
@@ -255,6 +278,7 @@ export async function runWorker() {
 
       // Also process outbox events after workflows
       await processOutboxEvents();
+      await reconcileIncompleteRefundsSafe();
 
       await sleep(CONFIG.pollingInterval);
     } catch (error) {
