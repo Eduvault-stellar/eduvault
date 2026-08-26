@@ -825,7 +825,7 @@ paths:
       security: [{ cookieAuth: [] }]
       x-api-version: 1
       x-idempotency: none
-      x-pagination: { strategy: page, parameters: [page, limit] }
+      x-pagination: { strategy: cursor, parameters: [page, limit, cursor] }
       x-example: { page: 1, limit: 20 }
       parameters:
         - name: page
@@ -841,6 +841,13 @@ paths:
             default: 20
             minimum: 1
             maximum: 100
+        - name: cursor
+          in: query
+          description: Horizon paging token returned as `nextCursor` by the previous page. Each page fetches exactly `limit` on-chain records regardless of depth.
+          required: false
+          schema:
+            type: string
+            pattern: '^[0-9]{1,32}$'
       responses:
         "200":
           description: Paginated merged history from MongoDB and Horizon
@@ -853,6 +860,13 @@ paths:
                     type: integer
                   limit:
                     type: integer
+                  cursor:
+                    type: string
+                    nullable: true
+                  nextCursor:
+                    type: string
+                    nullable: true
+                    description: Horizon paging token to pass as `cursor` for the next on-chain page; null when the feed is exhausted.
                   hasMore:
                     type: boolean
                   totals:

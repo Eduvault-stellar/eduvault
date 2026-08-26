@@ -8,6 +8,7 @@ import { withApiHardening } from "@/lib/api/hardening";
 import {
   buildPurchaseHistoryRecords,
   fetchHorizonTransactions,
+  isValidHorizonCursor,
 } from "@/lib/transactions/historyFeed";
 
 async function getUserFromCookie(request) {
@@ -32,7 +33,6 @@ function parseLimit(value) {
 }
 
 async function listTransactionHistory(request) {
-export async function GET(request) {
   return withApiHardening(
     request,
     { route: "transactions-history", rateLimit: { limit: 60, windowMs: 60_000 } },
@@ -40,7 +40,7 @@ export async function GET(request) {
   );
 }
 
-async function transactionHistoryGet(request) {
+export async function transactionHistoryGet(request) {
   try {
     const user = await getUserFromCookie(request);
     if (!user) {
@@ -55,6 +55,15 @@ async function transactionHistoryGet(request) {
     const { searchParams } = new URL(request.url);
     const page = parsePage(searchParams.get("page"));
     const limit = parseLimit(searchParams.get("limit"));
+
+    const cursorParam = searchParams.get("cursor");
+    if (cursorParam !== null && cursorParam !== "" && !isValidHorizonCursor(cursorParam)) {
+      return NextResponse.json(
+        { error: "Invalid cursor: expected a Horizon paging token" },
+        { status: 400 }
+      );
+    }
+    const cursor = cursorParam || null;
 
     const db = await getDb();
     const skip = (page - 1) * limit;
@@ -73,7 +82,7 @@ async function transactionHistoryGet(request) {
         .limit(limit)
         .toArray(),
       db.collection("purchases").countDocuments(purchaseFilter),
-      fetchHorizonTransactions(String(buyerAddress), { page, limit }),
+      fetchHorizonTransactions(String(buyerAddress), { limit, cursor }),
     ]);
 
     const purchaseRecords = buildPurchaseHistoryRecords(purchases);
@@ -88,6 +97,8 @@ async function transactionHistoryGet(request) {
     return NextResponse.json({
       page,
       limit,
+      cursor,
+      nextCursor: onchain.nextCursor ?? null,
       hasMore: purchaseTotal > page * limit || onchain.hasMore,
       totals: {
         purchases: purchaseTotal,
