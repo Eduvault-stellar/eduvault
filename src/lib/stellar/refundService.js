@@ -1,9 +1,7 @@
-import { Keypair, TransactionBuilder, Networks, Asset, Operation } from '@stellar/stellar-sdk';
+import { Keypair, TransactionBuilder, Asset, Operation } from '@stellar/stellar-sdk';
 import { loadAccount, submitTransaction } from './horizonClient';
 import { calculateDynamicFee } from './checkoutService';
-
-const isMainnet = process.env.NEXT_PUBLIC_STELLAR_NETWORK === 'mainnet';
-const networkPassphrase = isMainnet ? Networks.PUBLIC : Networks.TESTNET;
+import { NETWORK_PASSPHRASE } from '@/lib/config/chain';
 
 /**
  * Service to handle blockchain-level refund approvals.
@@ -32,7 +30,7 @@ export async function approveRefundOnChain(claimId, destinationAddress, amount, 
 
     let tx = new TransactionBuilder(adminAccount, {
       fee: String(feeStroops),
-      networkPassphrase,
+      networkPassphrase: NETWORK_PASSPHRASE,
     })
       .addOperation(paymentOp)
       .setTimeout(30)
