@@ -143,6 +143,32 @@ function parseRangeHeaderLogic(rangeHeader) {
   return { start, end };
 }
 
+function resolveRangeResponseLogic({ range, fileSize = 0 }) {
+  if (!range) return { ok: true, statusCode: 200 };
+
+  if (fileSize > 0 && range.start >= fileSize) {
+    return { ok: false, statusCode: 416, contentRange: `bytes */${fileSize}` };
+  }
+
+  if (fileSize <= 0 && range.end === Infinity) {
+    return { ok: true, statusCode: 200 };
+  }
+
+  const contentStart = range.start;
+  const contentEnd =
+    range.end !== Infinity ? (fileSize > 0 ? Math.min(range.end, fileSize - 1) : range.end) : fileSize - 1;
+  const contentLength = contentEnd - contentStart + 1;
+
+  return {
+    ok: true,
+    statusCode: 206,
+    contentStart,
+    contentEnd,
+    contentLength,
+    contentRangeTotal: fileSize > 0 ? String(fileSize) : '*',
+  };
+}
+
 const MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024 * 1024;
 
 function validateFileSizeLogic(fileSize) {
@@ -395,6 +421,56 @@ describe('Stream Service', async () => {
 
     test('should return null for non-bytes unit', () => {
       assert.equal(parseRangeHeaderLogic('items=0-10'), null);
+    });
+  });
+
+  describe('resolveRangeResponse() — resumable download safety', () => {
+    test('returns 200 when no range is requested', () => {
+      const result = resolveRangeResponseLogic({ range: null, fileSize: 1000 });
+      assert.deepEqual(result, { ok: true, statusCode: 200 });
+    });
+
+    test('resumes mid-file with a known file size', () => {
+      // Regression: a resumed download (Range: bytes=500-) against a 1000-byte
+      // file must report the exact remaining slice, not the whole file again.
+      const result = resolveRangeResponseLogic({ range: { start: 500, end: Infinity }, fileSize: 1000 });
+      assert.equal(result.ok, true);
+      assert.equal(result.statusCode, 206);
+      assert.equal(result.contentStart, 500);
+      assert.equal(result.contentEnd, 999);
+      assert.equal(result.contentLength, 500);
+      assert.equal(result.contentRangeTotal, '1000');
+    });
+
+    test('rejects a resume position at or past the known file size with 416', () => {
+      // Regression: previously this fell through to a negative Content-Length
+      // (a corrupt, unsafe response) instead of failing safely.
+      const result = resolveRangeResponseLogic({ range: { start: 1000, end: Infinity }, fileSize: 1000 });
+      assert.equal(result.ok, false);
+      assert.equal(result.statusCode, 416);
+      assert.equal(result.contentRange, 'bytes */1000');
+    });
+
+    test('falls back to a full response when file size is unknown and range is open-ended', () => {
+      // Regression: an open-ended range against unknown fileSize (0) used to
+      // compute contentEnd=0, yielding a negative Content-Length for any
+      // start > 0. Falling back to a full response avoids corrupting the file.
+      const result = resolveRangeResponseLogic({ range: { start: 2048, end: Infinity }, fileSize: 0 });
+      assert.deepEqual(result, { ok: true, statusCode: 200 });
+    });
+
+    test('honors an explicit end range even with an unknown file size', () => {
+      const result = resolveRangeResponseLogic({ range: { start: 0, end: 999 }, fileSize: 0 });
+      assert.equal(result.ok, true);
+      assert.equal(result.statusCode, 206);
+      assert.equal(result.contentLength, 1000);
+      assert.equal(result.contentRangeTotal, '*');
+    });
+
+    test('clamps an explicit end range past the known file size', () => {
+      const result = resolveRangeResponseLogic({ range: { start: 900, end: 5000 }, fileSize: 1000 });
+      assert.equal(result.contentEnd, 999);
+      assert.equal(result.contentLength, 100);
     });
   });
 
