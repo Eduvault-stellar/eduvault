@@ -33,6 +33,13 @@ export const COLLECTIONS = Object.freeze({
   files: "files",
   fileCleanupOutbox: "file_cleanup_outbox",
   uploadQuarantine: "upload_quarantine",
+
+  // Escrow / Trustless Work.
+  escrows: "escrows",
+  milestones: "milestones",
+  payouts: "payouts",
+  escrowOperations: "escrow_operations",
+  escrowOperationAudit: "escrow_operation_audit",
 });
 
 // File lifecycle states (#98). A file object moves:
@@ -62,10 +69,6 @@ export const FILE_PURPOSES = Object.freeze({
   MILESTONE_EVIDENCE: { purpose: "milestone_evidence", visibility: FILE_VISIBILITY.PRIVATE, maxBytes: 25 * 1024 * 1024 },
   PAYOUT_DOCUMENT: { purpose: "payout_document", visibility: FILE_VISIBILITY.PRIVATE, maxBytes: 10 * 1024 * 1024 },
   FEEDBACK_ATTACHMENT: { purpose: "feedback_attachment", visibility: FILE_VISIBILITY.PRIVATE, maxBytes: 10 * 1024 * 1024 },
-  // Escrow / Trustless Work.
-  escrows: "escrows",
-  milestones: "milestones",
-  payouts: "payouts",
 });
 
 export const REQUIRED_INDEXES = Object.freeze({
@@ -629,6 +632,39 @@ export const REQUIRED_INDEXES = Object.freeze({
       options: {},
     },
   ],
+
+  escrow_operations: [
+    {
+      name: "escrow_operations_idempotency_key_unique",
+      keys: { idempotencyKey: 1 },
+      options: { unique: true },
+    },
+    {
+      name: "escrow_operations_state_next_attempt",
+      keys: { state: 1, nextAttemptAt: 1 },
+      options: {},
+    },
+    {
+      name: "escrow_operations_transaction_hash",
+      keys: { transactionHash: 1 },
+      options: {
+        partialFilterExpression: { transactionHash: { $type: "string" } },
+      },
+    },
+  ],
+
+  escrow_operation_audit: [
+    {
+      name: "escrow_operation_audit_operation_created_at",
+      keys: { operationId: 1, createdAt: -1 },
+      options: {},
+    },
+    {
+      name: "escrow_operation_audit_actor_created_at",
+      keys: { actor: 1, createdAt: -1 },
+      options: {},
+    },
+  ],
 });
 
 // ── Material field contracts ───────────────────────────────────────────────
@@ -1093,6 +1129,51 @@ export const COLLECTION_VALIDATORS = Object.freeze({
         chainTxHash: { bsonType: ["string", "null"] },
         createdAt: { bsonType: "date" },
         updatedAt: { bsonType: "date" },
+      },
+    },
+  },
+
+  escrow_operations: {
+    $jsonSchema: {
+      bsonType: "object",
+      required: [
+        "idempotencyKey",
+        "operationType",
+        "payloadHash",
+        "actor",
+        "state",
+        "createdAt",
+        "updatedAt",
+      ],
+      properties: {
+        idempotencyKey: { bsonType: "string", minLength: 1 },
+        operationType: { bsonType: "string", minLength: 1 },
+        payloadHash: { bsonType: "string", minLength: 64 },
+        actor: { bsonType: ["string", "null"] },
+        state: { enum: ["pending", "submitted", "confirmed", "failed", "reconciling"] },
+        transactionHash: { bsonType: ["string", "null"] },
+        ledgerSequence: { bsonType: ["int", "long", "null"] },
+        retryCount: { bsonType: ["int", "long"] },
+        reconciliationFailureCount: { bsonType: ["int", "long"] },
+        terminal: { bsonType: "bool" },
+        nextAttemptAt: { bsonType: ["date", "null"] },
+        createdAt: { bsonType: "date" },
+        updatedAt: { bsonType: "date" },
+      },
+    },
+  },
+
+  escrow_operation_audit: {
+    $jsonSchema: {
+      bsonType: "object",
+      required: ["operationId", "action", "actor", "createdAt"],
+      properties: {
+        operationId: { bsonType: "string", minLength: 1 },
+        action: { bsonType: "string", minLength: 1 },
+        actor: { bsonType: ["string", "null"] },
+        before: { bsonType: ["object", "null"] },
+        after: { bsonType: ["object", "null"] },
+        createdAt: { bsonType: "date" },
       },
     },
   },
