@@ -3,6 +3,8 @@ export const dynamic = "force-dynamic";
 import { NextResponse } from "next/server";
 import { getUserFromCookie } from "@/lib/api/auth";
 import { auditLog } from "@/lib/api/audit";
+import { validateRequestBody } from "@/lib/api/validateRequest";
+import { closeRequestSchema } from "@/lib/materials/lifecycleSchemas";
 import {
   transitionMaterialStatus,
   MaterialLifecycleError,
@@ -29,8 +31,9 @@ export async function POST(request, { params }) {
       return NextResponse.json({ error: "Authentication required" }, { status: 401 });
     }
 
-    const body = await request.json().catch(() => ({}));
-    const reason = typeof body.reason === "string" ? body.reason.trim() || null : null;
+    const validation = await validateRequestBody(request, closeRequestSchema);
+    if (!validation.ok) return validation.response;
+    const { reason = null } = validation.data;
 
     const result = await transitionMaterialStatus({
       materialId,
