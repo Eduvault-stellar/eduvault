@@ -210,7 +210,7 @@ fn sets_asset_allowed() {
 
     assert!(!client.is_asset_allowed(&asset));
 
-    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
+    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true, &7);
     let asset_policy_events = env.events().all();
 
     assert!(client.is_asset_allowed(&asset));
@@ -219,6 +219,7 @@ fn sets_asset_allowed() {
     let info = client.get_asset_info(&asset).unwrap();
     assert_eq!(info.kind, AssetKind::Token);
     assert!(info.enabled);
+    assert_eq!(info.decimals, 7);
 
     // Check event
     let events = asset_policy_events.events();
@@ -229,9 +230,56 @@ fn sets_asset_allowed() {
             asset,
             kind: AssetKind::Token,
             enabled: true,
+            decimals: 7,
         }
         .to_xdr(&env, &contract_id)
     );
+}
+
+#[test]
+fn fails_set_asset_allowed_with_invalid_decimals() {
+    let env = Env::default();
+    let admin = Address::generate(&env);
+    let registry = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let asset = Address::generate(&env);
+
+    env.mock_all_auths();
+
+    let (_, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
+
+    let result = client.try_set_asset_allowed(&admin, &asset, &AssetKind::Token, &true, &19);
+    assert_eq!(result, Err(Ok(PurchaseError::InvalidAssetDecimals)));
+}
+
+#[test]
+fn get_asset_info_falls_back_to_v1_legacy_schema() {
+    let env = Env::default();
+    let admin = Address::generate(&env);
+    let registry = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let asset = Address::generate(&env);
+
+    env.mock_all_auths();
+
+    let (contract_id, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
+
+    // Store legacy AssetInfoV1 directly in persistent storage
+    let v1_info = AssetInfoV1 {
+        kind: AssetKind::Token,
+        enabled: true,
+    };
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .persistent()
+            .set(&DataKey::AllowedAsset(asset.clone()), &v1_info);
+    });
+
+    // get_asset_info should deserialize v1 record and default decimals to 7
+    let info = client.get_asset_info(&asset).unwrap();
+    assert_eq!(info.kind, AssetKind::Token);
+    assert!(info.enabled);
+    assert_eq!(info.decimals, 7);
 }
 
 #[test]
@@ -431,7 +479,7 @@ fn successful_purchase_creates_entitlement_and_distributes_multiple_payouts() {
     let (contract_id, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
 
     // Enable asset (USDC-style token)
-    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
+    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true, &7);
 
     let purchase_id = client.purchase(
         &buyer,
@@ -531,7 +579,7 @@ fn purchase_completed_event_has_expected_topics_and_data_shape() {
     registry_client.set_material(&material_id, &material);
 
     let (contract_id, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
-    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
+    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true, &7);
 
     // Read before the call: `purchase_internal` reads the same ledger
     // sequence internally to compute `EscrowCreatedEvent.lock_until_ledger`.
@@ -668,7 +716,7 @@ fn purchase_distribution_gives_final_recipient_rounding_remainder() {
     registry_client.set_material(&material_id, &material);
 
     let (_contract_id, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 0);
-    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
+    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true, &7);
 
     let purchase_id = client.purchase(
         &buyer,
@@ -735,7 +783,7 @@ fn rejects_invalid_registry_payout_shares_before_asset_transfer() {
     registry_client.set_material(&material_id, &material);
 
     let (_contract_id, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
-    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
+    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true, &7);
 
     let result = client.try_purchase(
         &buyer,
@@ -762,7 +810,7 @@ fn rejects_purchase_when_paused() {
     let (_contract_id, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
 
     // Enable asset
-    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
+    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true, &7);
 
     // Pause the contract
     client.set_platform_config(&admin, &treasury, &500, &true);
@@ -849,7 +897,7 @@ fn purchase_with_intent_consumes_intent_hash_once() {
     MockRegistryClient::new(&env, &registry).set_material(&material_id, &material);
 
     let (_, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
-    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
+    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true, &7);
 
     let purchase_id = client.purchase_with_intent(
         &buyer,
@@ -974,7 +1022,7 @@ fn rejects_purchase_when_material_is_paused() {
     registry_client.set_material(&material_id, &material);
 
     let (_, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
-    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
+    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true, &7);
 
     let result = client.try_purchase(
         &buyer,
@@ -1043,7 +1091,7 @@ fn has_entitlement_returns_true_after_purchase() {
     registry_client.set_material(&material_id, &material);
 
     let (_, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
-    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
+    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true, &7);
 
     // Before purchase — no entitlement
     assert!(!client.has_entitlement(&material_id, &buyer));
@@ -1109,7 +1157,7 @@ fn entitlement_is_unique_per_material_buyer_pair() {
     registry_client.set_material(&material_2, &make_material(material_2.clone()));
 
     let (_, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
-    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
+    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true, &7);
 
     // Buyer A purchases material_1
     client.purchase(
@@ -1183,7 +1231,7 @@ fn entitlement_record_matches_purchase_details() {
     registry_client.set_material(&material_id, &material);
 
     let (_, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
-    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
+    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true, &7);
 
     let purchase_id = client.purchase(
         &buyer,
@@ -1567,7 +1615,7 @@ fn purchase_completed_event_includes_transaction_id() {
     MockRegistryClient::new(&env, &registry).set_material(&material_id, &material);
 
     let (contract_id, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
-    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
+    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true, &7);
 
     let txn_id = Bytes::from_array(&env, b"checkout-uuid-1234-abcd-ef0123456789");
     client.purchase(&buyer, &material_id, &asset, &1_000_000, &txn_id);
@@ -1619,7 +1667,7 @@ fn payout_distributed_events_include_transaction_id() {
     MockRegistryClient::new(&env, &registry).set_material(&material_id, &material);
 
     let (_, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
-    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
+    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true, &7);
 
     let txn_id = Bytes::from_array(&env, b"abcdef01-2345-6789-abcd-ef0123456789");
     client.purchase(&buyer, &material_id, &asset, &500_000, &txn_id);
@@ -1666,7 +1714,7 @@ fn empty_transaction_id_is_accepted() {
     MockRegistryClient::new(&env, &registry).set_material(&material_id, &material);
 
     let (_, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
-    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
+    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true, &7);
 
     let empty_txn = Bytes::new(&env);
     let purchase_id = client.purchase(&buyer, &material_id, &asset, &100_000, &empty_txn);
@@ -1731,7 +1779,7 @@ fn get_asset_info_works() {
 
     // Asset info
     assert!(client.get_asset_info(&asset).is_none());
-    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
+    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true, &7);
     let info = client.get_asset_info(&asset).unwrap();
     assert_eq!(info.kind, AssetKind::Token);
     assert!(info.enabled);
@@ -1828,7 +1876,7 @@ fn purchase_fails_for_invalid_material() {
     registry_client.set_material(&material_id, &material);
 
     let (_, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
-    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
+    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true, &7);
 
     let invalid_material_id = bytes32(&env, 100);
 
@@ -1881,7 +1929,7 @@ fn escrow_record_queryable_after_purchase() {
     registry_client.set_material(&material_id, &material);
 
     let (_, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
-    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
+    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true, &7);
 
     let purchase_id = client.purchase(
         &buyer,
@@ -1939,7 +1987,7 @@ fn withdraw_payouts_fails_before_lock_period() {
     registry_client.set_material(&material_id, &material);
 
     let (_, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
-    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
+    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true, &7);
 
     let purchase_id = client.purchase(
         &buyer,
@@ -2008,7 +2056,7 @@ fn withdraw_payouts_succeeds_after_lock_period() {
     registry_client.set_material(&material_id, &material);
 
     let (contract_id, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
-    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
+    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true, &7);
 
     assert_eq!(client.get_creator_tier(&creator), CreatorTier::Default);
 
@@ -2075,7 +2123,7 @@ fn withdraw_payouts_fails_for_non_recipient() {
     registry_client.set_material(&material_id, &material);
 
     let (_, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
-    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
+    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true, &7);
     client.set_creator_tier(&admin, &creator, &CreatorTier::Tier1);
 
     assert_eq!(client.get_creator_tier(&creator), CreatorTier::Tier1);
@@ -2133,7 +2181,7 @@ fn withdraw_payouts_fails_when_already_claimed() {
     registry_client.set_material(&material_id, &material);
 
     let (_, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
-    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
+    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true, &7);
     client.set_creator_tier(&admin, &creator, &CreatorTier::Tier2);
 
     assert_eq!(client.get_creator_tier(&creator), CreatorTier::Tier2);
@@ -2211,7 +2259,7 @@ fn is_escrow_releasable_returns_false_before_lock_period() {
     registry_client.set_material(&material_id, &material);
 
     let (_, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
-    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
+    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true, &7);
 
     assert_eq!(
         client.get_creator_tier(&Address::generate(&env)),
@@ -2265,7 +2313,7 @@ fn is_escrow_releasable_returns_true_after_lock_period() {
     registry_client.set_material(&material_id, &material);
 
     let (_, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
-    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
+    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true, &7);
 
     let purchase_id = client.purchase(
         &buyer,
@@ -2331,7 +2379,7 @@ fn sac_purchase_uses_real_balances_and_explicit_buyer_authorization() {
         },
     );
     let (contract_id, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
-    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
+    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true, &7);
 
     let fee_transfer = MockAuthInvoke {
         contract: &asset,

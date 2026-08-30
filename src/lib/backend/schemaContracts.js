@@ -33,6 +33,11 @@ export const COLLECTIONS = Object.freeze({
   files: "files",
   fileCleanupOutbox: "file_cleanup_outbox",
   uploadQuarantine: "upload_quarantine",
+
+  // Escrow / Trustless Work.
+  escrows: "escrows",
+  milestones: "milestones",
+  payouts: "payouts",
 });
 
 // File lifecycle states (#98). A file object moves:
@@ -62,10 +67,6 @@ export const FILE_PURPOSES = Object.freeze({
   MILESTONE_EVIDENCE: { purpose: "milestone_evidence", visibility: FILE_VISIBILITY.PRIVATE, maxBytes: 25 * 1024 * 1024 },
   PAYOUT_DOCUMENT: { purpose: "payout_document", visibility: FILE_VISIBILITY.PRIVATE, maxBytes: 10 * 1024 * 1024 },
   FEEDBACK_ATTACHMENT: { purpose: "feedback_attachment", visibility: FILE_VISIBILITY.PRIVATE, maxBytes: 10 * 1024 * 1024 },
-  // Escrow / Trustless Work.
-  escrows: "escrows",
-  milestones: "milestones",
-  payouts: "payouts",
 });
 
 export const REQUIRED_INDEXES = Object.freeze({

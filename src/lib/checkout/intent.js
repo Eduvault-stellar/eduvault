@@ -140,13 +140,19 @@ function normalizeAsset(asset) {
       code: asset,
       issuer: null,
       contract: null,
+      decimals: CHECKOUT_AMOUNT_DECIMALS,
     };
   }
+
+  const decimals = Number.isInteger(asset?.decimals)
+    ? asset.decimals
+    : (Number.isInteger(asset?.precision) ? asset.precision : CHECKOUT_AMOUNT_DECIMALS);
 
   return {
     code: String(asset?.code || asset?.assetCode || asset?.symbol || "").trim(),
     issuer: asset?.issuer || null,
     contract: asset?.contract || asset?.contractId || asset?.address || null,
+    decimals,
   };
 }
 
@@ -177,8 +183,9 @@ export function buildCheckoutIntentTerms({
     );
   }
 
+  const assetDecimals = resolvedAsset.decimals ?? CHECKOUT_AMOUNT_DECIMALS;
   const price = resolveMaterialPrice(material);
-  const baseAmountUnits = decimalToAtomicUnits(price);
+  const baseAmountUnits = decimalToAtomicUnits(price, assetDecimals);
   const discountUnits = bpsAmount(baseAmountUnits, discountBps);
   const discountedUnits = baseAmountUnits - discountUnits;
   const taxUnits = bpsAmount(discountedUnits, taxBps);
@@ -206,8 +213,8 @@ export function buildCheckoutIntentTerms({
     asset: resolvedAsset,
     amount: {
       units: amountUnits.toString(),
-      decimals: CHECKOUT_AMOUNT_DECIMALS,
-      display: atomicUnitsToDecimal(amountUnits),
+      decimals: assetDecimals,
+      display: atomicUnitsToDecimal(amountUnits, assetDecimals),
     },
     feeBreakdown: {
       baseUnits: baseAmountUnits.toString(),
