@@ -1678,8 +1678,12 @@ fn payout_distributed_events_include_transaction_id() {
     assert!(entitlement.active);
 }
 
+/// Regression test for the reconciliation-integrity bug this fix closes: an
+/// empty `transaction_id` used to be accepted, producing a purchase with no
+/// usable correlation identifier. It must now be rejected before any state
+/// changes or asset transfers occur.
 #[test]
-fn empty_transaction_id_is_accepted() {
+fn empty_transaction_id_is_rejected() {
     let env = Env::default();
     env.mock_all_auths();
 
@@ -1689,6 +1693,7 @@ fn empty_transaction_id_is_accepted() {
     let buyer = Address::generate(&env);
     let creator = Address::generate(&env);
     let asset = env.register(MockAsset, ());
+    let asset_client = MockAssetClient::new(&env, &asset);
 
     let material_id = bytes32(&env, 62);
     let material = MaterialRecord {
@@ -1717,7 +1722,164 @@ fn empty_transaction_id_is_accepted() {
     client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true, &7);
 
     let empty_txn = Bytes::new(&env);
-    let purchase_id = client.purchase(&buyer, &material_id, &asset, &100_000, &empty_txn);
+    let result = client.try_purchase(&buyer, &material_id, &asset, &100_000, &empty_txn);
+
+    assert_eq!(result, Err(Ok(PurchaseError::InvalidTransactionId)));
+    assert!(!client.has_entitlement(&material_id, &buyer));
+    assert_eq!(asset_client.transfer_count(), 0);
+}
+
+/// `purchase_with_intent` shares `execute_purchase` with `purchase`, so an
+/// empty `transaction_id` must be rejected there too, before the intent hash
+/// is marked consumed (a rejected purchase must not burn the intent).
+#[test]
+fn purchase_with_intent_rejects_empty_transaction_id() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().set_sequence_number(50);
+
+    let admin = Address::generate(&env);
+    let registry = env.register(MockRegistry, ());
+    let treasury = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let creator = Address::generate(&env);
+    let asset = env.register(MockAsset, ());
+    let material_id = bytes32(&env, 63);
+    let intent_hash = bytes32(&env, 64);
+    let policy_version = Bytes::from_array(&env, b"checkout-intent-v1");
+
+    let material = MaterialRecord {
+        material_id: material_id.clone(),
+        creator,
+        paused: false,
+        status: MaterialStatus::Active,
+        quotes: vec![
+            &env,
+            AssetQuote {
+                asset: asset.clone(),
+                amount: 100_000,
+            },
+        ],
+        payout_shares: vec![
+            &env,
+            PayoutShare {
+                recipient: Address::generate(&env),
+                share_bps: 10_000,
+            },
+        ],
+    };
+    MockRegistryClient::new(&env, &registry).set_material(&material_id, &material);
+
+    let (_, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
+    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
+
+    let result = client.try_purchase_with_intent(
+        &buyer,
+        &material_id,
+        &asset,
+        &100_000,
+        &Bytes::new(&env),
+        &intent_hash,
+        &60,
+        &policy_version,
+    );
+
+    assert_eq!(result, Err(Ok(PurchaseError::InvalidTransactionId)));
+    assert!(!client.is_intent_consumed(&intent_hash));
+}
+
+/// Boundary: a `transaction_id` larger than `MAX_TRANSACTION_ID_LEN` is
+/// malformed for correlation purposes and must be rejected the same way an
+/// empty one is, before it can inflate escrow-record and event storage.
+#[test]
+fn oversized_transaction_id_is_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let registry = env.register(MockRegistry, ());
+    let treasury = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let creator = Address::generate(&env);
+    let asset = env.register(MockAsset, ());
+
+    let material_id = bytes32(&env, 65);
+    let material = MaterialRecord {
+        material_id: material_id.clone(),
+        creator,
+        paused: false,
+        status: MaterialStatus::Active,
+        quotes: vec![
+            &env,
+            AssetQuote {
+                asset: asset.clone(),
+                amount: 100_000,
+            },
+        ],
+        payout_shares: vec![
+            &env,
+            PayoutShare {
+                recipient: Address::generate(&env),
+                share_bps: 10_000,
+            },
+        ],
+    };
+    MockRegistryClient::new(&env, &registry).set_material(&material_id, &material);
+
+    let (_, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
+    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
+
+    let oversized_txn = Bytes::from_array(&env, &[b'a'; (MAX_TRANSACTION_ID_LEN + 1) as usize]);
+    let result = client.try_purchase(&buyer, &material_id, &asset, &100_000, &oversized_txn);
+
+    assert_eq!(result, Err(Ok(PurchaseError::InvalidTransactionId)));
+    assert!(!client.has_entitlement(&material_id, &buyer));
+}
+
+/// Boundary: a `transaction_id` at exactly `MAX_TRANSACTION_ID_LEN` is still
+/// valid -- the bound must reject what's oversized without rejecting the
+/// legitimate edge.
+#[test]
+fn transaction_id_at_max_length_is_accepted() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let registry = env.register(MockRegistry, ());
+    let treasury = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let creator = Address::generate(&env);
+    let asset = env.register(MockAsset, ());
+
+    let material_id = bytes32(&env, 66);
+    let material = MaterialRecord {
+        material_id: material_id.clone(),
+        creator,
+        paused: false,
+        status: MaterialStatus::Active,
+        quotes: vec![
+            &env,
+            AssetQuote {
+                asset: asset.clone(),
+                amount: 100_000,
+            },
+        ],
+        payout_shares: vec![
+            &env,
+            PayoutShare {
+                recipient: Address::generate(&env),
+                share_bps: 10_000,
+            },
+        ],
+    };
+    MockRegistryClient::new(&env, &registry).set_material(&material_id, &material);
+
+    let (_, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
+    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
+
+    let max_len_txn = Bytes::from_array(&env, &[b'a'; MAX_TRANSACTION_ID_LEN as usize]);
+    let purchase_id = client.purchase(&buyer, &material_id, &asset, &100_000, &max_len_txn);
+
     assert_eq!(purchase_id, 0);
     assert!(client.has_entitlement(&material_id, &buyer));
 }
