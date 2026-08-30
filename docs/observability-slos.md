@@ -77,6 +77,8 @@ beyond the cap are dropped rather than growing memory unbounded.
 | `indexer_dead_letter_count` | gauge | source | Unresolved failed events |
 | `stellar_sync_batches_total` | counter | source, outcome | Stellar sync batch outcomes |
 | `stellar_sync_events_total` | counter | source, outcome | Stellar event apply outcomes |
+| `admin_guard_denied_total` | counter | reason | Admin UI denials by bounded reason (`#134`) |
+| `admin_guard_granted_total` | counter | — | Admin UI grants after server-verified identity |
 | `dependency_up` | gauge | dependency | 1/0 per dependency from `/api/ready` |
 
 ## Alerts & runbooks
@@ -146,6 +148,12 @@ operation metadata: no request body, file bytes, secrets, or credentials.
 - Stellar sync records batch completion, fetch failures, and each event that
   enters the dead-letter path. Search by `eventId` or `correlationId` to
   connect an operational record to its trace.
+- The admin UI guard (`#134`) records a denial (`admin_guard_denied_total`)
+  whenever `/admin/*` is rejected, and emits an allow-listed
+  `admin_guard_denied` audit event (with the session subject `actor` and
+  denied `role` where known) only after a verified session exists — so
+  anonymous scanners cannot flood the audit stream. Grants surface only as
+  `admin_guard_granted_total`.
 
 ## Health vs readiness
 

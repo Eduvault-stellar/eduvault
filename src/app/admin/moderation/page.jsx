@@ -2,7 +2,13 @@
 
 import React, { useState, useEffect } from 'react';
 import './moderation.css';
-import { withAdminGuard } from '@/lib/auth/adminAuth';
+
+/**
+ * This client page is rendered inside the server-side /admin layout
+ * (src/app/admin/layout.jsx), which verifies the session against the profile
+ * database before allowing any /admin UI to render. Client-side guards cannot
+ * authorize users, so no guard is placed here (see #134).
+ */
 
 /**
  * Mock fetch for flagged items – in real code this would call the backend.
@@ -72,4 +78,3 @@ function ModerationDashboard() {
     </section>
   );
 }
-export default withAdminGuard(ModerationDashboard);
