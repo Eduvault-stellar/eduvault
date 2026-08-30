@@ -27,6 +27,7 @@ import { verifyDeliveryToken } from '@/lib/delivery/token';
 import {
   createUpstreamStream,
   parseRangeHeader,
+  resolveRangeResponse,
   resolveVerifiedDeliverable,
 } from '@/lib/delivery/stream';
 import { recordDeliveryAudit } from '@/lib/delivery/audit';
@@ -120,15 +121,42 @@ export async function GET(request) {
 
       const { material, version } = deliverable;
 
-      // ── 4. Parse range header ───────────────────────────────────────────
+      // ── 4. Parse and validate the range header ──────────────────────────
       const rangeHeader = request.headers.get('range');
       const range = parseRangeHeader(rangeHeader);
+      const rangeResolution = resolveRangeResponse({ range, fileSize: material.fileSize });
+
+      if (!rangeResolution.ok) {
+        await recordDeliveryAudit({
+          event: 'delivery_stream_denied',
+          actor: verification.payload?.ba,
+          buyerAddress,
+          materialId,
+          result: 'range_not_satisfiable',
+          rangeStart: range?.start ?? null,
+          rangeEnd: range?.end === Infinity ? null : (range?.end ?? null),
+          statusCode: rangeResolution.statusCode,
+          durationMs: Date.now() - startedAt,
+          clientIp,
+          userAgent: request.headers.get('user-agent') || null,
+        });
+        return new NextResponse(null, {
+          status: rangeResolution.statusCode,
+          headers: { 'Content-Range': rangeResolution.contentRange },
+        });
+      }
+
+      const statusCode = rangeResolution.statusCode;
+      const isPartial = statusCode === 206;
 
       // ── 5. Create upstream stream (client disconnect via hardening) ─────
+      // Only forward the Range upstream when we are actually honoring it —
+      // an ignored/downgraded range (see resolveRangeResponse) must fetch
+      // the full file so the response body matches the headers below.
       const upstreamStream = createUpstreamStream({
         cid: material.cid,
         fileSize: material.fileSize,
-        range,
+        range: isPartial ? range : null,
         signal: disconnectSignal,
       });
 
@@ -144,20 +172,10 @@ export async function GET(request) {
         'X-Manifest-Verified': 'true',
       };
 
-      let statusCode = 200;
-
-      if (range) {
-        statusCode = 206;
-        const contentStart = range.start;
-        const contentEnd =
-          range.end !== Infinity
-            ? range.end
-            : material.fileSize > 0
-              ? material.fileSize - 1
-              : 0;
-        const contentLength = contentEnd - contentStart + 1;
-        headers['Content-Range'] = `bytes ${contentStart}-${contentEnd}/${material.fileSize || contentLength}`;
-        headers['Content-Length'] = String(contentLength);
+      if (isPartial) {
+        headers['Content-Range'] =
+          `bytes ${rangeResolution.contentStart}-${rangeResolution.contentEnd}/${rangeResolution.contentRangeTotal}`;
+        headers['Content-Length'] = String(rangeResolution.contentLength);
       } else if (material.fileSize > 0) {
         headers['Content-Length'] = String(material.fileSize);
       }
@@ -168,13 +186,9 @@ export async function GET(request) {
         actor: verification.payload?.ba,
         buyerAddress,
         materialId,
-        bytesRequested: range
-          ? range.end === Infinity
-            ? null
-            : range.end - range.start + 1
-          : material.fileSize || null,
-        rangeStart: range?.start ?? null,
-        rangeEnd: range?.end ?? null,
+        bytesRequested: isPartial ? rangeResolution.contentLength : material.fileSize || null,
+        rangeStart: isPartial ? rangeResolution.contentStart : null,
+        rangeEnd: isPartial ? rangeResolution.contentEnd : null,
         result: 'started',
         statusCode,
         durationMs: Date.now() - startedAt,

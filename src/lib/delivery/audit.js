@@ -7,8 +7,8 @@
  * persistent storage for compliance and debugging.
  */
 
-import { getDb } from '@/lib/mongodb';
-import { currentCorrelationId } from '@/lib/telemetry/context';
+import { getDb } from '../mongodb.js';
+import { currentCorrelationId } from '../telemetry/context.js';
 
 const SAFE_AUDIT_FIELDS = new Set([
   'event',
@@ -47,6 +47,8 @@ const SAFE_AUDIT_FIELDS = new Set([
  * @param {number} [fields.durationMs] - Request duration in milliseconds
  * @param {string} [fields.errorReason] - Error reason if failed
  */
+import { canonicalJsonStringify, computeRecordHash } from '../api/audit.js';
+
 export async function recordDeliveryAudit(fields) {
   const correlationId = currentCorrelationId() || fields.correlationId || null;
 
@@ -62,22 +64,83 @@ export async function recordDeliveryAudit(fields) {
     }
   }
 
-  // Always log to console for immediate observability
-  console.info('[delivery-audit]', JSON.stringify(entry));
+  // Clean entry
+  const cleanEntry = Object.fromEntries(
+    Object.entries(entry).filter(([, value]) => value !== undefined && value !== null)
+  );
+
+  let previousHash = '0'.repeat(64);
 
   // Persist to MongoDB for compliance and debugging
   try {
     const db = await getDb();
-    await db.collection('delivery_audit').insertOne({
-      ...entry,
+    const collection = db.collection('delivery_audit');
+    const lastRecord = await collection.findOne({}, { sort: { _id: -1 } });
+    if (lastRecord && lastRecord.hash) {
+      previousHash = lastRecord.hash;
+    }
+
+    const payloadToHash = { ...cleanEntry, previousHash };
+    const hash = computeRecordHash(payloadToHash, previousHash);
+
+    const docToInsert = {
+      ...cleanEntry,
+      previousHash,
+      hash,
       createdAt: new Date(),
-    });
+    };
+
+    console.info('[delivery-audit]', JSON.stringify(docToInsert));
+
+    await collection.insertOne(docToInsert);
+    return docToInsert;
   } catch (err) {
     // Non-blocking: don't fail the request if audit write fails
     console.error('[delivery-audit] failed to persist audit entry:', err.message);
+    const fallbackHash = computeRecordHash({ ...cleanEntry, previousHash }, previousHash);
+    return { ...cleanEntry, previousHash, hash: fallbackHash };
+  }
+}
+
+/**
+ * Verifies the append-only tamper-evident hash chain for delivery audit logs.
+ *
+ * @param {object} [dbInstance]
+ * @returns {Promise<{ valid: boolean, recordsCount: number, error: string|null }>}
+ */
+export async function verifyDeliveryAuditChain(dbInstance) {
+  const db = dbInstance || (await getDb());
+  const records = await db.collection('delivery_audit').find({}).sort({ _id: 1 }).toArray();
+
+  let expectedPrevHash = '0'.repeat(64);
+
+  for (let i = 0; i < records.length; i++) {
+    const record = records[i];
+    if (record.previousHash && record.previousHash !== expectedPrevHash) {
+      return {
+        valid: false,
+        recordsCount: records.length,
+        error: `Broken chain at index ${i}: stored previousHash=${record.previousHash}, expected=${expectedPrevHash}`,
+      };
+    }
+
+    const { _id, createdAt, hash, previousHash, ...cleanPayload } = record;
+    const computedPrev = previousHash || expectedPrevHash;
+    const payloadToHash = { ...cleanPayload, previousHash: computedPrev };
+    const recomputedHash = computeRecordHash(payloadToHash, computedPrev);
+
+    if (hash && record.hash !== recomputedHash) {
+      return {
+        valid: false,
+        recordsCount: records.length,
+        error: `Tampered record at index ${i}: stored hash=${record.hash}, recomputed=${recomputedHash}`,
+      };
+    }
+
+    expectedPrevHash = record.hash || recomputedHash;
   }
 
-  return entry;
+  return { valid: true, recordsCount: records.length, error: null };
 }
 
 /**

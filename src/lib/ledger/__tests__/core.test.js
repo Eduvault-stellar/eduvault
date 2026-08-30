@@ -76,6 +76,31 @@ describe("money", () => {
     expect(() => toStroops(Number.NaN)).toThrow(MoneyError);
   });
 
+  it("supports custom asset precision (decimals)", () => {
+    // 2 decimals (e.g. fiat style)
+    expect(toStroops("12.34", 2)).toBe(1234n);
+    expect(fromStroops(1234n, 2)).toBe("12.34");
+
+    // 6 decimals (e.g. USDC style)
+    expect(toStroops("1.5", 6)).toBe(1_500_000n);
+    expect(fromStroops(1_500_000n, 6)).toBe("1.5");
+
+    // 0 decimals
+    expect(toStroops("100", 0)).toBe(100n);
+    expect(fromStroops(100n, 0)).toBe("100");
+  });
+
+  it("validates asset precision parameter", () => {
+    expect(() => toStroops("10", -1)).toThrow(MoneyError);
+    expect(() => toStroops("10", 19)).toThrow(MoneyError);
+    expect(() => fromStroops(100n, 2.5)).toThrow(MoneyError);
+  });
+
+  it("rejects over-precise amounts for custom precision", () => {
+    expect(() => toStroops("1.234", 2)).toThrow(MoneyError);
+    expect(() => toStroops("1.0000001", 6)).toThrow(MoneyError);
+  });
+
   it("builds canonical asset keys", () => {
     expect(assetKey("XLM")).toBe(NATIVE_ASSET_KEY);
     expect(assetKey(null)).toBe(NATIVE_ASSET_KEY);

@@ -58,7 +58,12 @@ export function assetKey(code, issuer = null) {
  * NaN/Infinity, empty input, and over-precise values. Never uses Number math on
  * the fractional part, so no precision is lost.
  */
-export function toStroops(value) {
+export function toStroops(value, decimals = STROOP_SCALE) {
+  const scale = Number(decimals);
+  if (!Number.isInteger(scale) || scale < 0 || scale > 18) {
+    throw new MoneyError(`Invalid asset precision: ${decimals}`, "invalid_precision");
+  }
+
   if (typeof value === "bigint") return value;
 
   if (typeof value === "number") {
@@ -86,29 +91,36 @@ export function toStroops(value) {
   const unsigned = negative ? trimmed.slice(1) : trimmed;
   const [whole, fraction = ""] = unsigned.split(".");
 
-  if (fraction.length > STROOP_SCALE) {
+  if (fraction.length > scale) {
     throw new MoneyError(
-      `Amount "${value}" has ${fraction.length} fractional digits; at most ${STROOP_SCALE} are allowed`,
+      `Amount "${value}" has ${fraction.length} fractional digits; at most ${scale} are allowed`,
       "precision_exceeded",
     );
   }
 
-  const paddedFraction = fraction.padEnd(STROOP_SCALE, "0");
-  const stroops = BigInt(whole) * STROOP_FACTOR + BigInt(paddedFraction || "0");
+  const factor = 10n ** BigInt(scale);
+  const paddedFraction = fraction.padEnd(scale, "0");
+  const stroops = BigInt(whole) * factor + BigInt(paddedFraction || "0");
   return negative ? -stroops : stroops;
 }
 
 /** Format integer stroops as a canonical decimal string (trailing zeros trimmed). */
-export function fromStroops(stroops) {
+export function fromStroops(stroops, decimals = STROOP_SCALE) {
+  const scale = Number(decimals);
+  if (!Number.isInteger(scale) || scale < 0 || scale > 18) {
+    throw new MoneyError(`Invalid asset precision: ${decimals}`, "invalid_precision");
+  }
+
   const value = asStroops(stroops);
+  const factor = 10n ** BigInt(scale);
   const negative = value < 0n;
   const abs = negative ? -value : value;
-  const whole = abs / STROOP_FACTOR;
-  const fraction = abs % STROOP_FACTOR;
+  const whole = abs / factor;
+  const fraction = abs % factor;
 
   let result = whole.toString();
   if (fraction > 0n) {
-    const fractionStr = fraction.toString().padStart(STROOP_SCALE, "0").replace(/0+$/, "");
+    const fractionStr = fraction.toString().padStart(scale, "0").replace(/0+$/, "");
     result += `.${fractionStr}`;
   }
   return negative ? `-${result}` : result;

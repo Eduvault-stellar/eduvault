@@ -939,6 +939,32 @@ fn rejects_empty_file_cid() {
 }
 
 #[test]
+fn rejects_file_cid_too_long() {
+    let env = Env::default();
+    let (_contract_id, client, _admin, xlm, usdc) = install_and_init_contract(&env);
+    env.mock_all_auths();
+
+    let creator = Address::generate(&env);
+    let material_id = client.register_material(
+        &creator,
+        &metadata_uri(&env),
+        &bytes32(&env, 1),
+        &bytes32(&env, 2),
+        &default_quotes(&env, &xlm, &usdc),
+        &default_payout_shares(&env),
+    );
+
+    let digest = version_manifest_digest(&env, 11);
+    let oversized_cid_str = "Q".repeat((MAX_FILE_CID_LEN + 1) as usize);
+    let oversized_cid = String::from_str(&env, &oversized_cid_str);
+    let file_hash = version_manifest_digest(&env, 21);
+
+    let result =
+        client.try_publish_version(&material_id, &1, &digest, &oversized_cid, &file_hash, &None);
+    assert_eq!(result, Err(Ok(RegistryError::FileCidTooLong)));
+}
+
+#[test]
 fn rejects_version_chain_break() {
     let env = Env::default();
     let (_contract_id, client, _admin, xlm, usdc) = install_and_init_contract(&env);
@@ -1127,6 +1153,36 @@ fn cannot_withdraw_already_withdrawn_version() {
         &String::from_str(&env, "second recall"),
     );
     assert_eq!(result, Err(Ok(RegistryError::VersionAlreadyWithdrawn)));
+}
+
+#[test]
+fn rejects_withdrawal_reason_too_long() {
+    let env = Env::default();
+    let (_contract_id, client, _admin, xlm, usdc) = install_and_init_contract(&env);
+    env.mock_all_auths();
+
+    let creator = Address::generate(&env);
+    let material_id = client.register_material(
+        &creator,
+        &metadata_uri(&env),
+        &bytes32(&env, 1),
+        &bytes32(&env, 2),
+        &default_quotes(&env, &xlm, &usdc),
+        &default_payout_shares(&env),
+    );
+
+    let digest = version_manifest_digest(&env, 11);
+    let file_cid = version_file_cid(&env, 1);
+    let file_hash = version_manifest_digest(&env, 21);
+
+    client.publish_version(&material_id, &1, &digest, &file_cid, &file_hash, &None);
+
+    let oversized_reason_str = "x".repeat((MAX_WITHDRAWAL_REASON_LEN + 1) as usize);
+    let oversized_reason = String::from_str(&env, &oversized_reason_str);
+
+    let result =
+        client.try_withdraw_version(&creator, &material_id, &1, &oversized_reason);
+    assert_eq!(result, Err(Ok(RegistryError::WithdrawalReasonTooLong)));
 }
 
 #[test]
