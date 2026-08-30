@@ -6,6 +6,7 @@ import { useEffect, useState, useCallback } from "react";
 import { FaDownload, FaExternalLinkAlt, FaShoppingBag, FaSpinner, FaCheckCircle } from "react-icons/fa";
 import { MdOutlineSchool } from "react-icons/md";
 import { getExplorerTxUrl } from "@/lib/config/chain";
+import { downloadWithResume } from "@/lib/delivery/resumableDownload";
 
 function formatDate(dateStr) {
   if (!dateStr) return "—";
@@ -94,43 +95,21 @@ function PurchasedMaterialCard({ item }) {
       const { deliveryToken, expiresAt, streamEndpoint, fileName: originalTitle, contentType: fileContentType } = await tokenRes.json();
       const title = originalTitle || "material";
 
-      // Step 2: Stream through the authenticated proxy
+      // Step 2: Stream through the authenticated proxy. Large downloads can
+      // be interrupted by a flaky mobile connection; downloadWithResume
+      // retries with a byte-range request from the last received byte
+      // instead of restarting the whole file.
       const streamUrl = `${streamEndpoint}?token=${encodeURIComponent(deliveryToken)}&materialId=${encodeURIComponent(item.materialId)}`;
-      const response = await fetch(streamUrl);
-      if (!response.ok) {
-        if (response.status === 410) {
-          throw new Error("Download token expired. Please try again.");
-        }
-        throw new Error("Failed to connect to delivery service");
-      }
 
-      const contentLength = response.headers.get("Content-Length");
-      const totalBytes = contentLength ? parseInt(contentLength, 10) : null;
-
-      let loadedBytes = 0;
-      const startTime = Date.now();
-      let lastReportTime = startTime;
+      let lastReportTime = Date.now();
       let lastReportBytes = 0;
 
-      if (!response.body) {
-        throw new Error("ReadableStream not supported by the browser");
-      }
+      const { blob } = await downloadWithResume(streamUrl, {
+        fallbackContentType: fileContentType || "application/octet-stream",
+        onProgress: ({ loadedBytes, totalBytes }) => {
+          const now = Date.now();
+          if (now - lastReportTime <= 250) return;
 
-      const reader = response.body.getReader();
-      const chunks = [];
-
-      while (true) {
-        const { done, value } = await reader.read();
-
-        if (done) {
-          break;
-        }
-
-        chunks.push(value);
-        loadedBytes += value.length;
-
-        const now = Date.now();
-        if (now - lastReportTime > 250) {
           const timeDiff = (now - lastReportTime) / 1000;
           const bytesDiff = loadedBytes - lastReportBytes;
           const speed = bytesDiff / timeDiff;
@@ -147,14 +126,11 @@ function PurchasedMaterialCard({ item }) {
           setProgress({ percent, speed, eta });
           lastReportTime = now;
           lastReportBytes = loadedBytes;
-        }
-      }
+        },
+      });
 
       setProgress({ percent: 100, speed: 0, eta: 0 });
 
-      const blob = new Blob(chunks, {
-        type: response.headers.get("Content-Type") || fileContentType || "application/octet-stream",
-      });
       const objectUrl = URL.createObjectURL(blob);
 
       const anchor = document.createElement("a");
