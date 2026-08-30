@@ -1,8 +1,6 @@
+import { HORIZON_URL } from "@/lib/config/chain";
+
 const DEFAULT_CACHE_TTL_MS = 60_000;
-const HORIZON_BASE_URL =
-  process.env.NEXT_PUBLIC_STELLAR_NETWORK === "PUBLIC"
-    ? "https://horizon.stellar.org"
-    : "https://horizon-testnet.stellar.org";
 
 function getCacheStore() {
   if (!globalThis.__eduvaultHistoryCache) {

@@ -287,6 +287,54 @@ function combineAbortSignals(signal1, signal2) {
 }
 
 /**
+ * Resolve the status code and byte-range headers for a delivery response.
+ *
+ * Fails safe when a resume request cannot be honored:
+ *   - A range starting at or past a known file size is rejected with 416
+ *     (Range Not Satisfiable) instead of emitting a negative/corrupt
+ *     Content-Length.
+ *   - An open-ended range (`bytes=N-`) against an unknown file size cannot
+ *     be turned into a valid Content-Length, so the range is ignored and
+ *     the full file is served (200) rather than corrupting the download.
+ *
+ * @param {object} params
+ * @param {{start: number, end: number}|null} params.range
+ * @param {number} [params.fileSize]
+ * @returns {
+ *   | { ok: true, statusCode: 200 }
+ *   | { ok: true, statusCode: 206, contentStart: number, contentEnd: number, contentLength: number, contentRangeTotal: string }
+ *   | { ok: false, statusCode: 416, contentRange: string }
+ * }
+ */
+export function resolveRangeResponse({ range, fileSize = 0 }) {
+  if (!range) return { ok: true, statusCode: 200 };
+
+  if (fileSize > 0 && range.start >= fileSize) {
+    return { ok: false, statusCode: 416, contentRange: `bytes */${fileSize}` };
+  }
+
+  if (fileSize <= 0 && range.end === Infinity) {
+    // Total size is unknown and the range has no explicit end: there is no
+    // safe way to compute a Content-Length, so fall back to a full response.
+    return { ok: true, statusCode: 200 };
+  }
+
+  const contentStart = range.start;
+  const contentEnd =
+    range.end !== Infinity ? (fileSize > 0 ? Math.min(range.end, fileSize - 1) : range.end) : fileSize - 1;
+  const contentLength = contentEnd - contentStart + 1;
+
+  return {
+    ok: true,
+    statusCode: 206,
+    contentStart,
+    contentEnd,
+    contentLength,
+    contentRangeTotal: fileSize > 0 ? String(fileSize) : '*',
+  };
+}
+
+/**
  * Validate that a file size is within acceptable limits.
  */
 export function validateFileSize(fileSize) {

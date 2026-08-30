@@ -12,6 +12,8 @@ const MAX_PLATFORM_FEE_BPS: u32 = 1_000;
 const MAX_PAYOUT_RECIPIENTS: u32 = 5;
 const ESCROW_LOCK_PERIOD_LEDGERS: u32 = 35_000;
 const MAX_ORACLE_SCALE: u32 = 18;
+const MAX_TRANSACTION_ID_LEN: u32 = 128;
+const MAX_POLICY_VERSION_LEN: u32 = 64;
 
 /// Volume-tier discounted fee rates (basis points).
 /// Tier 1: 2.5 %, Tier 2: 1.5 %.
@@ -238,6 +240,10 @@ pub enum PurchaseError {
     OracleDeviationExceeded = 85,
     InvalidOracleQuote = 86,
     ArithmeticOverflow = 87,
+
+    // Caller-controlled input length errors
+    TransactionIdTooLong = 88,
+    PolicyVersionTooLong = 89,
 }
 
 /// Event: purchase.completed
@@ -573,6 +579,10 @@ impl PurchaseManager {
         expires_ledger: u32,
         policy_version: Bytes,
     ) -> Result<u64, PurchaseError> {
+        if policy_version.len() > MAX_POLICY_VERSION_LEN {
+            return Err(PurchaseError::PolicyVersionTooLong);
+        }
+
         if env.ledger().sequence() > expires_ledger {
             return Err(PurchaseError::IntentExpired);
         }
@@ -1105,6 +1115,10 @@ fn execute_purchase(
     intent_meta: Option<(BytesN<32>, Bytes, u32)>,
 ) -> Result<u64, PurchaseError> {
     buyer.require_auth();
+
+    if transaction_id.len() > MAX_TRANSACTION_ID_LEN {
+        return Err(PurchaseError::TransactionIdTooLong);
+    }
 
     let config = get_platform_config(&env)?;
 
