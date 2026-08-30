@@ -21,18 +21,28 @@ export async function POST(request, { params }) {
 
     if (!webhook) return NextResponse.json({ error: "Webhook not found" }, { status: 404 });
 
+    const body = await request.json().catch(() => ({}));
+    const isCompromise = Boolean(body.revokeImmediately || body.compromised);
+
     const newSecret = crypto.randomBytes(32).toString('hex');
     const now = new Date();
-    // Overlapping key rotation: old keys expire in 24h
-    const expiration = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+    const overlapHours = Number(process.env.WEBHOOK_ROTATION_OVERLAP_HOURS || 24);
+    const expiration = new Date(now.getTime() + overlapHours * 60 * 60 * 1000);
     
-    const updatedSecrets = webhook.secrets.map(s => 
-      s.expiresAt ? s : { ...s, expiresAt: expiration }
-    );
+    const updatedSecrets = (webhook.secrets || []).map(s => {
+      if (isCompromise) {
+        return { ...s, expiresAt: now, revokedAt: now };
+      }
+      return s.expiresAt ? s : { ...s, expiresAt: expiration };
+    });
+
+    const nextVersion = (webhook.secrets?.length || 0) + 1;
     updatedSecrets.push({
+      version: nextVersion,
       key: newSecret,
       createdAt: now,
-      expiresAt: null
+      expiresAt: null,
+      revokedAt: null,
     });
 
     await db.collection(COLLECTIONS.webhooks).updateOne(
@@ -40,6 +50,12 @@ export async function POST(request, { params }) {
       { $set: { secrets: updatedSecrets, updatedAt: now } }
     );
 
-    return NextResponse.json({ success: true, secret: newSecret });
+    return NextResponse.json({
+      success: true,
+      secret: newSecret,
+      version: nextVersion,
+      compromisedRevocation: isCompromise,
+      overlapWindowHours: isCompromise ? 0 : overlapHours
+    });
   });
 }
