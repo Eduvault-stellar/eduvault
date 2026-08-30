@@ -9,7 +9,7 @@ const PLACEHOLDERS = new Set([
   "YOUR_MONGODB_URI",
 ]);
 
-function isPlaceholder(value) {
+export function isPlaceholder(value) {
   return typeof value !== "string" || PLACEHOLDERS.has(value.trim());
 }
 
@@ -48,6 +48,12 @@ export function validateRuntimeEnv() {
   required("JWT_SECRET", process.env.JWT_SECRET, errors, { productionOnly: production });
   required("PINATA_JWT", process.env.PINATA_JWT, errors, { productionOnly: production });
   required("NEXT_PUBLIC_GATEWAY_URL", process.env.NEXT_PUBLIC_GATEWAY_URL, errors, { productionOnly: production });
+  // Issue #138: a missing issuer must fail deployment validation rather than
+  // let refundService.js silently substitute the admin account as issuer.
+  // `productionOnly: true` (not `production`, unlike the checks above) so
+  // this is actually gated by environment rather than always active --
+  // local/preview deployments that never issue refunds aren't forced to set it.
+  required("NEXT_PUBLIC_USDC_ISSUER", process.env.NEXT_PUBLIC_USDC_ISSUER, errors, { productionOnly: true });
 
   const materialContract = process.env.NEXT_PUBLIC_MATERIAL_REGISTRY_CONTRACT_ID;
   const purchaseContract = process.env.NEXT_PUBLIC_PURCHASE_MANAGER_CONTRACT_ID;

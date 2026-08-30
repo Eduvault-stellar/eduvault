@@ -156,7 +156,3 @@ export async function closeMongoConnection() {
     await client.close();
   }
 }
-
-export function getClientPromise() {
-  return getMongoClientPromise();
-}

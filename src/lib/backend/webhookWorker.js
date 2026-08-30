@@ -1,7 +1,7 @@
 import { getDb } from '@/lib/mongodb';
 import { COLLECTIONS } from '@/lib/backend/schemaContracts';
 import { dispatchWebhook, sanitizeDispatchError } from '@/lib/webhooks/dispatcher';
-import { generateSignaturesHeader } from '@/lib/webhooks/signature';
+import { generateSignaturesHeader, getActiveSecrets } from '@/lib/webhooks/signature';
 import { logger } from '@/lib/logger';
 import { incrementCounter } from '@/lib/telemetry/metrics';
 
@@ -55,9 +55,7 @@ export async function processWebhookDeliveries() {
           return;
         }
 
-        const activeSecrets = (webhook.secrets || []).filter(
-          (s) => !s.expiresAt || s.expiresAt > new Date()
-        );
+        const activeSecrets = getActiveSecrets(webhook.secrets || []);
         const payloadStr = JSON.stringify(delivery.payload);
         const signatureHeader = activeSecrets.length > 0
           ? generateSignaturesHeader(payloadStr, activeSecrets)

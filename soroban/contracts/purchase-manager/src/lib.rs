@@ -12,6 +12,17 @@ const MAX_PLATFORM_FEE_BPS: u32 = 1_000;
 const MAX_PAYOUT_RECIPIENTS: u32 = 5;
 const ESCROW_LOCK_PERIOD_LEDGERS: u32 = 35_000;
 const MAX_ORACLE_SCALE: u32 = 18;
+const MAX_TRANSACTION_ID_LEN: u32 = 128;
+const MAX_POLICY_VERSION_LEN: u32 = 64;
+
+/// Upper bound on `transaction_id`, the off-chain correlation identifier a
+/// purchase is reconciled against. This codebase's own tests use UUID-style
+/// values (36-37 ASCII bytes, e.g. "550e8400-e29b-41d4-a716-446655440000"),
+/// and a raw Stellar transaction hash is 32 bytes (64 bytes hex-encoded) --
+/// 64 comfortably covers every currently-legitimate shape without assuming
+/// one specific encoding, while still bounding storage/event cost against an
+/// arbitrarily large caller-supplied blob.
+const MAX_TRANSACTION_ID_LEN: u32 = 64;
 
 /// Volume-tier discounted fee rates (basis points).
 /// Tier 1: 2.5 %, Tier 2: 1.5 %.
@@ -54,12 +65,21 @@ pub enum AssetKind {
     CreatorToken = 2,
 }
 
+/// Allowlist record stored for each approved payment asset (legacy v1 schema).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AssetInfoV1 {
+    pub kind: AssetKind,
+    pub enabled: bool,
+}
+
 /// Allowlist record stored for each approved payment asset.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AssetInfo {
     pub kind: AssetKind,
     pub enabled: bool,
+    pub decimals: u32,
 }
 
 /// Asset quote structure from registry
@@ -205,6 +225,7 @@ pub enum PurchaseError {
     InvalidQuoteAmount = 13,
     AssetNotAcceptedForMaterial = 14,
     EntitlementAlreadyExists = 15,
+    InvalidTransactionId = 16,
 
     // Payout errors
     PayoutTransferFailed = 20,
@@ -238,6 +259,10 @@ pub enum PurchaseError {
     OracleDeviationExceeded = 85,
     InvalidOracleQuote = 86,
     ArithmeticOverflow = 87,
+
+    // Caller-controlled input length errors
+    TransactionIdTooLong = 88,
+    PolicyVersionTooLong = 89,
 }
 
 /// Event: purchase.completed
@@ -283,6 +308,7 @@ pub struct AssetPolicyUpdatedEvent {
     pub asset: Address,
     pub kind: AssetKind,
     pub enabled: bool,
+    pub decimals: u32,
 }
 
 /// Event: admin.platform_config_updated
@@ -573,6 +599,10 @@ impl PurchaseManager {
         expires_ledger: u32,
         policy_version: Bytes,
     ) -> Result<u64, PurchaseError> {
+        if policy_version.len() > MAX_POLICY_VERSION_LEN {
+            return Err(PurchaseError::PolicyVersionTooLong);
+        }
+
         if env.ledger().sequence() > expires_ledger {
             return Err(PurchaseError::IntentExpired);
         }
@@ -715,18 +745,26 @@ impl PurchaseManager {
     ///
     /// `kind` classifies the asset: `Native` for XLM, `Token` for SAC-wrapped
     /// fungible tokens such as USDC, and `CreatorToken` for creator-specific
-    /// tokens. The classification is stored for informational purposes and
-    /// future filtering.
+    /// tokens. `decimals` specifies explicit asset precision (at most 18).
     pub fn set_asset_allowed(
         env: Env,
         admin: Address,
         asset: Address,
         kind: AssetKind,
         enabled: bool,
+        decimals: u32,
     ) -> Result<(), PurchaseError> {
         auth::require_admin(&env, &admin)?;
 
-        let info = AssetInfo { kind, enabled };
+        if decimals > 18 {
+            return Err(PurchaseError::InvalidAssetDecimals);
+        }
+
+        let info = AssetInfo {
+            kind,
+            enabled,
+            decimals,
+        };
         env.storage()
             .persistent()
             .set(&DataKey::AllowedAsset(asset.clone()), &info);
@@ -736,6 +774,7 @@ impl PurchaseManager {
             asset,
             kind,
             enabled,
+            decimals,
         }
         .publish(&env);
 
@@ -855,10 +894,29 @@ impl PurchaseManager {
     }
 
     /// Returns the full `AssetInfo` record for `asset`, if present.
+    /// Supports backward compatibility fallback for legacy `AssetInfoV1` records.
     pub fn get_asset_info(env: Env, asset: Address) -> Option<AssetInfo> {
-        env.storage()
+        if let Some(info) = env
+            .storage()
             .persistent()
-            .get(&DataKey::AllowedAsset(asset))
+            .get::<DataKey, AssetInfo>(&DataKey::AllowedAsset(asset.clone()))
+        {
+            return Some(info);
+        }
+
+        if let Some(v1_info) = env
+            .storage()
+            .persistent()
+            .get::<DataKey, AssetInfoV1>(&DataKey::AllowedAsset(asset))
+        {
+            return Some(AssetInfo {
+                kind: v1_info.kind,
+                enabled: v1_info.enabled,
+                decimals: 7,
+            });
+        }
+
+        None
     }
 
     /// Migrate PlatformConfig from V1 (with oracle) to V2 (without oracle).
@@ -1105,6 +1163,8 @@ fn execute_purchase(
     intent_meta: Option<(BytesN<32>, Bytes, u32)>,
 ) -> Result<u64, PurchaseError> {
     buyer.require_auth();
+
+    validate_transaction_id(&transaction_id)?;
 
     let config = get_platform_config(&env)?;
 
@@ -1370,6 +1430,19 @@ fn transfer_asset(
     // Delegate to the Stellar Asset Contract (SAC) via the SEP-41 interface.
     // Works for XLM (native SAC), USDC, and any other SAC-wrapped token.
     SacToken::new(env, asset).transfer(from, to, amount);
+    Ok(())
+}
+
+/// Reject a `transaction_id` that cannot serve as a correlation identifier:
+/// empty (the bug this guards against -- see `empty_transaction_id_is_rejected`
+/// in `test.rs`) or larger than `MAX_TRANSACTION_ID_LEN`, which would let an
+/// unbounded caller-supplied blob inflate escrow-record and event storage.
+/// O(1): only inspects the byte length, never the contents.
+fn validate_transaction_id(transaction_id: &Bytes) -> Result<(), PurchaseError> {
+    let len = transaction_id.len();
+    if len == 0 || len > MAX_TRANSACTION_ID_LEN {
+        return Err(PurchaseError::InvalidTransactionId);
+    }
     Ok(())
 }
 
