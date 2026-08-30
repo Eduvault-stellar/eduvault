@@ -11,6 +11,8 @@ const MAX_METADATA_URI_LEN: u32 = 256;
 const MAX_QUOTES_PER_MATERIAL: u32 = 4;
 const MAX_PAYOUT_RECIPIENTS: u32 = 5;
 const MAX_VERSION: u32 = 10_000;
+const MAX_FILE_CID_LEN: u32 = 256;
+const MAX_WITHDRAWAL_REASON_LEN: u32 = 256;
 
 #[contracttype]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -139,6 +141,8 @@ pub enum RegistryError {
     VersionAlreadyPublished = 23,
     VersionAlreadyWithdrawn = 24,
     VersionChainBroken = 25,
+    FileCidTooLong = 26,
+    WithdrawalReasonTooLong = 27,
 }
 
 #[contractevent(topics = ["material", "registered"], data_format = "vec")]
@@ -535,8 +539,12 @@ impl MaterialRegistry {
         if version == 0 || version > MAX_VERSION {
             return Err(RegistryError::InvalidVersionNumber);
         }
-        if file_cid.to_bytes().is_empty() {
+        let file_cid_len = file_cid.to_bytes().len();
+        if file_cid_len == 0 {
             return Err(RegistryError::InvalidFileCid);
+        }
+        if file_cid_len > MAX_FILE_CID_LEN {
+            return Err(RegistryError::FileCidTooLong);
         }
         if manifest_digest == BytesN::from_array(&env, &[0u8; 32]) {
             return Err(RegistryError::InvalidManifestDigest);
@@ -618,6 +626,10 @@ impl MaterialRegistry {
         version: u32,
         reason: String,
     ) -> Result<(), RegistryError> {
+        if reason.to_bytes().len() > MAX_WITHDRAWAL_REASON_LEN {
+            return Err(RegistryError::WithdrawalReasonTooLong);
+        }
+
         require_initialized(&env)?;
         let record = get_material_record(&env, &material_id)?;
         require_creator_or_upgrade_admin(&env, &record.creator, &actor)?;

@@ -21,8 +21,9 @@ export async function POST(request) {
       auditLog({ event: "upload_session_created", action: "create", resource: "upload-session", method: "POST", status: 201, outcome: "success", uploadId: session._id })
       return NextResponse.json({ session }, { status: 201 })
     } catch (error) {
-      auditLog({ event: "upload_session_rejected", action: "create", resource: "upload-session", method: "POST", status: 400, outcome: "invalid", reason: error.message })
-      return NextResponse.json({ error: error.message }, { status: 400 })
+      const status = error?.status || 400
+      auditLog({ event: "upload_session_rejected", action: "create", resource: "upload-session", method: "POST", status, outcome: error?.code === "STORAGE_QUOTA_EXCEEDED" ? "quota_exceeded" : "invalid", reason: error.message })
+      return NextResponse.json({ error: error.message }, { status })
     }
   })
 }

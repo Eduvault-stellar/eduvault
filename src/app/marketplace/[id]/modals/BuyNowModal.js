@@ -13,9 +13,10 @@ import { ACCEPTED_ASSET, getExplorerTxUrl } from "@/lib/config/chain";
 import { TransactionStatus } from "@/lib/transactions/transaction";
 import { useTransactionCenter } from "@/providers/TransactionProvider";
 import useFocusTrap from "@/hooks/useFocusTrap";
+import { toStroops, fromStroops } from "@/lib/ledger/money";
 
 const SUPPORTED_ASSETS = [
-  { code: ACCEPTED_ASSET, issuer: null, label: `Stellar ${ACCEPTED_ASSET}` },
+  { code: ACCEPTED_ASSET, issuer: null, label: `Stellar ${ACCEPTED_ASSET}`, decimals: 7 },
 ];
 
 function useQuote(materialId, asset, price) {
@@ -33,17 +34,20 @@ function useQuote(materialId, asset, price) {
     }, 0);
 
     const timeout = window.setTimeout(() => {
-      const parsedPrice = Number.parseFloat(price || 0);
+      try {
+        const decimals = asset?.decimals ?? 7;
+        const priceStr = String(price ?? "0");
+        const stroops = toStroops(priceStr, decimals);
+        const formattedAmount = fromStroops(stroops, decimals);
 
-      if (Number.isNaN(parsedPrice)) {
-        setError(new Error("Invalid material price"));
-        setQuote(null);
-      } else {
         setQuote({
-          amount: parsedPrice.toFixed(2),
+          amount: formattedAmount,
           asset: asset.code,
           fee: asset.code === "XLM" ? "0.10" : "0.05",
         });
+      } catch (err) {
+        setError(new Error("Invalid material price"));
+        setQuote(null);
       }
 
       setLoading(false);

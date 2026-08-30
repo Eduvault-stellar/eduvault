@@ -1,8 +1,6 @@
+import { HORIZON_URL } from "@/lib/config/chain";
+
 const DEFAULT_CACHE_TTL_MS = 60_000;
-const HORIZON_BASE_URL =
-  process.env.NEXT_PUBLIC_STELLAR_NETWORK === "PUBLIC"
-    ? "https://horizon.stellar.org"
-    : "https://horizon-testnet.stellar.org";
 
 function getCacheStore() {
   if (!globalThis.__eduvaultHistoryCache) {
@@ -50,7 +48,7 @@ export async function fetchHorizonTransactions(address, { page = 1, limit = 20 }
   if (cached) return cached;
 
   const horizonLimit = safePage * safeLimit;
-  const url = `${HORIZON_BASE_URL}/accounts/${encodeURIComponent(address)}/transactions?order=desc&limit=${horizonLimit}`;
+  const url = `${HORIZON_URL}/accounts/${encodeURIComponent(address)}/transactions?order=desc&limit=${horizonLimit}`;
   const response = await fetch(url, { cache: "no-store" });
   if (!response.ok) {
     throw new Error(`Horizon request failed (${response.status})`);

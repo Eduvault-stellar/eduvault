@@ -1,12 +1,17 @@
 import { getDb } from "../src/lib/mongodb.js";
 import { runFileCleanup, detectOrphans } from "../src/lib/uploads/fileLifecycle.js";
+import { reclaimUploadSessions } from "../src/lib/ipfs/uploadSessions.js";
 
 /**
  * File cleanup + orphan-detection runner (#98).
  *
  * Modes:
  *   (default)          drain the cleanup outbox: unpin each pending object and
- *                      tombstone its record.
+ *                      tombstone its record. Also reclaims expired/cancelled
+ *                      upload sessions (#148), unpinning their parts and
+ *                      releasing the owner storage quota those sessions had
+ *                      reserved — without this, a session that never
+ *                      completes would hold its reservation forever.
  *   orphans            report storage objects with no live record (dry run).
  *   orphans:apply      enqueue those orphans for cleanup.
  *
@@ -69,4 +74,9 @@ if (runMode === "orphans" || runMode === "orphans:apply") {
     limit: Number(process.env.FILE_CLEANUP_LIMIT || 100),
   });
   emit({ event: "file_cleanup_complete", ...result, failed: result.failed.length });
+
+  const sessionResult = await reclaimUploadSessions(db, remove, {
+    limit: Number(process.env.UPLOAD_SESSION_CLEANUP_LIMIT || 100),
+  });
+  emit({ event: "upload_session_cleanup_complete", ...sessionResult });
 }
