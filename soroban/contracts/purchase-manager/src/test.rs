@@ -879,6 +879,39 @@ fn purchase_with_intent_consumes_intent_hash_once() {
 }
 
 #[test]
+fn rejects_oversized_policy_version() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().set_sequence_number(50);
+
+    let admin = Address::generate(&env);
+    let registry = env.register(MockRegistry, ());
+    let treasury = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let asset = env.register(MockAsset, ());
+    let material_id = bytes32(&env, 11);
+    let intent_hash = bytes32(&env, 12);
+    let oversized_policy_version =
+        Bytes::from_slice(&env, &[0u8; (MAX_POLICY_VERSION_LEN + 1) as usize]);
+
+    let (_, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
+
+    let result = client.try_purchase_with_intent(
+        &buyer,
+        &material_id,
+        &asset,
+        &1_000_000,
+        &sample_transaction_id(&env),
+        &intent_hash,
+        &60,
+        &oversized_policy_version,
+    );
+
+    assert_eq!(result, Err(Ok(PurchaseError::PolicyVersionTooLong)));
+    assert!(!client.is_intent_consumed(&intent_hash));
+}
+
+#[test]
 fn rejects_purchase_when_asset_not_allowed() {
     let env = Env::default();
     env.mock_all_auths();
@@ -1639,6 +1672,49 @@ fn empty_transaction_id_is_accepted() {
     let purchase_id = client.purchase(&buyer, &material_id, &asset, &100_000, &empty_txn);
     assert_eq!(purchase_id, 0);
     assert!(client.has_entitlement(&material_id, &buyer));
+}
+
+#[test]
+fn rejects_oversized_transaction_id() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let registry = env.register(MockRegistry, ());
+    let treasury = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let creator = Address::generate(&env);
+    let asset = env.register(MockAsset, ());
+
+    let material_id = bytes32(&env, 63);
+    let material = MaterialRecord {
+        material_id: material_id.clone(),
+        creator,
+        paused: false,
+        status: MaterialStatus::Active,
+        quotes: vec![
+            &env,
+            AssetQuote {
+                asset: asset.clone(),
+                amount: 100_000,
+            },
+        ],
+        payout_shares: vec![
+            &env,
+            PayoutShare {
+                recipient: Address::generate(&env),
+                share_bps: 10_000,
+            },
+        ],
+    };
+    MockRegistryClient::new(&env, &registry).set_material(&material_id, &material);
+
+    let (_, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
+    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
+
+    let oversized_txn = Bytes::from_slice(&env, &[0u8; (MAX_TRANSACTION_ID_LEN + 1) as usize]);
+    let result = client.try_purchase(&buyer, &material_id, &asset, &100_000, &oversized_txn);
+    assert_eq!(result, Err(Ok(PurchaseError::TransactionIdTooLong)));
 }
 
 #[test]
