@@ -11,6 +11,24 @@ EduVault is a non-custodial platform:
 - **Transactions:** Users must manually approve all on-chain actions.
 - **Infrastructure:** Sensitive keys are managed through secure environment variables.
 
+## Refund Signer Controls
+Refund payouts move treasury funds, so their signing is isolated from the
+general platform admin key:
+
+- **Dedicated key:** `REFUND_SIGNER_SECRET` is a Stellar account used *only*
+  for refunds. It never holds more than the treasury float needed for expected
+  refund volume and is topped up from cold storage. The general admin secret
+  (`STELLAR_ADMIN_SECRET`) can never sign refunds.
+- **Least privilege:** The signer performs exactly one operation type — a
+  payment to a destination derived from the settled purchase receipt. Amount,
+  asset, and destination always come from MongoDB records, never from request
+  payloads.
+- **Spend ceiling:** `REFUND_MAX_SINGLE_UNITS` caps any single payment.
+- **Rotation:** Rotating the key is an environment change; no database state
+  references the old key.
+- **Emergency disable:** `REFUNDS_EMERGENCY_DISABLE=true` halts all outbound
+  refund payments immediately while keeping claims readable and approvable.
+
 ## Scope
 | Component | Status |
 | :--- | :--- |

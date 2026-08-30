@@ -16,6 +16,7 @@ export const COLLECTIONS = Object.freeze({
   // Security and workflow collections.
   challenges: "auth_challenges",
   uploadSessions: "upload_sessions",
+  refunds: "refunds",
 
   // Migration infrastructure.
   schemaMigrations: "_schema_migrations",

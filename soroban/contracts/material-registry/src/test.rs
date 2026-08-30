@@ -668,7 +668,8 @@ fn disabling_asset_blocks_quote_registration() {
 
     let creator = Address::generate(&env);
 
-    // First registration; no admin yet so validation is skipped.
+    // The first registration succeeds because XLM and USDC are approved;
+    // the allowlist is enforced on every registration, including the first.
     client.register_material(
         &creator,
         &metadata_uri(&env),
@@ -709,7 +710,8 @@ fn update_sale_terms_rejects_unapproved_asset() {
 
     let creator = Address::generate(&env);
 
-    // First registration; no admin yet so validation skipped.
+    // First registration succeeds because XLM and USDC are approved; the
+    // allowlist is enforced on every registration, including the first.
     let material_id = client.register_material(
         &creator,
         &metadata_uri(&env),
@@ -732,6 +734,114 @@ fn update_sale_terms_rejects_unapproved_asset() {
     let result =
         client.try_update_sale_terms(&material_id, &bad_quotes, &default_payout_shares(&env));
     assert_eq!(result, Err(Ok(RegistryError::UnapprovedAsset)));
+}
+
+#[test]
+fn first_registration_rejects_unapproved_asset() {
+    let env = Env::default();
+    let (_contract_id, client, _admin, _xlm, usdc) = install_and_init_contract(&env);
+    env.mock_all_auths();
+
+    let creator = Address::generate(&env);
+
+    // An asset that has never been added to the allowlist.
+    let unapproved = Address::generate(&env);
+    let bad_quotes = vec![
+        &env,
+        AssetQuote {
+            asset: unapproved.clone(),
+            amount: 1_000_000,
+        },
+    ];
+
+    // The very first material registration must validate quote assets
+    // against the allowlist; there is no bootstrap bypass.
+    let result = client.try_register_material(
+        &creator,
+        &metadata_uri(&env),
+        &bytes32(&env, 1),
+        &bytes32(&env, 2),
+        &bad_quotes,
+        &default_payout_shares(&env),
+    );
+    assert_eq!(result, Err(Ok(RegistryError::UnapprovedAsset)));
+
+    // Mixing an unapproved asset into otherwise-approved quotes must fail too.
+    let mixed_quotes = vec![
+        &env,
+        AssetQuote {
+            asset: usdc.clone(),
+            amount: 2_000_000,
+        },
+        AssetQuote {
+            asset: unapproved,
+            amount: 1_000_000,
+        },
+    ];
+    let mixed_result = client.try_register_material(
+        &creator,
+        &metadata_uri(&env),
+        &bytes32(&env, 3),
+        &bytes32(&env, 4),
+        &mixed_quotes,
+        &default_payout_shares(&env),
+    );
+    assert_eq!(mixed_result, Err(Ok(RegistryError::UnapprovedAsset)));
+}
+
+#[test]
+fn first_registration_rejects_disabled_asset() {
+    let env = Env::default();
+    let (_contract_id, client, admin, xlm, usdc) = install_and_init_contract(&env);
+    env.mock_all_auths();
+
+    let creator = Address::generate(&env);
+
+    // Approve an extra asset, then disable it before any registration.
+    let temporary = Address::generate(&env);
+    client.set_asset_allowed(&admin, &temporary, &AssetKind::Token, &true);
+    client.set_asset_allowed(&admin, &temporary, &AssetKind::Token, &false);
+
+    let disabled_quotes = vec![
+        &env,
+        AssetQuote {
+            asset: temporary,
+            amount: 3_000_000,
+        },
+    ];
+    let result = client.try_register_material(
+        &creator,
+        &metadata_uri(&env),
+        &bytes32(&env, 1),
+        &bytes32(&env, 2),
+        &disabled_quotes,
+        &default_payout_shares(&env),
+    );
+    assert_eq!(result, Err(Ok(RegistryError::UnapprovedAsset)));
+
+    // A previously-approved asset that is later disabled is rejected on a
+    // first registration as well.
+    client.set_asset_allowed(&admin, &xlm, &AssetKind::Native, &false);
+    let stale_xlm_quotes = vec![
+        &env,
+        AssetQuote {
+            asset: xlm,
+            amount: 1_000_000,
+        },
+        AssetQuote {
+            asset: usdc,
+            amount: 2_000_000,
+        },
+    ];
+    let stale_result = client.try_register_material(
+        &creator,
+        &metadata_uri(&env),
+        &bytes32(&env, 5),
+        &bytes32(&env, 6),
+        &stale_xlm_quotes,
+        &default_payout_shares(&env),
+    );
+    assert_eq!(stale_result, Err(Ok(RegistryError::UnapprovedAsset)));
 }
 
 #[test]
