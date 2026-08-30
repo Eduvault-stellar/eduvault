@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto"
 import { acquireStorageClaim, releaseStorageClaim } from "../uploads/storageClaims.js"
+import { ensureOwnerQuotaIndexes, reserveOwnerStorage, releaseOwnerStorage } from "../uploads/storageQuotas.js"
 
 export const UPLOAD_STATES = ["created", "uploading", "ready", "completing", "complete", "cancelled", "cleanup_pending", "cleanup_claimed"]
 
@@ -21,6 +22,7 @@ export async function ensureUploadIndexes(db) {
     sessions.createIndex({ ownerId: 1, idempotencyKey: 1 }, { unique: true }),
     sessions.createIndex({ expiresAt: 1, state: 1 }),
     db.collection("materials").createIndex({ uploadSessionId: 1 }, { unique: true, sparse: true }),
+    ensureOwnerQuotaIndexes(db),
   ])
 }
 
@@ -29,16 +31,24 @@ export async function createUploadSession(db, { ownerId, idempotencyKey, file, t
   validateUploadSpec(file)
   if (thumbnail) validateUploadSpec(thumbnail)
   const now = new Date()
+  const reservedBytes = file.size + (thumbnail?.size || 0)
   const session = {
     _id: randomUUID(), ownerId, idempotencyKey: idempotencyKey.trim(),
     state: "created", file, thumbnail: thumbnail || null, parts: {}, pins: [],
+    reservedBytes,
     createdAt: now, updatedAt: now, expiresAt: new Date(now.getTime() + 24 * 60 * 60 * 1000),
   }
   await ensureUploadIndexes(db)
+  // Reserve capacity before the session exists so two concurrent sessions for
+  // the same owner cannot both pass validation and jointly exceed the quota.
+  // A duplicate Idempotency-Key request (see the catch below) never claims a
+  // session for this reservation, so it is released immediately in that case.
+  await reserveOwnerStorage(db, { ownerId, bytes: reservedBytes, now })
   try {
     await db.collection("upload_sessions").insertOne(session)
     return session
   } catch (error) {
+    await releaseOwnerStorage(db, { ownerId, bytes: reservedBytes, now })
     if (error?.code !== 11000) throw error
     return db.collection("upload_sessions").findOne({ ownerId, idempotencyKey: idempotencyKey.trim() })
   }
@@ -148,6 +158,13 @@ export async function reclaimUploadSessions(db, unpin, { now = new Date(), limit
         { _id: claimed._id, state: "cleanup_claimed" },
         { $set: { state: "cancelled", cleanedAt: new Date(), updatedAt: new Date() }, $unset: { lastError: "" } }
       )
+      // The session never became a material, so its reserved capacity is
+      // freed back to the owner's quota now that the storage is unpinned.
+      // The "cleanup_claimed" -> "cancelled" transition above only matches
+      // once per session, so this fires exactly once.
+      if (Number.isSafeInteger(claimed.reservedBytes) && claimed.reservedBytes > 0) {
+        await releaseOwnerStorage(db, { ownerId: claimed.ownerId, bytes: claimed.reservedBytes, now: new Date() })
+      }
       cleaned += 1
     } catch (error) {
       await db.collection("upload_sessions").updateOne(
