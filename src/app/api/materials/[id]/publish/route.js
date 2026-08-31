@@ -1,11 +1,12 @@
+export const dynamic = "force-dynamic";
+
 import { NextResponse } from "next/server";
-import { ObjectId } from "mongodb";
-import { getDb } from "@/lib/mongodb";
+import { getUserFromCookie } from "@/lib/api/auth";
 import { auditLog } from "@/lib/api/audit";
-import { withApiHardening } from "@/lib/api/hardening";
+import { validateRequestBody } from "@/lib/api/validateRequest";
+import { publishRequestSchema } from "@/lib/materials/lifecycleSchemas";
 import { getPublishingChecklist } from "@/lib/publishing/checklist";
-import { withAuthorization } from "@/lib/auth/authorize";
-import { errorResponse } from "@/lib/api/errorResponse";
+import { getDb } from "@/lib/mongodb";
 import {
   transitionMaterialStatus,
   MaterialLifecycleError,
@@ -13,178 +14,40 @@ import {
   MATERIAL_STATUS,
 } from "@/lib/materials/materialLifecycle";
 
-export const dynamic = "force-dynamic";
-
-function findMaterialById(db, materialId) {
-  return db.collection("materials").findOne({
-    _id: ObjectId.isValid(materialId) ? new ObjectId(materialId) : materialId,
-  });
-}
-
 /**
  * POST /api/materials/[id]/publish
  *
- * Transitions a material draft -> published via the material lifecycle
- * state machine, after verifying:
- *   1. The requester is authenticated.
- *   2. The requester owns the material.
- *   3. The material has all required fields populated (publishing checklist).
+ * Transitions a draft (or already-published) material to published, via the
+ * shared material lifecycle state machine — which already enforces the
+ * publishing checklist, ownership, idempotency, and concurrency safety.
  */
 export async function POST(request, { params }) {
-  return withApiHardening(
-    request,
-    { route: "material-publish", rateLimit: { limit: 10, windowMs: 60_000 } },
-    async () => publishMaterial(request, params)
-  );
-}
-
-async function publishMaterial(request, params) {
   try {
     const materialId = params?.id;
     if (!materialId) {
       return NextResponse.json({ error: "Material not found" }, { status: 404 });
     }
-export const POST = withAuthorization(
-  async (authorizedRequest, { params }) => {
-    try {
-      const materialId = params?.id;
-      if (!materialId) {
-        return errorResponse("Material not found", 404);
-      }
 
-      const { userId, fullUser } = authorizedRequest;
-
-      const userAddress = fullUser.walletAddress || userId;
-      if (!userAddress) {
-        auditLog({ event: "publish_no_address", route: "material-publish", method: "POST", status: 400, actor: userId, materialId });
-        return errorResponse("No wallet address on account", 400);
-      }
-
-      // ── Resolve material ──────────────────────────────────────────────────
-      const db = await getDb();
-      const material = await db.collection("materials").findOne({ _id: materialId });
-      if (!material) {
-        auditLog({ event: "publish_not_found", route: "material-publish", method: "POST", status: 404, materialId });
-        return errorResponse("Material not found", 404);
-      }
-
-      // ── Validate publish readiness ────────────────────────────────────────
-      const validation = validatePublishRequest(material, userAddress);
-      if (!validation.valid) {
-        auditLog({
-          event: "publish_validation_failed",
-          route: "material-publish",
-          method: "POST",
-          status: validation.status,
-          actor: userId,
-          materialId,
-          reason: validation.error,
-        });
-        return NextResponse.json(
-          {
-            error: validation.error,
-            checklist: validation.checklist,
-          },
-          { status: validation.status }
-        );
-      }
-
-      if (validation.alreadyPublished) {
-        auditLog({
-          event: "publish_already_published",
-          route: "material-publish",
-          method: "POST",
-          status: 200,
-          actor: userId,
-          materialId,
-        });
-        return NextResponse.json(
-          {
-            success: true,
-            status: "published",
-            alreadyPublished: true,
-            checklist: validation.checklist,
-          },
-          { status: 200 }
-        );
-      }
-
-      // ── Persist published status ──────────────────────────────────────────
-      const body = await authorizedRequest.json().catch(() => ({}));
-      const contractId = typeof body.contractId === "string" ? body.contractId.trim() : undefined;
-
-      const updatePayload = {
-        status: "published",
-        publishedAt: new Date(),
-        updatedAt: new Date(),
-      };
-
-
-    const userAddress = user.walletAddress || user.address || user.id;
-    if (!userAddress) {
-      auditLog({ event: "publish_no_address", route: "material-publish", method: "POST", status: 400, actor: user.sub, materialId });
-      return NextResponse.json({ error: "No wallet address on account" }, { status: 400 });
+    const user = await getUserFromCookie(request);
+    if (!user) {
+      auditLog({ event: "publish_auth_failed", route: "material-publish", method: "POST", status: 401, materialId });
+      return NextResponse.json({ error: "Authentication required" }, { status: 401 });
     }
 
-    // ── Resolve material ──────────────────────────────────────────────────
-    const db = await getDb();
-    const material = await findMaterialById(db, materialId);
-    if (!material) {
-      auditLog({ event: "publish_not_found", route: "material-publish", method: "POST", status: 404, materialId });
-      return NextResponse.json({ error: "Material not found" }, { status: 404 });
-    }
-      if (contractId) {
-        updatePayload.contractId = contractId;
-      }
+    const validation = await validateRequestBody(request, publishRequestSchema);
+    if (!validation.ok) return validation.response;
+    const { reason = null, contractId } = validation.data;
 
-      await db.collection("materials").updateOne(
-        { _id: materialId },
-        { $set: updatePayload }
-      );
-
-      auditLog({
-        event: "publish_success",
-        route: "material-publish",
-        method: "POST",
-        status: 200,
-        actor: userId,
-        materialId,
-      });
-
-      return NextResponse.json(
-        {
-          success: true,
-          status: "published",
-          checklist: validation.checklist,
-        },
-        { status: 200 }
-      );
-    } catch (err) {
-      console.error("Publish error:", err);
-      return errorResponse("Server error", 500);
-    }
-
-    // ── Persist published status ──────────────────────────────────────────
-    const body = await request.json().catch(() => ({}));
-    const contractId = typeof body.contractId === "string" ? body.contractId.trim() : undefined;
-
-    const updatePayload = {
-      status: "published",
-      publishedAt: new Date(),
-      updatedAt: new Date(),
-    };
-
-    if (contractId) {
-      updatePayload.contractId = contractId;
-    }
-
-    await db.collection("materials").updateOne(
-      { _id: ObjectId.isValid(materialId) ? new ObjectId(materialId) : materialId },
-      { $set: updatePayload }
-    );
+    const result = await transitionMaterialStatus({
+      materialId,
+      actor: user,
+      toStatus: MATERIAL_STATUS.PUBLISHED,
+      reason,
+      extraFields: contractId ? { contractId } : {},
+    });
 
     auditLog({
-      event: "publish_success",
+      event: result.alreadyInStatus ? "publish_already_published" : "publish_success",
       route: "material-publish",
       method: "POST",
       status: 200,
@@ -193,89 +56,63 @@ export const POST = withAuthorization(
     });
 
     return NextResponse.json(
-      {
-        success: true,
-        status: "published",
-        checklist: validation.checklist,
-      },
+      { success: true, status: MATERIAL_STATUS.PUBLISHED, alreadyPublished: result.alreadyInStatus },
       { status: 200 }
     );
   } catch (err) {
+    if (err instanceof MaterialLifecycleError) {
+      const status = LIFECYCLE_ERROR_HTTP_STATUS[err.code] ?? 400;
+      auditLog({
+        event: "publish_failed",
+        route: "material-publish",
+        method: "POST",
+        status,
+        materialId: params?.id,
+        reason: err.message,
+      });
+      return NextResponse.json({ error: err.message, code: err.code }, { status });
+    }
     console.error("Publish error:", err);
     return NextResponse.json({ error: "Server error" }, { status: 500 });
-  },
-  {
-    checkOwnership: async (userId, fullUser, request) => {
-      const materialId = request.params?.id;
-      if (!materialId) {
-        return false;
-      }
-      const db = await getDb();
-      const material = await db.collection("materials").findOne({ _id: materialId });
-      if (!material) {
-        return false;
-      }
-      const owner = material.userAddress || material.ownerAddress;
-      return owner && String(owner).toLowerCase() === String(fullUser.walletAddress || userId).toLowerCase();
-    },
   }
-);
-
-async function lookupMaterial(materialId) {
-  const db = await getDb();
-  return db.collection("materials").findOne({ _id: materialId });
 }
 
 /**
  * GET /api/materials/[id]/publish
  *
- * Returns the publishing checklist for a material without publishing it.
- * Useful for the UI to show required/recommended fields before submission.
+ * Returns the publishing checklist for a material without publishing it, so
+ * the UI can preview readiness (required/recommended fields, whether the
+ * requester can publish) before submitting.
  */
 export async function GET(request, { params }) {
-  return withApiHardening(
-    request,
-    { route: "material-publish", rateLimit: { limit: 60, windowMs: 60_000 } },
-    async () => getPublishChecklist(request, params)
-  );
-}
-
-async function getPublishChecklist(request, params) {
   try {
     const materialId = params?.id;
     if (!materialId) {
       return NextResponse.json({ error: "Material not found" }, { status: 404 });
     }
-export const GET = withAuthorization(
-  async (authorizedRequest, { params }) => {
-    try {
-      const materialId = params?.id;
-      if (!materialId) {
-        return errorResponse("Material not found", 404);
-      }
 
-      const { userId, fullUser } = authorizedRequest;
+    const user = await getUserFromCookie(request);
+    if (!user) {
+      return NextResponse.json({ error: "Authentication required" }, { status: 401 });
+    }
 
-      const userAddress = fullUser.walletAddress || userId;
-      if (!userAddress) {
-        return errorResponse("No wallet address on account", 400);
-      }
+    const userAddress = user.walletAddress || user.address || user.sub;
 
     const db = await getDb();
-    const material = await findMaterialById(db, materialId);
+    const material = await db.collection("materials").findOne({ _id: materialId });
 
-    // Return checklist even if material not found (shows all fields as missing)
+    // Return the checklist even when the material isn't found, so the UI can
+    // still show all fields as missing rather than erroring outright.
     const checklist = getPublishingChecklist(material);
 
-    // Ownership check for determining if user can publish
     const owner = material?.userAddress || material?.ownerAddress;
-    const isOwner = material && owner && String(owner).toLowerCase() === String(userAddress).toLowerCase();
+    const isOwner = !!(material && owner && String(owner).toLowerCase() === String(userAddress).toLowerCase());
 
     return NextResponse.json({
       materialId,
       canPublish: isOwner && checklist.missingRequired.length === 0,
       isOwner,
-      published: material?.status === "published" || false,
+      published: material?.status === MATERIAL_STATUS.PUBLISHED,
       checklist,
     });
   } catch (err) {
@@ -283,28 +120,3 @@ export const GET = withAuthorization(
     return NextResponse.json({ error: "Server error" }, { status: 500 });
   }
 }
-
-      const db = await getDb();
-      const material = await db.collection("materials").findOne({ _id: materialId });
-
-      // Return checklist even if material not found (shows all fields as missing)
-      const checklist = getPublishingChecklist(material);
-
-      // Ownership check for determining if user can publish
-      const owner = material?.userAddress || material?.ownerAddress;
-      const isOwner = material && owner && String(owner).toLowerCase() === String(userAddress).toLowerCase();
-
-      return NextResponse.json({
-        materialId,
-        canPublish: isOwner && checklist.missingRequired.length === 0,
-        isOwner,
-        published: material?.status === "published" || false,
-        checklist,
-      });
-    } catch (err) {
-      console.error("Publish checklist error:", err);
-      return errorResponse("Server error", 500);
-    }
-  },
-  {}
-);

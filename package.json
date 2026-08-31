@@ -18,9 +18,10 @@
     "node": ">=20.16.0"
   },
   "scripts": {
-    "predev": "node scripts/sync-openapi.mjs",
     "dev": "next dev --webpack",
-    "prebuild": "node scripts/sync-openapi.mjs",
+    "predev": "node scripts/sync-openapi.mjs && node scripts/generate-api-client.mjs",
+    "dev": "next dev",
+    "prebuild": "node scripts/sync-openapi.mjs && node scripts/generate-api-client.mjs",
     "build": "next build --webpack",
     "start": "next start",
     "lint": "eslint",
@@ -35,6 +36,8 @@
     "test:integration": "vitest run test/integration",
     "test:backend": "node --test tests/backend/*.test.mjs",
     "check:api-contracts": "node scripts/check-api-contracts.mjs",
+    "generate:api-client": "node scripts/generate-api-client.mjs",
+    "check:generated-client": "node scripts/check-generated-client.mjs",
     "test:smoke": "node scripts/smoke-preview.mjs",
     "check:ci-env": "node scripts/validate-ci-env.mjs",
     "audit:deps": "npm audit --audit-level=critical",
@@ -83,7 +86,8 @@
     "redis": "^4.7.0",
     "swagger-ui-react": "^5.32.6",
     "viem": "^2.48.2",
-    "wagmi": "^2.19.5"
+    "wagmi": "^2.19.5",
+    "zod": "^3.24.1"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-ethers": "^3.1.2",

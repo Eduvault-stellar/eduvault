@@ -13,6 +13,10 @@ import {
   validateRepository,
   findBreakingChanges,
 } from "../../scripts/check-api-contracts.mjs";
+import { generateClientSource } from "../../scripts/generate-api-client.mjs";
+import { checkGeneratedClient } from "../../scripts/check-generated-client.mjs";
+import { validateRequestBody } from "../../src/lib/api/validateRequest.js";
+import { z } from "zod";
 import {
   PAYLOAD_SCHEMA_VERSION,
   upcastPayload,
@@ -152,4 +156,54 @@ test("legacy and current durable payloads coexist while future versions fail clo
   assert.deepEqual(event.payload, {});
   assert.deepEqual(upcastPayload("workflow", { schemaVersion: 1, metadata: { current: true } }).metadata, { current: true });
   assert.throws(() => upcastPayload("outbox", { schemaVersion: 2 }), /Unsupported/);
+});
+
+test("generated API client is in sync with the committed docs/openapi.yaml", () => {
+  assert.deepEqual(checkGeneratedClient(), []);
+});
+
+test("client generator emits one typed function per operationId, using path params and an optional body", () => {
+  const withBody = generateClientSource(fixture("", "requestBody:\n        required: true\n        content:\n          application/json:\n            schema: { type: object }"));
+  assert.match(withBody, /export async function getExample\({ query, \.\.\.init } = \{\}\)/);
+  assert.match(withBody, /apiClient\(url, \{ method: "GET", \.\.\.init \}\)/);
+
+  const withPathParam = generateClientSource(fixture(`  /api/example/{id}:
+    get:
+      operationId: getExampleById
+      security: []
+      x-api-version: 1
+      x-idempotency: none
+      x-pagination: none
+      x-example: {}
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: object } } } }
+        default: { $ref: "#/components/responses/Problem" }`));
+  assert.match(withPathParam, /export async function getExampleById\({ id, query, \.\.\.init } = \{\}\)/);
+  assert.match(withPathParam, /const path = `\/api\/example\/\$\{id\}`;/);
+});
+
+test("validateRequestBody rejects malformed input with the shared Problem shape, and passes through valid input", async () => {
+  const schema = z.object({ reason: z.string().min(1).optional() }).strict();
+
+  const badRequest = new Request("https://eduvault.test/api/materials/1/close", {
+    method: "POST",
+    body: JSON.stringify({ reason: "", unexpected: true }),
+  });
+  const rejected = await validateRequestBody(badRequest, schema);
+  assert.equal(rejected.ok, false);
+  assert.equal(rejected.response.status, 400);
+  const problem = await rejected.response.json();
+  assert.equal(problem.code, "invalid_request");
+  assert.match(problem.detail, /reason|unexpected/);
+
+  const goodRequest = new Request("https://eduvault.test/api/materials/1/close", {
+    method: "POST",
+    body: JSON.stringify({ reason: "Content refresh" }),
+  });
+  const accepted = await validateRequestBody(goodRequest, schema);
+  assert.deepEqual(accepted, { ok: true, data: { reason: "Content refresh" } });
+
+  const emptyBodyRequest = new Request("https://eduvault.test/api/materials/1/close", { method: "POST" });
+  const acceptedEmpty = await validateRequestBody(emptyBodyRequest, schema);
+  assert.deepEqual(acceptedEmpty, { ok: true, data: {} });
 });

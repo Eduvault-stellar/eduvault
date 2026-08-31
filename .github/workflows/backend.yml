@@ -8,6 +8,8 @@ on:
       - "src/services/**"
       - "docs/openapi.yaml"
       - "scripts/check-api-contracts.mjs"
+      - "scripts/generate-api-client.mjs"
+      - "scripts/check-generated-client.mjs"
       - "package.json"
       - "package-lock.json"
       - "pnpm-lock.yaml"
@@ -26,6 +28,8 @@ on:
       - "src/services/**"
       - "docs/openapi.yaml"
       - "scripts/check-api-contracts.mjs"
+      - "scripts/generate-api-client.mjs"
+      - "scripts/check-generated-client.mjs"
       - "package.json"
       - "package-lock.json"
       - "pnpm-lock.yaml"
@@ -76,6 +80,10 @@ jobs:
           npm run check:api-contracts
         env:
           API_CONTRACT_BASE_FILE: ${{ runner.temp }}/openapi-base.yaml
+
+      - name: Check generated API client is up to date
+        run: npm run check:generated-client
+
       - name: Lint backend
         run: npm run lint --if-present -- src/app/api src/lib
 

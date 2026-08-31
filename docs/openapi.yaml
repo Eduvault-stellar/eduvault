@@ -587,6 +587,81 @@ paths:
         "200": { description: Material history, content: { application/json: { schema: { type: array, items: { type: object, required: [materialId, previousVersion, version, changedFields], properties: { materialId: { type: string }, previousVersion: { type: integer }, version: { type: integer }, changedFields: { type: array, items: { type: string } }, changeReason: { type: string }, updatedAt: { type: string, format: date-time } } } } } } }
         default: { $ref: "#/components/responses/Problem" }
 
+  /api/materials/{id}/publish:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    get:
+      summary: Preview publish readiness for a material
+      operationId: getMaterialPublishChecklist
+      tags: [Materials]
+      security: [{ cookieAuth: [] }]
+      x-api-version: 1
+      x-idempotency: none
+      x-pagination: none
+      x-example: { materialId: "6650abc", canPublish: false, isOwner: true, published: false }
+      responses:
+        "200": { description: Publish checklist, content: { application/json: { schema: { type: object, required: [materialId, canPublish, isOwner, published, checklist], properties: { materialId: { type: string }, canPublish: { type: boolean }, isOwner: { type: boolean }, published: { type: boolean }, checklist: { type: object, required: [required, recommended, missingRequired, missingRecommended], properties: { required: { type: array, items: { type: object } }, recommended: { type: array, items: { type: object } }, missingRequired: { type: array, items: { type: string } }, missingRecommended: { type: array, items: { type: string } } } } } } } } }
+        default: { $ref: "#/components/responses/Problem" }
+    post:
+      summary: Publish a material
+      operationId: publishMaterial
+      tags: [Materials]
+      security: [{ cookieAuth: [] }]
+      x-api-version: 1
+      x-idempotency: material-and-wallet
+      x-pagination: none
+      x-example: { contractId: "CDRIPPOOL...", reason: "Ready for release" }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { type: object, properties: { contractId: { type: string }, reason: { type: string } } }
+      responses:
+        "200": { description: Published, content: { application/json: { schema: { type: object, required: [success, status, alreadyPublished], properties: { success: { type: boolean }, status: { type: string, enum: [published] }, alreadyPublished: { type: boolean } } } } } }
+        default: { $ref: "#/components/responses/Problem" }
+
+  /api/materials/{id}/close:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    post:
+      summary: Close a published material to new purchases
+      operationId: closeMaterial
+      tags: [Materials]
+      security: [{ cookieAuth: [] }]
+      x-api-version: 1
+      x-idempotency: material-and-wallet
+      x-pagination: none
+      x-example: { reason: "Content refresh in progress" }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { type: object, properties: { reason: { type: string } } }
+      responses:
+        "200": { description: Closed, content: { application/json: { schema: { type: object, required: [success, status, alreadyClosed], properties: { success: { type: boolean }, status: { type: string, enum: [closed] }, alreadyClosed: { type: boolean } } } } } }
+        default: { $ref: "#/components/responses/Problem" }
+
+  /api/materials/{id}/cancel:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    post:
+      summary: Cancel a draft or published material
+      operationId: cancelMaterial
+      tags: [Materials]
+      security: [{ cookieAuth: [] }]
+      x-api-version: 1
+      x-idempotency: material-and-wallet
+      x-pagination: none
+      x-example: { reason: "Withdrawn by creator" }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { type: object, properties: { reason: { type: string } } }
+      responses:
+        "200": { description: Canceled, content: { application/json: { schema: { type: object, required: [success, status, alreadyCanceled], properties: { success: { type: boolean }, status: { type: string, enum: [canceled] }, alreadyCanceled: { type: boolean } } } } } }
+        default: { $ref: "#/components/responses/Problem" }
+
   /api/materials/{id}/report:
     post:
       summary: Report a material

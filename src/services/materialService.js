@@ -1,4 +1,9 @@
 import { apiClient } from '@/lib/api/apiClient';
+import {
+  publishMaterial as generatedPublishMaterial,
+  closeMaterial as generatedCloseMaterial,
+  cancelMaterial as generatedCancelMaterial,
+} from '@/lib/api/generated/client';
 
 export const materialService = {
   getMarketplaceMaterials: async (params = {}) => {
@@ -76,24 +81,15 @@ export const materialService = {
   },
 
   publishMaterial: async (id, { contractId } = {}) => {
-    return apiClient(`/api/materials/${id}/publish`, {
-      method: 'POST',
-      body: contractId ? { contractId } : {},
-    });
+    return generatedPublishMaterial({ id, body: contractId ? { contractId } : {} });
   },
 
   closeMaterial: async (id, { reason } = {}) => {
-    return apiClient(`/api/materials/${id}/close`, {
-      method: 'POST',
-      body: reason ? { reason } : {},
-    });
+    return generatedCloseMaterial({ id, body: reason ? { reason } : {} });
   },
 
   cancelMaterial: async (id, { reason } = {}) => {
-    return apiClient(`/api/materials/${id}/cancel`, {
-      method: 'POST',
-      body: reason ? { reason } : {},
-    });
+    return generatedCancelMaterial({ id, body: reason ? { reason } : {} });
   },
 };
 

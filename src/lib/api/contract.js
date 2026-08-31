@@ -12,7 +12,7 @@ function requestedVersion(request) {
   return explicit || mediaType || API_VERSION;
 }
 
-function problem({ request, status, code, detail, correlationId, headers }) {
+export function problem({ request, status, code, detail, correlationId, headers }) {
   const responseHeaders = new Headers(headers);
   responseHeaders.set("Content-Type", "application/problem+json");
   responseHeaders.set("API-Version", API_VERSION);
