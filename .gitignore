@@ -45,8 +45,6 @@ yarn-error.log*
 .pnpm-debug.log*
 
 # env files (can opt-in for committing if needed)
-.env
-.env.local
 .env.development.local
 .env.production.local
 .env.test.local
@@ -102,3 +100,4 @@ soroban/contracts/material-registry/test_snapshots/test/requires_creator_auth_fo
 soroban/contracts/material-registry/test_snapshots/test/set_asset_allowed_stores_info_and_emits_event.1.json
 soroban/contracts/material-registry/test_snapshots/test/update_sale_terms_rejects_unapproved_asset.1.json
 soroban/contracts/material-registry/test_snapshots/test/updates_sale_terms_and_status_and_supports_quote_lookup.1.json
+config.bat
