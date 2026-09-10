@@ -1,0 +1,135 @@
+name: GrantFox Reward Task
+description: Standardized template mapping educational marketplace work to measurable deliverables, tests, and verification artifacts.
+title: "[Reward]: "
+labels: ["GrantFox OSS", "Maybe Rewarded"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template for all GrantFox reward-eligible tasks on EduVault.
+        Refer to [GrantFox Reward Deliverable Matrix](https://github.com/Eduvault-stellar/eduvault/blob/main/docs/grantfox-reward-deliverables.md) and [CONTRIBUTING.md](https://github.com/Eduvault-stellar/eduvault/blob/main/CONTRIBUTING.md) for full requirements before starting work.
+
+  - type: dropdown
+    id: domain
+    attributes:
+      label: Target Domain / Stack
+      description: Select the primary technological domain for this task.
+      options:
+        - Frontend (Next.js / UI / Accessibility)
+        - Backend API (Node.js / Express / MongoDB / Storage)
+        - Soroban Smart Contracts (Rust / Stellar / SDK)
+        - Documentation (Architecture / Guides / Runbooks)
+        - Testing & QA (Regression / E2E / Automation)
+        - Operations & Infrastructure (CI / Security / Indexer)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: complexity
+    attributes:
+      label: Complexity & Reward Points
+      description: Planned complexity tier for this bounty task.
+      options:
+        - Low - 50 points
+        - Medium - 100 points
+        - High - 200 points
+        - Critical - 300+ points
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem Statement
+      description: Describe the problem, affected components, and user or marketplace impact.
+      placeholder: Educational marketplace work requires...
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope of Work
+      description: List explicit in-scope deliverables and out-of-scope boundaries.
+      placeholder: |
+        - In-scope:
+          1. Component A implementation
+          2. API route validation
+        - Out-of-scope:
+          1. Unrelated database schema migrations
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: eligibility
+    attributes:
+      label: Reward Eligibility & Pre-Flight Conditions
+      description: Confirm all pre-flight conditions are met before proceeding.
+      options:
+        - label: Repository is active and not archived.
+          required: true
+        - label: Issue is unclaimed and no competing active pull request exists.
+          required: true
+        - label: Design note will be posted to the issue discussion prior to implementation.
+          required: true
+        - label: Solution will not mock cryptographic primitives, bypass authorization, or loosen existing assertions.
+          required: true
+        - label: No sensitive credentials, private keys, or API tokens will be disclosed.
+          required: true
+
+  - type: checkboxes
+    id: deliverables
+    attributes:
+      label: Domain Deliverable Checklist
+      description: Check all deliverable categories that apply to this task.
+      options:
+        - label: "Frontend: Responsive layout tested across desktop and mobile breakpoints."
+        - label: "Frontend: Accessibility verified (WCAG 2.2 AA, semantic markup, keyboard focus states, ARIA attributes)."
+        - label: "Frontend: Before/after screenshots or screen recording attached for visible UI modifications."
+        - label: "Backend: Input validation, sanitization, and fail-closed error handling implemented."
+        - label: "Backend: Server-side authorization and session/JWT checks enforced (no client-side trusts)."
+        - label: "Backend: API specification / OpenAPI contracts kept in sync."
+        - label: "Contracts: Soroban authorization explicitly enforced via require_auth()."
+        - label: "Contracts: Resource limits and bounds on vectors, strings, and byte arrays preserved."
+        - label: "Contracts: Soroban unit and integration tests passing via genuine host functions."
+        - label: "Documentation: Architecture docs, runbooks, and .env.example updated where applicable."
+        - label: "Testing: Focused regression test included reproducing the issue before the fix."
+
+  - type: textarea
+    id: test_plan
+    attributes:
+      label: Verification Artifacts & Test Plan
+      description: Provide the exact verification steps, test commands, and evidence required for completion.
+      placeholder: |
+        - Verification commands:
+          1. npm run check:lockfile
+          2. npm run test:backend
+          3. npm run scan:secrets
+        - Required output logs or screenshots:
+          ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: security_notes
+    attributes:
+      label: Security & Privacy Notes
+      description: Identify trust boundaries, authorization rules, PII handling, and data retention requirements.
+      placeholder: |
+        - Authorization checks enforced:
+        - Data redaction / sanitization applied:
+        - Secrets hygiene verified:
+    validations:
+      required: true
+
+  - type: textarea
+    id: maintainer_review
+    attributes:
+      label: Maintainer Review & Acceptance Expectations
+      description: Detail expectations for maintainer review, code quality standards, and merge criteria.
+      placeholder: |
+        - PR must be atomic and cleanly rebased onto main
+        - 100% CI green across lint, tests, lockfile, and license checks
+        - Verification evidence documented in PR description
+    validations:
+      required: true

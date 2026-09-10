@@ -28,6 +28,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.check.json",
     "check:lockfile": "node scripts/check-lockfile.mjs",
     "check:licenses": "node scripts/check-licenses.mjs",
+    "check:templates": "node scripts/check-issue-templates.mjs",
     "test": "vitest",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
