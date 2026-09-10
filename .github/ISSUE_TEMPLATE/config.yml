@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: GrantFox Contribution Portal
+    url: https://contribute.grantfox.xyz/
+    about: Track active campaigns, claimable bounties, and rewards.
+  - name: EduVault Stellar Integration Guide
+    url: https://github.com/Eduvault-stellar/eduvault/blob/main/docs/STELLAR_GUIDE.md
+    about: Review Stellar testnet setup, Soroban architecture, and local environment setup.
+  - name: GrantFox Reward Deliverable Matrix
+    url: https://github.com/Eduvault-stellar/eduvault/blob/main/docs/grantfox-reward-deliverables.md
+    about: Review required deliverables, verification artifacts, and review criteria.

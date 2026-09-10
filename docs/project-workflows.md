@@ -36,3 +36,5 @@ EduVault supports three primary product paths: creators publish resources, learn
 - **MongoDB** owns durable off-chain records for profiles, materials, purchases, cached entitlements, and operational metadata.
 - **Pinata/IPFS** owns content-addressed file and metadata persistence.
 - **Stellar/Soroban layer** owns the planned payment, entitlement, and event source of truth for purchase verification.
+- **GrantFox Reward Workflow** coordinates contributor intent, scoped domain deliverables, automated quality gates, and maintainer reviews. See [GrantFox Reward Deliverables](grantfox-reward-deliverables.md).
+

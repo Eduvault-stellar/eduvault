@@ -1,0 +1,44 @@
+name: Feature Request
+description: Suggest a new idea or improvement for EduVault.
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Suggest an architectural or product improvement for EduVault.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or Motivation
+      description: Is your feature request related to a problem or user need?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed Solution
+      description: Describe your proposed technical or product design.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: domain
+    attributes:
+      label: Target Domain
+      options:
+        - Frontend
+        - Backend API
+        - Soroban Contracts
+        - Documentation
+        - Infrastructure & Tooling
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: Any alternative approaches or tradeoffs considered.

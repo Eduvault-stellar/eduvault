@@ -60,17 +60,26 @@ Use concise, conventional commit messages when possible:
 - `docs: document Stellar architecture direction`
 - `feat: add Soroban contract scaffolding`
 
+## GrantFox Rewards & Deliverable Standards
+
+EduVault participates in GrantFox bounty campaigns. All reward-eligible tasks must adhere to our standardized deliverable matrix:
+
+- **Issue Templates:** New reward issues and bug reports must use the structured templates in [`.github/ISSUE_TEMPLATE`](.github/ISSUE_TEMPLATE).
+- **Deliverable Matrix:** Refer to [GrantFox Reward Deliverable Matrix](docs/grantfox-reward-deliverables.md) for detailed expectations across Frontend, Backend API, Soroban Contracts, Documentation, and Testing.
+- **Pre-Flight Conditions:** Contributors must ensure the issue is unclaimed and post a preliminary design note in the issue discussion before starting technical work.
+- **Zero Mocking:** Solutions must implement true business logic. Mocking cryptographic primitives, stubbing authorization checks, or weakening test assertions will disqualify a contribution.
+- **Maintainer Review Gates:** Maintainers require all CI checks to pass, lockfile integrity verification, documentation synchronization, and terminal test logs or UI screenshots attached to the pull request before approving rewards.
+
 ## Reporting Issues
 
-When opening an issue, include:
+When opening an issue, use the appropriate template in [`.github/ISSUE_TEMPLATE`](.github/ISSUE_TEMPLATE):
 
-- expected behavior
-- actual behavior
-- reproduction steps
-- screenshots or logs if relevant
-- whether the issue affects the current prototype or the planned Stellar milestone
+- **GrantFox Reward Tasks:** Use the GrantFox Reward Task template to specify target domain, deliverables checklist, test plan, and security notes.
+- **Bug Reports:** Provide clear reproduction steps, expected versus actual behavior, and relevant logs or screenshots.
+- **Feature Requests:** Detail the motivation, proposed solution, and architectural tradeoffs.
 
 ## Security
 
 Do not disclose secrets, private keys, or production credentials in issues or pull requests. If you discover a sensitive security issue, contact the maintainer privately before public disclosure.
-🌟 Stellar Contributors: See the [Stellar Integration Guide](docs/STELLAR_GUIDE.md) for setup instructions.
+
+Stellar Contributors: See the [Stellar Integration Guide](docs/STELLAR_GUIDE.md) for setup instructions.
