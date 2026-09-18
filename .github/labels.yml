@@ -1,0 +1,72 @@
+# EduVault GitHub Label Taxonomy
+# Maps issue difficulty, review path, reward eligibility, and verification requirements.
+
+- name: "reward: eligible"
+  color: "0e8a16"
+  description: "Eligible for GrantFox / Stellar Wave contributor rewards"
+
+- name: "reward: claimed"
+  color: "fbca04"
+  description: "Assigned or actively claimed by a contributor"
+
+- name: "reward: in-review"
+  color: "1d76db"
+  description: "PR submitted and undergoing maintainer review"
+
+- name: "reward: verified"
+  color: "5319e7"
+  description: "Verification proof validated; approved for merge"
+
+- name: "reward: completed"
+  color: "0052cc"
+  description: "PR merged and reward credited"
+
+# ── Difficulty & Point Tiers ──────────────────────────────────────────────────
+
+- name: "difficulty: easy (50 pts)"
+  color: "c2e0c6"
+  description: "Minor fixes, documentation, or lightweight helper tasks (50 FoxPoints)"
+
+- name: "difficulty: medium (100 pts)"
+  color: "fef2c0"
+  description: "Standard feature implementation, API endpoints, bug fixes (100 FoxPoints)"
+
+- name: "difficulty: hard (200 pts)"
+  color: "f9d0c4"
+  description: "Complex architecture, Soroban contracts, security hardening (200 FoxPoints)"
+
+# ── Review Paths ─────────────────────────────────────────────────────────────
+
+- name: "review: smart-contract"
+  color: "b60205"
+  description: "Requires Soroban / Rust smart contract audit and security check"
+
+- name: "review: frontend"
+  color: "1d76db"
+  description: "Requires Next.js / React UI review and accessibility compliance verification"
+
+- name: "review: backend"
+  color: "5319e7"
+  description: "Requires API, data layer, or service integration review"
+
+- name: "review: security"
+  color: "d93f0b"
+  description: "Requires cryptographic, authentication, or threat model review"
+
+- name: "review: documentation"
+  color: "0075ca"
+  description: "Requires technical accuracy and clarity documentation review"
+
+# ── Verification Proof Requirements ──────────────────────────────────────────
+
+- name: "proof: automated-tests"
+  color: "0366d6"
+  description: "Requires automated unit/integration test suite passing 100% green"
+
+- name: "proof: ui-recording"
+  color: "d4c5f9"
+  description: "Requires screenshot or short video screen recording demonstrating UI behavior"
+
+- name: "proof: stellar-tx-hash"
+  color: "006b75"
+  description: "Requires Testnet transaction hash or Horizon / Soroban RPC simulation output"

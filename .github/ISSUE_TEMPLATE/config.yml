@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: GrantFox Campaign & Stellar Wave
+    url: https://grantfox.xyz
+    about: Review rewards, campaign status, and FoxPoints settlement guidelines
+  - name: GitHub Discussions
+    url: https://github.com/Eduvault-stellar/eduvault/discussions
+    about: Ask architectural questions, discuss prototypes, or request issue assignment

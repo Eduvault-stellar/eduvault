@@ -1,0 +1,87 @@
+name: "GrantFox / Stellar Reward Task"
+description: "Propose or specify a scoped task eligible for contributor rewards and FoxPoints."
+title: "[REWARD]: "
+labels: ["reward: eligible"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ### EduVault Contributor Reward Task
+        Before claiming or assigning this issue, ensure difficulty, review expectations, and required verification proofs are specified.
+        Refer to [CONTRIBUTING.md](../blob/main/CONTRIBUTING.md) for full triage SLAs and FoxPoints policies.
+
+  - type: input
+    id: summary
+    attributes:
+      label: "Task Summary"
+      description: "A concise summary of the deliverable."
+      placeholder: "e.g., Implement Soroban payment escrow verification and tests"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: difficulty
+    attributes:
+      label: "Difficulty Tier & FoxPoints"
+      description: "Select the complexity rating and corresponding reward points."
+      options:
+        - "difficulty: easy (50 pts) - Minor fixes, docs, or small helpers"
+        - "difficulty: medium (100 pts) - Standard feature, API endpoints, bug fixes"
+        - "difficulty: hard (200 pts) - Soroban contracts, security hardening, complex architecture"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: review_path
+    attributes:
+      label: "Primary Review Path"
+      description: "Identifies the domain specialization required for PR review."
+      options:
+        - "review: smart-contract (Soroban / Rust audit and security review)"
+        - "review: frontend (Next.js / React UI review and accessibility)"
+        - "review: backend (API, data layer, or service integration)"
+        - "review: security (Cryptographic, auth, or threat model)"
+        - "review: documentation (Technical documentation accuracy and clarity)"
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: proof_requirements
+    attributes:
+      label: "Required Verification Proof"
+      description: "Select the proof artifacts that must be included in the PR before merge."
+      options:
+        - label: "proof: automated-tests (100% green unit/integration test suite)"
+          required: true
+        - label: "proof: ui-recording (Screen recording or screenshot for visible UI changes)"
+        - label: "proof: stellar-tx-hash (Testnet tx hash or Horizon/Soroban RPC simulation output)"
+
+  - type: textarea
+    id: problem_statement
+    attributes:
+      label: "Problem Statement"
+      description: "Why is this task needed and what user/developer friction does it address?"
+      placeholder: "Describe the underlying motivation, current limitations, or bugs."
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance_criteria
+    attributes:
+      label: "Acceptance Criteria"
+      description: "List specific, testable criteria required for completion."
+      placeholder: |
+        - [ ] All unit/integration tests pass
+        - [ ] Relevant documentation updated
+        - [ ] No regression in existing functionality
+    validations:
+      required: true
+
+  - type: textarea
+    id: affected_areas
+    attributes:
+      label: "Affected Files & Components"
+      description: "List key files, directories, or contracts impacted by this change."
+      placeholder: "e.g., src/lib/stellar/, soroban/contracts/, docs/"
+    validations:
+      required: false
