@@ -2,26 +2,29 @@ export const dynamic = "force-dynamic";
 
 import { NextResponse } from "next/server";
 import { withApiHardening } from '@/lib/api/hardening';
-import { errorResponse } from '@/lib/api/errorResponse';
 
 /**
- * Liveness probe (#20): "is the process itself running and able to respond?"
- * Intentionally has NO external dependency checks (DB, RPC, email, etc.) —
- * that's what /api/ready is for. Mixing the two means an orchestrator
- * (Kubernetes, ECS, etc.) can't tell "the process is stuck/dead, restart it"
- * apart from "the process is fine but a dependency is degraded" — restarting
- * a healthy process because Pinata is down just causes a thundering herd of
- * restarts that don't fix anything.
+ * Liveness probe (#169 / #20): "is the process itself running and able to respond?"
+ *
+ * Invariant:
+ * Strictly zero external network or database dependencies. Liveness must remain
+ * ultra-cheap (<5ms) so orchestrators (Kubernetes / ECS) can determine whether
+ * the runtime loop is responsive without triggering cascading restart loops
+ * when external downstreams degrade.
  */
 export const GET = withApiHardening(
   async () => {
-  return NextResponse.json(
-    { status: "alive", timestamp: new Date().toISOString() },
-    { status: 200 }
-  );
+    return NextResponse.json(
+      {
+        status: "alive",
+        uptimeSeconds: Math.floor(process.uptime()),
+        timestamp: new Date().toISOString(),
+      },
+      { status: 200 }
+    );
   },
   {
     route: 'health',
-    rateLimit: { limit: 100, windowMs: 60_000 }, // 100 requests/min per IP
+    rateLimit: { limit: 120, windowMs: 60_000 },
   }
 );

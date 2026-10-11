@@ -10,17 +10,31 @@ import { HORIZON_URL, STELLAR_RPC_URL } from "@/lib/config/chain";
 import { setGauge } from "@/lib/telemetry/metrics";
 
 /**
- * Readiness probe (#20): "can this instance actually serve traffic right now?"
+ * Bounded timeout wrapper ensuring dependency checks cannot hang indefinitely
+ * during network partitions or downstream outages (#169).
+ */
+function withTimeout(promise, timeoutMs, dependencyName) {
+  let timer;
+  const timeoutPromise = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error(`${dependencyName} check exceeded bounded timeout of ${timeoutMs}ms`));
+    }, timeoutMs);
+  });
+
+  return Promise.race([promise, timeoutPromise]).finally(() => {
+    clearTimeout(timer);
+  });
+}
+
+/**
+ * Readiness probe (#169 / #20): "can this instance reliably serve end-user traffic?"
  *
- * Distinguishes two failure classes (acceptance criterion):
- *  - CRITICAL dependency down (database, Stellar RPC) -> core purchase/
- *    publishing flows cannot function at all -> "unhealthy", HTTP 503.
- *    An orchestrator should stop routing traffic here.
- *  - NON-CRITICAL dependency down (Pinata, email) -> uploads or
- *    notifications degrade, but purchases/browsing/reads still work
- *    -> "degraded", HTTP 200. Traffic should keep flowing.
+ * Failure semantics:
+ *  - CRITICAL down (database, stellar RPC) -> core purchases/contracts fail -> "unhealthy" HTTP 503.
+ *  - NON-CRITICAL down (pinata, email, indexer) -> browsing/reads still work -> "degraded" HTTP 200.
  */
 const CRITICAL_DEPENDENCIES = new Set(["database", "stellar"]);
+const CHECK_TIMEOUT_MS = 3000;
 
 export async function GET(request) {
   return withApiHardening(
@@ -32,66 +46,93 @@ export async function GET(request) {
         pinata: "offline",
         email: "offline",
         stellar: "offline",
+        indexer: "offline",
       };
 
       const failedCritical = [];
       const failedNonCritical = [];
 
-      function recordFailure(dep) {
-        if (CRITICAL_DEPENDENCIES.has(dep)) failedCritical.push(dep);
-        else failedNonCritical.push(dep);
+      function recordFailure(dep, reason) {
+        status[dep] = `offline: ${reason}`;
+        if (CRITICAL_DEPENDENCIES.has(dep)) {
+          failedCritical.push(dep);
+        } else {
+          failedNonCritical.push(dep);
+        }
       }
 
-      // 1. Database (critical)
+      // 1. Database (Critical with bounded timeout)
       try {
-        const db = await getDb();
-        await db.command({ ping: 1 });
+        const db = await withTimeout(getDb(), CHECK_TIMEOUT_MS, "database_connect");
+        await withTimeout(db.command({ ping: 1 }), CHECK_TIMEOUT_MS, "database_ping");
         status.database = "online";
       } catch (err) {
-        status.database = `offline: ${err.message}`;
-        recordFailure("database");
+        recordFailure("database", err.message);
       }
 
-      // 2. Pinata (non-critical — degrades uploads only)
+      // 2. Pinata (Non-critical - degrades IPFS media only)
       try {
         if (!process.env.PINATA_JWT) {
-          status.pinata = "offline: PINATA_JWT not configured";
-          recordFailure("pinata");
+          recordFailure("pinata", "PINATA_JWT not configured");
         } else {
-          await pinata.testAuthentication();
+          await withTimeout(pinata.testAuthentication(), CHECK_TIMEOUT_MS, "pinata");
           status.pinata = "online";
         }
       } catch (err) {
-        status.pinata = `offline: ${err.message}`;
-        recordFailure("pinata");
+        recordFailure("pinata", err.message);
       }
 
-      // 3. Email (non-critical — degrades notifications only)
+      // 3. Email (Non-critical - degrades email alerts only)
       try {
-        await verifyEmailConnection();
+        await withTimeout(verifyEmailConnection(), CHECK_TIMEOUT_MS, "email");
         status.email = "online";
       } catch (err) {
-        status.email = `offline: ${err.message}`;
-        recordFailure("email");
+        recordFailure("email", err.message);
       }
 
-      // 4. Stellar Horizon & RPC (critical — purchases/publishing need it)
+      // 4. Stellar Horizon & RPC (Critical with bounded timeout)
       try {
         const horizonServer = new Server(HORIZON_URL);
-        await horizonServer.root();
+        await withTimeout(horizonServer.root(), CHECK_TIMEOUT_MS, "stellar_horizon");
 
         const rpcServer = new rpc.Server(STELLAR_RPC_URL);
-        const health = await rpcServer.getHealth();
+        const health = await withTimeout(rpcServer.getHealth(), CHECK_TIMEOUT_MS, "stellar_rpc");
 
         if (health && health.status === "healthy") {
           status.stellar = "online";
         } else {
-          status.stellar = `offline: RPC status is ${health?.status || "unknown"}`;
-          recordFailure("stellar");
+          recordFailure("stellar", `RPC status is ${health?.status || "unknown"}`);
         }
       } catch (err) {
-        status.stellar = `offline: ${err.message}`;
-        recordFailure("stellar");
+        recordFailure("stellar", err.message);
+      }
+
+      // 5. Worker / Indexer Freshness Check (Non-critical)
+      try {
+        if (status.database === "online") {
+          const db = await getDb();
+          const stateDoc = await withTimeout(
+            db.collection("indexer_state").findOne({ _id: "stellar_indexer" }),
+            CHECK_TIMEOUT_MS,
+            "indexer_state"
+          );
+
+          if (!stateDoc || !stateDoc.updatedAt) {
+            status.indexer = "idle: no active sync recorded";
+          } else {
+            const ageMs = Date.now() - new Date(stateDoc.updatedAt).getTime();
+            const MAX_ALLOWED_LAG_MS = 15 * 60 * 1000; // 15 mins
+            if (ageMs > MAX_ALLOWED_LAG_MS) {
+              recordFailure("indexer", `stale: last indexed ${Math.floor(ageMs / 1000)}s ago`);
+            } else {
+              status.indexer = "online";
+            }
+          }
+        } else {
+          recordFailure("indexer", "database dependency offline");
+        }
+      } catch (err) {
+        recordFailure("indexer", err.message);
       }
 
       let overall;
