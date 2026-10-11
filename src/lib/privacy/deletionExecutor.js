@@ -30,6 +30,7 @@ import { ObjectId } from "mongodb";
 
 const COLLECTIONS_TO_DELETE = [
   "saved_materials",
+  "learner_notes",
   "collections",
   "progress",
   "webhooks",
