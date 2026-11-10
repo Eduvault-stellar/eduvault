@@ -18,12 +18,11 @@
     "node": ">=20.16.0"
   },
   "scripts": {
-    "dev": "next dev --webpack",
+    "dev": "node init && next dev",
     "predev": "node scripts/sync-openapi.mjs && node scripts/generate-api-client.mjs",
-    "dev": "next dev",
     "prebuild": "node scripts/sync-openapi.mjs && node scripts/generate-api-client.mjs",
-    "build": "next build --webpack",
-    "start": "next start",
+    "build": "node init && next build --webpack",
+    "start": "node init && next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit -p tsconfig.check.json",
     "check:lockfile": "node scripts/check-lockfile.mjs",
